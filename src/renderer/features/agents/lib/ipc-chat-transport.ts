@@ -6,13 +6,15 @@ import {
   autoOfflineModeAtom,
   type CustomClaudeConfig,
   customClaudeConfigAtom,
+  effortLevelAtom,
   enableTasksAtom,
-  extendedThinkingEnabledAtom,
   historyEnabledAtom,
   normalizeCustomClaudeConfig,
   selectedOllamaModelAtom,
   sessionInfoAtom,
   showOfflineModeFeaturesAtom,
+  thinkingBudgetTokensAtom,
+  thinkingModeAtom,
 } from "../../../lib/atoms"
 import { appStore } from "../../../lib/jotai-store"
 import { trpcClient } from "../../../lib/trpc"
@@ -159,12 +161,19 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     const metadata = lastAssistant?.metadata as AgentMessageMetadata | undefined
     const sessionId = metadata?.sessionId
 
-    // Read extended thinking setting dynamically (so toggle applies to existing chats)
-    const thinkingEnabled = appStore.get(extendedThinkingEnabledAtom)
-    // Max thinking tokens for extended thinking mode
-    // SDK adds +1 internally, so 64000 becomes 64001 which exceeds Opus 4.5 limit
-    // Using 32000 to stay safely under the 64000 max output tokens limit
-    const maxThinkingTokens = thinkingEnabled ? 32_000 : undefined
+    // Read thinking config dynamically (so toggle applies to existing chats)
+    const thinkingMode = appStore.get(thinkingModeAtom)
+    const thinkingBudgetTokens = appStore.get(thinkingBudgetTokensAtom)
+    const thinkingConfig =
+      thinkingMode === "adaptive"
+        ? ({ type: "adaptive" as const })
+        : thinkingMode === "enabled"
+          ? ({ type: "enabled" as const, budgetTokens: thinkingBudgetTokens })
+          : ({ type: "disabled" as const })
+
+    // Read effort level dynamically
+    const effort = appStore.get(effortLevelAtom)
+
     const historyEnabled = appStore.get(historyEnabledAtom)
     const enableTasks = appStore.get(enableTasksAtom)
 
@@ -207,7 +216,8 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             projectPath: this.config.projectPath, // Original project path for MCP config lookup
             mode: currentMode,
             sessionId,
-            ...(maxThinkingTokens && { maxThinkingTokens }),
+            thinkingConfig,
+            effort,
             ...(modelString && { model: modelString }),
             ...(customConfig && { customConfig }),
             ...(selectedOllamaModel && { selectedOllamaModel }),

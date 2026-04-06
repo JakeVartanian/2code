@@ -43,11 +43,13 @@ import {
   anthropicOnboardingCompletedAtom,
   apiKeyOnboardingCompletedAtom,
   customClaudeConfigAtom,
+  effortLevelAtom,
   extendedThinkingEnabledAtom,
   hiddenModelsAtom,
   normalizeCustomClaudeConfig,
   selectedOllamaModelAtom,
   showOfflineModeFeaturesAtom,
+  type EffortLevel,
 } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
@@ -496,6 +498,10 @@ export const ChatInputArea = memo(function ChatInputArea({
 
   // Extended thinking (reasoning) toggle
   const [thinkingEnabled, setThinkingEnabled] = useAtom(extendedThinkingEnabledAtom)
+
+  // Effort level control
+  const [effortLevel, setEffortLevel] = useAtom(effortLevelAtom)
+  const [effortDropdownOpen, setEffortDropdownOpen] = useState(false)
 
   const selectedModelLabel = useMemo(() => {
     if (availableModels.isOffline && availableModels.hasOllama) {
@@ -1432,6 +1438,44 @@ export const ChatInputArea = memo(function ChatInputArea({
                         </div>,
                         document.body,
                       )}
+                  </DropdownMenu>
+
+                  {/* Effort level selector */}
+                  <DropdownMenu
+                    open={effortDropdownOpen}
+                    onOpenChange={setEffortDropdownOpen}
+                  >
+                    <DropdownMenuTrigger asChild>
+                      <button className="flex items-center gap-1 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
+                        <span className="text-[11px] opacity-60">E:</span>
+                        <span className="truncate capitalize text-xs">
+                          {effortLevel === "medium" ? "Med" : effortLevel}
+                        </span>
+                        <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="start"
+                      sideOffset={6}
+                      className="!min-w-[120px] !w-[120px]"
+                      onCloseAutoFocus={(e) => e.preventDefault()}
+                    >
+                      {(["low", "medium", "high", "max"] as const).map((level) => (
+                        <DropdownMenuItem
+                          key={level}
+                          onClick={() => {
+                            setEffortLevel(level)
+                            setEffortDropdownOpen(false)
+                          }}
+                          className="justify-between gap-2"
+                        >
+                          <span className="capitalize">{level}</span>
+                          {effortLevel === level && (
+                            <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
                   </DropdownMenu>
 
                   <div className="group/model-controls flex items-center gap-0.5">

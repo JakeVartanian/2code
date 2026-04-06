@@ -810,7 +810,18 @@ export const claudeRouter = router({
             baseUrl: z.string().min(1),
           })
           .optional(),
-        maxThinkingTokens: z.number().optional(), // Enable extended thinking
+        thinkingConfig: z
+          .discriminatedUnion("type", [
+            z.object({ type: z.literal("adaptive") }),
+            z.object({
+              type: z.literal("enabled"),
+              budgetTokens: z.number(),
+            }),
+            z.object({ type: z.literal("disabled") }),
+          ])
+          .optional(),
+        maxThinkingTokens: z.number().optional(), // Deprecated — kept for backwards compat
+        effort: z.enum(["low", "medium", "high", "max"]).optional(),
         images: z.array(imageAttachmentSchema).optional(), // Image attachments
         historyEnabled: z.boolean().optional(),
         offlineModeEnabled: z.boolean().optional(), // Whether offline mode (Ollama) is enabled in settings
@@ -1985,9 +1996,14 @@ ${prompt}
                 ...(!resumeSessionId && { continue: true }),
                 ...(resolvedModel && { model: resolvedModel }),
                 // fallbackModel: "claude-opus-4-5-20251101",
-                ...(input.maxThinkingTokens && {
-                  maxThinkingTokens: input.maxThinkingTokens,
-                }),
+                // Thinking config (new SDK option, replaces deprecated maxThinkingTokens)
+                ...(input.thinkingConfig
+                  ? { thinking: input.thinkingConfig }
+                  : input.maxThinkingTokens
+                    ? { maxThinkingTokens: input.maxThinkingTokens }
+                    : {}),
+                // Effort level (controls reasoning depth)
+                ...(input.effort && { effort: input.effort }),
               },
             }
 

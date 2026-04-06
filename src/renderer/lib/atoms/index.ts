@@ -375,12 +375,58 @@ export const activeConfigAtom = atom((get) => {
   return undefined
 })
 
-// Preferences - Extended Thinking
-// When enabled, Claude will use extended thinking for deeper reasoning (128K tokens)
-// Note: Extended thinking disables response streaming
-export const extendedThinkingEnabledAtom = atomWithStorage<boolean>(
-  "preferences:extended-thinking-enabled",
-  true,
+// Preferences - Thinking Mode
+// Controls Claude's thinking/reasoning behavior via SDK ThinkingConfig
+// "adaptive" = Claude decides when and how much to think (recommended for Opus 4.6+)
+// "enabled" = Always think with a fixed token budget
+// "disabled" = No extended thinking
+export type ThinkingMode = "adaptive" | "enabled" | "disabled"
+
+// Auto-migrate old boolean toggle to new thinking mode
+if (typeof window !== "undefined") {
+  const oldKey = "preferences:extended-thinking-enabled"
+  const newKey = "preferences:thinking-mode"
+  const oldValue = localStorage.getItem(oldKey)
+  if (oldValue !== null && localStorage.getItem(newKey) === null) {
+    const wasEnabled = JSON.parse(oldValue)
+    localStorage.setItem(
+      newKey,
+      JSON.stringify(wasEnabled ? "adaptive" : "disabled"),
+    )
+  }
+}
+
+export const thinkingModeAtom = atomWithStorage<ThinkingMode>(
+  "preferences:thinking-mode",
+  "adaptive",
+  undefined,
+  { getOnInit: true },
+)
+
+// Token budget for "enabled" mode (only used when thinkingMode === "enabled")
+export const thinkingBudgetTokensAtom = atomWithStorage<number>(
+  "preferences:thinking-budget-tokens",
+  32_000,
+  undefined,
+  { getOnInit: true },
+)
+
+// Backwards-compatible derived atom for code that still reads the boolean
+export const extendedThinkingEnabledAtom = atom(
+  (get) => get(thinkingModeAtom) !== "disabled",
+  (_get, set, enabled: boolean) => {
+    set(thinkingModeAtom, enabled ? "adaptive" : "disabled")
+  },
+)
+
+// Preferences - Effort Level
+// Controls how much computational effort Claude puts into responses
+// "low" = fast, minimal reasoning; "high" = default; "max" = deepest reasoning (Opus 4.6)
+export type EffortLevel = "low" | "medium" | "high" | "max"
+
+export const effortLevelAtom = atomWithStorage<EffortLevel>(
+  "preferences:effort-level",
+  "high",
   undefined,
   { getOnInit: true },
 )
