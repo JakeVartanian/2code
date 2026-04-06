@@ -1,9 +1,6 @@
 /**
  * CLI command support for 2code
  * Allows users to open 2code from terminal with: 2code . or 2code /path/to/project
- *
- * Based on PR #16 by @caffeinum (Aleksey Bykhun)
- * https://github.com/21st-dev/2code/pull/16
  */
 
 import { app } from "electron"

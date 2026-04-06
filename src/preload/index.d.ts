@@ -84,6 +84,10 @@ export interface DesktopApi {
   updateUser: (updates: { name?: string }) => Promise<DesktopUser | null>
   onAuthSuccess: (callback: (user: any) => void) => () => void
   onAuthError: (callback: (error: string) => void) => () => void
+  // Claude CLI auth
+  checkClaudeCliAuth: () => Promise<{ cliInstalled: boolean; hasCredentials: boolean }>
+  authenticateWithCli: () => Promise<{ success: boolean; error?: string }>
+  skipToApp: () => Promise<void>
 
   // Multi-window
   newWindow: (options?: { chatId?: string; subChatId?: string }) => Promise<{ blocked: boolean } | void>

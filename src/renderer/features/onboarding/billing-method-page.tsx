@@ -9,6 +9,7 @@ import {
   CodexIcon,
   KeyFilledIcon,
   SettingsFilledIcon,
+  GlobeIcon,
 } from "../../components/ui/icons"
 import {
   billingMethodAtom,
@@ -46,6 +47,14 @@ const billingOptions: BillingOption[] = [
     title: "Anthropic API Key",
     subtitle: "Pay-as-you-go with your own API key.",
     icon: <KeyFilledIcon className="w-5 h-5" />,
+  },
+  {
+    id: "openrouter",
+    method: "openrouter",
+    group: "claude-code",
+    title: "OpenRouter",
+    subtitle: "Route Claude and other models through OpenRouter.",
+    icon: <GlobeIcon className="w-5 h-5" />,
   },
   {
     id: "custom-model",

@@ -4,7 +4,7 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { useState, useEffect } from "react"
 import { ChevronLeft } from "lucide-react"
 
-import { IconSpinner, KeyFilledIcon, SettingsFilledIcon } from "../../components/ui/icons"
+import { IconSpinner, GlobeIcon, KeyFilledIcon, SettingsFilledIcon } from "../../components/ui/icons"
 import { Input } from "../../components/ui/input"
 import { Label } from "../../components/ui/label"
 import { Logo } from "../../components/ui/logo"
@@ -29,15 +29,22 @@ export function ApiKeyOnboardingPage() {
   const setApiKeyOnboardingCompleted = useSetAtom(apiKeyOnboardingCompletedAtom)
 
   const isCustomModel = billingMethod === "custom-model"
+  const isOpenRouter = billingMethod === "openrouter"
 
   // Default values for API key mode (not custom model)
   const defaultModel = "claude-sonnet-4-6"
   const defaultBaseUrl = "https://api.anthropic.com"
+  const openRouterBaseUrl = "https://openrouter.ai/api"
+  const openRouterDefaultModel = "anthropic/claude-sonnet-4-6"
 
   const [apiKey, setApiKey] = useState(storedConfig.token)
-  const [model, setModel] = useState(storedConfig.model || "")
+  const [model, setModel] = useState(
+    isOpenRouter ? (storedConfig.model || openRouterDefaultModel) : (storedConfig.model || "")
+  )
   const [token, setToken] = useState(storedConfig.token)
-  const [baseUrl, setBaseUrl] = useState(storedConfig.baseUrl || "")
+  const [baseUrl, setBaseUrl] = useState(
+    isOpenRouter ? openRouterBaseUrl : (storedConfig.baseUrl || "")
+  )
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Sync from stored config on mount
@@ -112,8 +119,8 @@ export function ApiKeyOnboardingPage() {
     model.trim() && token.trim() && baseUrl.trim()
   )
 
-  // Simple API key input mode
-  if (!isCustomModel) {
+  // Simple API key input mode (Anthropic direct only)
+  if (!isCustomModel && !isOpenRouter) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-background select-none">
         {/* Draggable title bar area */}
@@ -186,7 +193,7 @@ export function ApiKeyOnboardingPage() {
     )
   }
 
-  // Custom model mode with all fields
+  // Custom model / OpenRouter mode with all fields
   return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-background select-none">
       {/* Draggable title bar area */}
@@ -211,15 +218,33 @@ export function ApiKeyOnboardingPage() {
               <Logo className="w-5 h-5" fill="white" />
             </div>
             <div className="w-10 h-10 rounded-full bg-foreground flex items-center justify-center">
-              <SettingsFilledIcon className="w-5 h-5 text-background" />
+              {isOpenRouter ? (
+                <GlobeIcon className="w-5 h-5 text-background" />
+              ) : (
+                <SettingsFilledIcon className="w-5 h-5 text-background" />
+              )}
             </div>
           </div>
           <div className="space-y-1">
             <h1 className="text-base font-semibold tracking-tight">
-              Configure Custom Model
+              {isOpenRouter ? "Connect OpenRouter" : "Configure Custom Model"}
             </h1>
             <p className="text-sm text-muted-foreground">
-              Enter your custom model configuration
+              {isOpenRouter ? (
+                <>
+                  Get your API key from{" "}
+                  <a
+                    href="https://openrouter.ai/keys"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-foreground hover:underline"
+                  >
+                    openrouter.ai/keys
+                  </a>
+                </>
+              ) : (
+                "Enter your custom model configuration"
+              )}
             </p>
           </div>
         </div>
@@ -232,26 +257,27 @@ export function ApiKeyOnboardingPage() {
             <Input
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="claude-sonnet-4-6"
+              placeholder={isOpenRouter ? "anthropic/claude-sonnet-4-6" : "claude-sonnet-4-6"}
               className="w-full"
             />
             <p className="text-xs text-muted-foreground">
-              Model identifier for API requests
+              {isOpenRouter ? "OpenRouter model identifier (e.g. anthropic/claude-sonnet-4-6)" : "Model identifier for API requests"}
             </p>
           </div>
 
           {/* API Token */}
           <div className="space-y-2">
-            <Label className="text-sm font-medium">API token</Label>
+            <Label className="text-sm font-medium">{isOpenRouter ? "OpenRouter API key" : "API token"}</Label>
             <Input
               type="password"
               value={token}
               onChange={(e) => setToken(e.target.value)}
-              placeholder="sk-ant-..."
+              placeholder={isOpenRouter ? "sk-or-..." : "sk-ant-..."}
               className="w-full"
+              autoFocus
             />
             <p className="text-xs text-muted-foreground">
-              Your API key or token
+              {isOpenRouter ? "Your OpenRouter API key (starts with sk-or-)" : "Your API key or token"}
             </p>
           </div>
 
@@ -261,10 +287,13 @@ export function ApiKeyOnboardingPage() {
             <Input
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://api.anthropic.com"
+              placeholder={isOpenRouter ? "https://openrouter.ai/api" : "https://api.anthropic.com"}
               className="w-full"
+              disabled={isOpenRouter}
             />
-            <p className="text-xs text-muted-foreground">API endpoint URL</p>
+            <p className="text-xs text-muted-foreground">
+              {isOpenRouter ? "OpenRouter API endpoint (pre-configured)" : "API endpoint URL"}
+            </p>
           </div>
         </div>
 

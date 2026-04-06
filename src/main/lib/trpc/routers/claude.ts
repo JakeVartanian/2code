@@ -262,6 +262,9 @@ const getClaudeQuery = async () => {
 // Active sessions for cancellation
 const activeSessions = new Map<string, AbortController>()
 
+/** Maximum number of concurrent Claude agent sessions */
+const MAX_CONCURRENT_AGENTS = 5
+
 /** Check if there are any active Claude streaming sessions */
 export function hasActiveClaudeSessions(): boolean {
   return activeSessions.size > 0
@@ -819,6 +822,19 @@ export const claudeRouter = router({
     )
     .subscription(({ input }) => {
       return observable<UIMessageChunk>((emit) => {
+        // Enforce concurrent agent cap (don't count re-sends for the same subChat)
+        if (
+          !activeSessions.has(input.subChatId) &&
+          activeSessions.size >= MAX_CONCURRENT_AGENTS
+        ) {
+          emit.next({
+            type: "error",
+            error: `Too many concurrent agent sessions (max ${MAX_CONCURRENT_AGENTS}). Please wait for an existing session to finish or cancel one.`,
+          } as UIMessageChunk)
+          emit.complete()
+          return
+        }
+
         // Abort any existing session for this subChatId before starting a new one
         // This prevents race conditions if two messages are sent in quick succession
         const existingController = activeSessions.get(input.subChatId)

@@ -25,8 +25,8 @@ function initAutoUpdaterConfig() {
   autoUpdater.autoRunAppAfterInstall = true // Restart app after install
 }
 
-// CDN base URL for updates
-const CDN_BASE = "https://cdn.21st.dev/releases/desktop"
+// Update URL — set to your own CDN or GitHub Releases
+const CDN_BASE = "" // TODO: Set to your release URL (e.g., GitHub Releases)
 
 // Minimum interval between update checks (prevent spam on rapid focus/blur)
 const MIN_CHECK_INTERVAL = 60 * 1000 // 1 minute

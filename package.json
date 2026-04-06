@@ -3,10 +3,10 @@
   "version": "0.0.72",
   "private": true,
   "description": "2Code - UI for parallel work with AI agents",
-  "homepage": "https://21st.dev",
+  "homepage": "",
   "author": {
-    "name": "21st.dev",
-    "email": "support@21st.dev"
+    "name": "2Code",
+    "email": ""
   },
   "main": "out/main/index.js",
   "scripts": {
@@ -22,8 +22,6 @@
     "dist:upload": "node scripts/upload-release.mjs",
     "claude:download": "node scripts/download-claude-binary.mjs --version=2.1.45",
     "claude:download:all": "node scripts/download-claude-binary.mjs --version=2.1.45 --all",
-    "codex:download": "node scripts/download-codex-binary.mjs --version=0.98.0",
-    "codex:download:all": "node scripts/download-codex-binary.mjs --version=0.98.0 --all",
     "release": "rm -rf release && bun i && bun run claude:download && bun run codex:download && bun run build && bun run package:mac && bun run dist:manifest && ./scripts/upload-release-wrangler.sh",
     "release:dev": "rm -rf release && bun run claude:download && bun run codex:download && bun run build && bun run package:mac && rm -rf node_modules && bun i",
     "sync:public": "./scripts/sync-to-public.sh",
@@ -140,7 +138,7 @@
     "vite": "^6.3.4"
   },
   "build": {
-    "appId": "dev.21st.agents",
+    "appId": "com.2code.app",
     "productName": "2Code",
     "npmRebuild": true,
     "protocols": [
@@ -252,8 +250,9 @@
       "uninstallerIcon": "build/icon.ico"
     },
     "publish": {
-      "provider": "generic",
-      "url": "https://cdn.21st.dev/releases/desktop"
+      "provider": "github",
+      "owner": "",
+      "repo": "2code"
     }
   },
   "pnpm": {
