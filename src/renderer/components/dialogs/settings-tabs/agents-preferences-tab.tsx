@@ -1,7 +1,6 @@
 import { useAtom } from "jotai"
 import { useEffect, useState } from "react"
 import {
-  analyticsOptOutAtom,
   autoAdvanceTargetAtom,
   ctrlTabTargetAtom,
   defaultAgentModeAtom,
@@ -148,7 +147,6 @@ export function AgentsPreferencesTab() {
   const [soundEnabled, setSoundEnabled] = useAtom(soundNotificationsEnabledAtom)
   const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useAtom(desktopNotificationsEnabledAtom)
   const [notifyWhenFocused, setNotifyWhenFocused] = useAtom(notifyWhenFocusedAtom)
-  const [analyticsOptOut, setAnalyticsOptOut] = useAtom(analyticsOptOutAtom)
   const [ctrlTabTarget, setCtrlTabTarget] = useAtom(ctrlTabTargetAtom)
   const [autoAdvanceTarget, setAutoAdvanceTarget] = useAtom(autoAdvanceTargetAtom)
   const [defaultAgentMode, setDefaultAgentMode] = useAtom(defaultAgentModeAtom)
@@ -167,17 +165,6 @@ export function AgentsPreferencesTab() {
 
   const handleCoAuthoredByToggle = (enabled: boolean) => {
     setCoAuthoredByMutation.mutate({ enabled })
-  }
-
-  // Sync opt-out status to main process
-  const handleAnalyticsToggle = async (optedOut: boolean) => {
-    setAnalyticsOptOut(optedOut)
-    // Notify main process
-    try {
-      await window.desktopApi?.setAnalyticsOptOut(optedOut)
-    } catch (error) {
-      console.error("Failed to sync analytics opt-out to main process:", error)
-    }
   }
 
   return (
@@ -453,23 +440,6 @@ export function AgentsPreferencesTab() {
         </div>
       </div>
 
-      {/* Privacy */}
-      <div className="bg-background rounded-lg border border-border overflow-hidden">
-        <div className="flex items-center justify-between gap-6 p-4">
-          <div className="flex flex-col space-y-1">
-            <span className="text-sm font-medium text-foreground">
-              Share Usage Analytics
-            </span>
-            <span className="text-xs text-muted-foreground">
-              Help us improve Agents by sharing anonymous usage data. We only track feature usage and app performance–never your code, prompts, or messages. No AI training on your data.
-            </span>
-          </div>
-          <Switch
-            checked={!analyticsOptOut}
-            onCheckedChange={(enabled) => handleAnalyticsToggle(!enabled)}
-          />
-        </div>
-      </div>
     </div>
   )
 }

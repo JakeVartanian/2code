@@ -272,3 +272,138 @@ fetch('http://localhost:7799/log',{method:'POST',headers:{'Content-Type':'applic
 **Workflow:** Hypothesize → instrument → user reproduces → read logs → fix with evidence → verify → remove instrumentation.
 
 See `packages/debug/INSTRUCTIONS.md` for the full protocol.
+
+## Claude CLI Emulator
+
+2Code bundles and emulates the Claude Code CLI rather than requiring users to have it installed. This section describes how the emulator works, how OpenRouter is wired in, and key pitfalls to avoid.
+
+### What It Is
+
+The app ships a pre-built Claude CLI binary inside `resources/bin/` (platform + arch sub-directory in dev, flat `resources/bin/` in production). At runtime the Electron main process executes this binary as a subprocess via the `@anthropic-ai/claude-agent-sdk` query API, which streams JSON messages back over stdio.
+
+**Key files:**
+- `src/main/lib/claude/env.ts` — binary path resolution (`getBundledClaudeBinaryPath`), shell env building (`buildClaudeEnv`), env key stripping
+- `src/main/lib/claude/transform.ts` — converts raw SDK message chunks into `UIMessageChunk` objects for the renderer
+- `src/main/lib/claude/types.ts` — shared message/metadata types
+- `src/main/lib/trpc/routers/claude.ts` — the main tRPC router that spawns/streams Claude sessions
+- `src/main/lib/claude-token.ts` — reads OAuth tokens from the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) to reuse an existing Claude CLI login
+
+### Binary Download
+
+Binaries are not committed to the repo. Download them before running in dev:
+
+```bash
+bun run claude:download   # downloads platform binary into resources/bin/{platform}-{arch}/claude
+```
+
+**Dev path:** `resources/bin/{platform}-{arch}/claude`
+**Production path:** `{resourcesPath}/bin/claude` (flat, single arch)
+
+If the binary is missing, `getBundledClaudeBinaryPath()` logs a `WARNING` and returns the expected path anyway — the subprocess will fail at spawn time with a clear error.
+
+### Auth Flow
+
+Token priority (highest to lowest):
+
+1. **Multi-account system** — active account record from `anthropicAccounts` table in SQLite, decrypted with Electron `safeStorage`.
+2. **Legacy table** — `claudeCodeCredentials` row with `id = "default"`.
+3. **System keychain** — `claude-token.ts` reads `Claude Code-credentials` from macOS Keychain / Windows Credential Manager / Linux Secret Service, so users who already have `claude` CLI installed and logged in don't need to authenticate again.
+4. **`ANTHROPIC_AUTH_TOKEN` env var** — can be set explicitly if none of the above exist.
+
+In dev mode `ANTHROPIC_API_KEY` is stripped from the environment so the OAuth token is used even if the developer's shell has an API key set (prevents accidentally bypassing the auth flow).
+
+### Environment Handling
+
+`buildClaudeEnv()` (in `env.ts`) constructs the subprocess environment:
+
+1. Loads the full login-shell environment (captures `nvm`, Homebrew, `PATH`, etc.)
+2. Overlays `process.env` but restores the richer shell `PATH`
+3. Strips dangerous keys: `OPENAI_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDECODE` (prevents nested-session detection)
+4. In dev: also strips `ANTHROPIC_API_KEY` (forces OAuth flow)
+5. Sets `CLAUDE_CODE_ENTRYPOINT=sdk-ts` and `CLAUDE_CODE_ENABLE_TASKS`
+
+Windows uses `platform.buildEnvironment()` instead of spawning a login shell.
+
+### OpenRouter Integration
+
+OpenRouter allows running alternative models (GPT-4o, Gemini, Llama, etc.) through the same Claude-compatible API surface.
+
+**Where it lives (renderer-side):**
+- `src/renderer/lib/atoms/index.ts` — `openRouterApiKeyAtom` and `openRouterFreeOnlyAtom` (persisted to `localStorage`)
+- `src/renderer/components/dialogs/settings-tabs/agents-models-tab.tsx` — UI for entering the key, toggling free-only filter, and listing discovered models
+
+**How to wire an OpenRouter key into a Claude session:**
+
+The OpenRouter API is OpenAI-compatible. To route Claude SDK calls through OpenRouter you must supply:
+```
+ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1
+ANTHROPIC_API_KEY=<openrouter-key>
+```
+Pass these as `customEnv` in `buildClaudeEnv()`:
+
+```typescript
+buildClaudeEnv({
+  customEnv: {
+    ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
+    ANTHROPIC_API_KEY: openRouterKey,
+  },
+})
+```
+
+> **Important:** `ANTHROPIC_API_KEY` is normally stripped in dev mode. When OpenRouter is active you must pass the key through `customEnv` (step 4 of the env build), which runs after the strip step and therefore wins.
+
+**Model selection:** The renderer fetches available models from `https://openrouter.ai/api/v1/models` using the stored key. Free models are identified by `pricing.prompt === "0"`. The selected model ID must be forwarded to the Claude SDK call as the `model` option so the subprocess uses it.
+
+**Free-only filter:** `openRouterFreeOnlyAtom` gates the model list in the UI; when `true`, only models with zero prompt cost are shown.
+
+### Fetching OpenRouter Models
+
+```typescript
+const res = await fetch("https://openrouter.ai/api/v1/models", {
+  headers: { Authorization: `Bearer ${openRouterKey}` },
+})
+const { data } = await res.json()
+const models = data.map((m) => ({
+  id: m.id,
+  name: m.name,
+  isFree: m.pricing?.prompt === "0",
+}))
+```
+
+### Session Lifecycle
+
+```
+renderer → tRPC mutation (claude.sendMessage)
+         → spawns Claude subprocess with env + model
+         → streams UIMessageChunks via tRPC subscription (claude.onMessage)
+         → on abort: createRollbackStash() then AbortController.abort()
+         → session removed from activeSessions map
+```
+
+Sessions are keyed by `subChatId` in the `activeSessions` Map. `hasActiveClaudeSessions()` and `abortAllClaudeSessions()` are called at app quit to cleanly tear down in-flight streams.
+
+### 2Code CLI (`2code .`)
+
+Separate from the Claude CLI emulator, 2Code ships its own shell command so users can open the app from a terminal:
+
+```bash
+2code .            # open current directory as a project
+2code /path/to/project
+```
+
+**Files:** `src/main/lib/cli.ts`, platform implementations in `src/main/lib/platform/`
+
+The CLI script is bundled at `resources/cli/` and installed/uninstalled via `installCli()` / `uninstallCli()`. On macOS/Linux it places a shell script in `/usr/local/bin`. On Windows it uses the Windows Scripting Host or PowerShell shim.
+
+`parseLaunchDirectory()` is called at startup to capture a directory argument from `process.argv`, stored and consumed once via `getLaunchDirectory()` in the window-creation flow.
+
+### Gotchas
+
+| Issue | Resolution |
+|-------|-----------|
+| Binary not found | Run `bun run claude:download` |
+| OAuth token ignored in dev | `ANTHROPIC_API_KEY` is stripped; ensure OAuth connection via Settings → Claude Code |
+| OpenRouter key stripped | Pass via `customEnv`, not shell env |
+| Nested session detection | `CLAUDECODE` env key is always stripped from the child process |
+| Shell env stale after nvm/brew changes | Call `clearClaudeEnvCache()` and restart the app |
+| Windows PATH missing tools | Platform provider (`darwin.ts` / `windows.ts`) builds PATH without spawning a shell |

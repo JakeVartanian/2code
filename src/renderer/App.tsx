@@ -1,6 +1,7 @@
 import { Provider as JotaiProvider, useAtomValue, useSetAtom } from "jotai"
 import { ThemeProvider, useTheme } from "next-themes"
-import { useEffect, useMemo } from "react"
+import { Component, useEffect, useMemo } from "react"
+import type { ErrorInfo, ReactNode } from "react"
 import { Toaster } from "sonner"
 import { TooltipProvider } from "./components/ui/tooltip"
 import { TRPCProvider } from "./contexts/TRPCProvider"
@@ -15,7 +16,6 @@ import {
   CodexOnboardingPage,
   SelectRepoPage,
 } from "./features/onboarding"
-import { identify, initAnalytics, shutdown } from "./lib/analytics"
 import {
   anthropicOnboardingCompletedAtom,
   apiKeyOnboardingCompletedAtom,
@@ -25,6 +25,71 @@ import {
 import { appStore } from "./lib/jotai-store"
 import { VSCodeThemeProvider } from "./lib/themes/theme-provider"
 import { trpc } from "./lib/trpc"
+
+/**
+ * Top-level error boundary to prevent white-screen crashes.
+ * Catches any unhandled rendering error and shows a recovery UI.
+ */
+class AppErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("[AppErrorBoundary] Uncaught render error:", error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100vh",
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+          background: "#09090b",
+          color: "#fafafa",
+          gap: "16px",
+          padding: "24px",
+          textAlign: "center",
+        }}>
+          <h1 style={{ fontSize: "18px", fontWeight: 600 }}>Something went wrong</h1>
+          <p style={{ fontSize: "14px", color: "#71717a", maxWidth: "400px" }}>
+            {this.state.error?.message || "An unexpected error occurred"}
+          </p>
+          <button
+            onClick={() => {
+              this.setState({ hasError: false, error: null })
+              window.location.reload()
+            }}
+            style={{
+              padding: "8px 16px",
+              borderRadius: "6px",
+              border: "1px solid #27272a",
+              background: "#18181b",
+              color: "#fafafa",
+              cursor: "pointer",
+              fontSize: "13px",
+            }}
+          >
+            Reload App
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 /**
  * Custom Toaster that adapts to theme
@@ -166,60 +231,27 @@ function AppContent() {
 }
 
 export function App() {
-  // Initialize analytics on mount
-  useEffect(() => {
-    initAnalytics()
-
-    // Sync analytics opt-out status to main process
-    const syncOptOutStatus = async () => {
-      try {
-        const optOut =
-          localStorage.getItem("preferences:analytics-opt-out") === "true"
-        await window.desktopApi?.setAnalyticsOptOut(optOut)
-      } catch (error) {
-        console.warn("[Analytics] Failed to sync opt-out status:", error)
-      }
-    }
-    syncOptOutStatus()
-
-    // Identify user if already authenticated
-    const identifyUser = async () => {
-      try {
-        const user = await window.desktopApi?.getUser()
-        if (user?.id) {
-          identify(user.id, { email: user.email, name: user.name })
-        }
-      } catch (error) {
-        console.warn("[Analytics] Failed to identify user:", error)
-      }
-    }
-    identifyUser()
-
-    // Cleanup on unmount
-    return () => {
-      shutdown()
-    }
-  }, [])
-
   return (
-    <WindowProvider>
-      <JotaiProvider store={appStore}>
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <VSCodeThemeProvider>
-            <TooltipProvider delayDuration={100}>
-              <TRPCProvider>
-                <div
-                  data-agents-page
-                  className="h-screen w-screen bg-background text-foreground overflow-hidden"
-                >
-                  <AppContent />
-                </div>
-                <ThemedToaster />
-              </TRPCProvider>
-            </TooltipProvider>
-          </VSCodeThemeProvider>
-        </ThemeProvider>
-      </JotaiProvider>
-    </WindowProvider>
+    <AppErrorBoundary>
+      <WindowProvider>
+        <JotaiProvider store={appStore}>
+          <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+            <VSCodeThemeProvider>
+              <TooltipProvider delayDuration={100}>
+                <TRPCProvider>
+                  <div
+                    data-agents-page
+                    className="h-screen w-screen bg-background text-foreground overflow-hidden"
+                  >
+                    <AppContent />
+                  </div>
+                  <ThemedToaster />
+                </TRPCProvider>
+              </TooltipProvider>
+            </VSCodeThemeProvider>
+          </ThemeProvider>
+        </JotaiProvider>
+      </WindowProvider>
+    </AppErrorBoundary>
   )
 }

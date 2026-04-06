@@ -1,17 +1,8 @@
-import * as Sentry from "@sentry/electron/main"
 import { app, BrowserWindow, dialog, Menu, nativeImage, session } from "electron"
 import { existsSync, readFileSync, readlinkSync, unlinkSync } from "fs"
 import { createServer } from "http"
 import { join } from "path"
 import { AuthManager, initAuthManager, getAuthManager as getAuthManagerFromModule } from "./auth-manager"
-import {
-  identify,
-  initAnalytics,
-  setSubscriptionPlan,
-  shutdown as shutdownAnalytics,
-  trackAppOpened,
-  trackAuthCompleted,
-} from "./lib/analytics"
 import {
   checkForUpdates,
   downloadUpdate,
@@ -58,24 +49,6 @@ if (IS_DEV) {
 // under heavy multi-chat workloads. Must be set before app readiness/window creation.
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=8192")
 
-// Initialize Sentry before app is ready (production only)
-if (app.isPackaged && !IS_DEV) {
-  const sentryDsn = import.meta.env.MAIN_VITE_SENTRY_DSN
-  if (sentryDsn) {
-    try {
-      Sentry.init({
-        dsn: sentryDsn,
-      })
-      console.log("[App] Sentry initialized")
-    } catch (error) {
-      console.warn("[App] Failed to initialize Sentry:", error)
-    }
-  } else {
-    console.log("[App] Skipping Sentry initialization (no DSN configured)")
-  }
-} else {
-  console.log("[App] Skipping Sentry initialization (dev mode)")
-}
 
 // URL configuration (exported for use in other modules)
 // In packaged app, ALWAYS use production URL to prevent localhost leaking into releases
@@ -106,19 +79,6 @@ export async function handleAuthCode(code: string): Promise<void> {
   try {
     const authData = await authManager.exchangeCode(code)
     console.log("[Auth] Success for user:", authData.user.email)
-
-    // Track successful authentication
-    trackAuthCompleted(authData.user.id, authData.user.email)
-
-    // Fetch and set subscription plan for analytics
-    try {
-      const planData = await authManager.fetchUserPlan()
-      if (planData) {
-        setSubscriptionPlan(planData.plan)
-      }
-    } catch (e) {
-      console.warn("[Auth] Failed to fetch user plan for analytics:", e)
-    }
 
     // Set desktop token cookie using persist:main partition
     const ses = session.fromPartition("persist:main")
@@ -196,7 +156,7 @@ function handleDeepLink(url: string): void {
     if (parsed.pathname === "/auth" || parsed.host === "auth") {
       const code = parsed.searchParams.get("code")
       if (code) {
-        handleAuthCode(code)
+        handleAuthCode(code).catch((err) => console.error("[Auth] handleAuthCode failed:", err))
         return
       }
     }
@@ -206,7 +166,7 @@ function handleDeepLink(url: string): void {
       const code = parsed.searchParams.get("code")
       const state = parsed.searchParams.get("state")
       if (code && state) {
-        handleMcpOAuthCallback(code, state)
+        handleMcpOAuthCallback(code, state).catch((err) => console.error("[Auth] MCP OAuth callback failed:", err))
         return
       }
     }
@@ -308,7 +268,7 @@ const server = createServer((req, res) => {
 
       if (code) {
         // Handle the auth code
-        handleAuthCode(code)
+        handleAuthCode(code).catch((err) => console.error("[Auth Server] handleAuthCode failed:", err))
 
         // Send success response and close the browser tab
         res.writeHead(200, { "Content-Type": "text/html" })
@@ -392,7 +352,7 @@ const server = createServer((req, res) => {
 
       if (code && state) {
         // Handle the MCP OAuth callback
-        handleMcpOAuthCallback(code, state)
+        handleMcpOAuthCallback(code, state).catch((err) => console.error("[Auth Server] MCP OAuth callback failed:", err))
 
         // Send success response and close the browser tab
         res.writeHead(200, { "Content-Type": "text/html" })
@@ -468,6 +428,14 @@ const server = createServer((req, res) => {
       res.end("Not found")
     }
   })
+
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.warn(`[Auth Server] Port ${AUTH_SERVER_PORT} already in use — auth callbacks will use deep links only`)
+  } else {
+    console.error("[Auth Server] Failed to start:", err)
+  }
+})
 
 server.listen(AUTH_SERVER_PORT, () => {
   console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
@@ -894,21 +862,6 @@ if (gotTheLock) {
     authManager = initAuthManager(!!process.env.ELECTRON_RENDERER_URL)
     console.log("[App] Auth manager initialized")
 
-    // Initialize analytics after auth manager so we can identify user
-    initAnalytics()
-
-    // If user already authenticated from previous session, identify them
-    if (authManager.isAuthenticated()) {
-      const user = authManager.getUser()
-      if (user) {
-        identify(user.id, { email: user.email })
-        console.log("[Analytics] User identified from saved session:", user.id)
-      }
-    }
-
-    // Track app opened (now with correct user ID if authenticated)
-    trackAppOpened()
-
     // Set up callback to update cookie when token is refreshed
     authManager.setOnTokenRefresh(async (authData) => {
       console.log("[Auth] Token refreshed, updating cookie...")
@@ -953,7 +906,7 @@ if (gotTheLock) {
       }, 5000)
     }
 
-    // Warm up MCP cache 3 seconds after startup (background, non-blocking)
+    // Warm up MCP cache shortly after startup (background, non-blocking)
     // This populates the cache so all future sessions can use filtered MCP servers
     setTimeout(async () => {
       try {
@@ -971,7 +924,7 @@ if (gotTheLock) {
       } catch (error) {
         console.error("[App] MCP warmup failed:", error)
       }
-    }, 3000)
+    }, 500)
 
     // Handle directory argument from CLI (e.g., `2code /path/to/project`)
     parseLaunchDirectory()
@@ -999,13 +952,21 @@ if (gotTheLock) {
     }
   })
 
-  // Cleanup before quit
-  app.on("before-quit", async () => {
+  // Cleanup before quit — use preventDefault + re-quit to ensure async cleanup completes
+  let isCleaningUp = false
+  app.on("before-quit", async (event) => {
+    if (isCleaningUp) return // Already cleaning up, let the second quit through
+    isCleaningUp = true
+    event.preventDefault()
     console.log("[App] Shutting down...")
-    cancelAllPendingOAuth()
-    await cleanupGitWatchers()
-    await shutdownAnalytics()
-    await closeDatabase()
+    try {
+      cancelAllPendingOAuth()
+      await cleanupGitWatchers()
+      await closeDatabase()
+    } catch (error) {
+      console.error("[App] Cleanup error:", error)
+    }
+    app.quit()
   })
 
   // Handle uncaught exceptions

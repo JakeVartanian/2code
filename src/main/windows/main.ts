@@ -278,12 +278,6 @@ function registerIpcHandlers(): void {
     }
   })
 
-  // Analytics
-  ipcMain.handle("analytics:set-opt-out", async (_event, optedOut: boolean) => {
-    const { setOptOut } = await import("../lib/analytics")
-    setOptOut(optedOut)
-  })
-
   // Shell
   ipcMain.handle("shell:open-external", (_event, url: string) =>
     shell.openExternal(url),

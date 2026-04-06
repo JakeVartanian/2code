@@ -1,3 +1,4 @@
+import { Mutex } from "async-mutex";
 import simpleGit, { SimpleGit, SimpleGitOptions } from "simple-git";
 import { stat, unlink } from "fs/promises";
 import { join } from "path";
@@ -15,9 +16,20 @@ export const GIT_TIMEOUTS = {
 } as const;
 
 /**
- * Per-worktree operation locks to prevent concurrent git operations
+ * Per-worktree mutex locks to prevent concurrent git operations.
+ * Uses async-mutex for proper queuing (the previous promise-based lock
+ * had a race condition where concurrent callers could overlap).
  */
-const operationLocks = new Map<string, Promise<void>>();
+const worktreeMutexes = new Map<string, Mutex>();
+
+function getMutex(worktreePath: string): Mutex {
+	let mutex = worktreeMutexes.get(worktreePath);
+	if (!mutex) {
+		mutex = new Mutex();
+		worktreeMutexes.set(worktreePath, mutex);
+	}
+	return mutex;
+}
 
 /**
  * Creates a simple-git instance with configured timeouts.
@@ -71,28 +83,8 @@ export async function withGitLock<T>(
 	worktreePath: string,
 	operation: () => Promise<T>
 ): Promise<T> {
-	// Wait for any existing operation to complete
-	const existing = operationLocks.get(worktreePath);
-	if (existing) {
-		await existing.catch(() => {}); // Ignore errors from previous operation
-	}
-
-	// Create a new lock for this operation
-	let resolveLock: () => void;
-	const lock = new Promise<void>((resolve) => {
-		resolveLock = resolve;
-	});
-	operationLocks.set(worktreePath, lock);
-
-	try {
-		return await operation();
-	} finally {
-		resolveLock!();
-		// Clean up the lock if it's still ours
-		if (operationLocks.get(worktreePath) === lock) {
-			operationLocks.delete(worktreePath);
-		}
-	}
+	const mutex = getMutex(worktreePath);
+	return mutex.runExclusive(operation);
 }
 
 /**

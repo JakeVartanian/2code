@@ -5,7 +5,6 @@ import * as fs from "fs/promises"
 import * as os from "os"
 import path from "path"
 import { z } from "zod"
-import { setConnectionMethod } from "../../analytics"
 import {
   buildClaudeEnv,
   checkOfflineFallback,
@@ -47,6 +46,7 @@ import {
   getApprovedPluginMcpServers,
   getEnabledPlugins,
 } from "./claude-settings"
+import { getExistingClaudeCredentials } from "../../claude-token"
 
 /**
  * Parse @[agent:name], @[skill:name], and @[tool:servername] mentions from prompt text
@@ -900,7 +900,12 @@ export const claudeRouter = router({
               .from(subChats)
               .where(eq(subChats.id, input.subChatId))
               .get()
-            const existingMessages = JSON.parse(existing?.messages || "[]")
+            let existingMessages: any[] = []
+            try {
+              existingMessages = JSON.parse(existing?.messages || "[]")
+            } catch (parseErr) {
+              console.error("[claude] Corrupted messages JSON in sub-chat", input.subChatId, "- resetting to empty:", parseErr)
+            }
             const existingSessionId = existing?.sessionId || null
 
             // Get resumeSessionAt UUID only if shouldResume flag was set (by rollbackToMessage)
@@ -1002,20 +1007,6 @@ export const claudeRouter = router({
             const isUsingOllama = offlineResult.isUsingOllama
 
             // Track connection method for analytics
-            let connectionMethod = "claude-subscription" // default (Claude Code OAuth)
-            if (isUsingOllama) {
-              connectionMethod = "offline-ollama"
-            } else if (finalCustomConfig) {
-              // Has custom config = either API key or custom model
-              const isDefaultAnthropicUrl =
-                !finalCustomConfig.baseUrl ||
-                finalCustomConfig.baseUrl.includes("anthropic.com")
-              connectionMethod = isDefaultAnthropicUrl
-                ? "api-key"
-                : "custom-model"
-            }
-            setConnectionMethod(connectionMethod)
-
             // Offline status is shown in sidebar, no need to emit message here
             // (emitting text-delta without text-start breaks UI text rendering)
 
@@ -2545,27 +2536,6 @@ ${prompt}
                   errorCategory = "NETWORK_ERROR"
                 }
 
-                // Track error in Sentry (only if app is ready and Sentry is available)
-                if (app.isReady() && app.isPackaged) {
-                  try {
-                    const Sentry = await import("@sentry/electron/main")
-                    Sentry.captureException(err, {
-                      tags: {
-                        errorCategory,
-                        mode: input.mode,
-                      },
-                      extra: {
-                        context: errorContext,
-                        cwd: input.cwd,
-                        stderr: stderrOutput || "(no stderr captured)",
-                        chatId: input.chatId,
-                        subChatId: input.subChatId,
-                      },
-                    })
-                  } catch {
-                    // Sentry not available or failed to import - ignore
-                  }
-                }
 
                 // Send error with stderr output to frontend (only if not aborted by user)
                 if (!abortController.signal.aborted) {
@@ -3227,4 +3197,50 @@ ${prompt}
 
       return { pending }
     }),
+
+  /**
+   * Fetch Claude subscription usage from Anthropic API
+   * Returns utilization percentages for 5-hour and 7-day windows
+   */
+  getUsage: publicProcedure.query(async () => {
+    const creds = getExistingClaudeCredentials()
+    if (!creds?.accessToken) {
+      return { error: "not_authenticated" as const }
+    }
+
+    try {
+      const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${creds.accessToken}`,
+          "anthropic-beta": "oauth-2025-04-20",
+          Accept: "application/json",
+        },
+      })
+
+      if (response.status === 429) {
+        return { error: "rate_limited" as const }
+      }
+
+      if (!response.ok) {
+        return { error: "fetch_failed" as const }
+      }
+
+      const data = await response.json() as {
+        five_hour?: { utilization: number; resets_at: string }
+        seven_day?: { utilization: number; resets_at: string }
+      }
+
+      return {
+        fiveHour: data.five_hour
+          ? { utilization: data.five_hour.utilization, resetsAt: data.five_hour.resets_at }
+          : null,
+        sevenDay: data.seven_day
+          ? { utilization: data.seven_day.utilization, resetsAt: data.seven_day.resets_at }
+          : null,
+      }
+    } catch {
+      return { error: "fetch_failed" as const }
+    }
+  }),
 })

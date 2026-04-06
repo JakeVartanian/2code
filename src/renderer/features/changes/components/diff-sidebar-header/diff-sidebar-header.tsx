@@ -23,16 +23,16 @@ import {
 import { IconCloseSidebarRight, IconFetch, IconForcePush, IconSpinner, AgentIcon, CircleFilterIcon, IconReview, ExternalLinkIcon } from "../../../../components/ui/icons";
 import { DiffViewModeSwitcher } from "./diff-view-mode-switcher";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { HiArrowPath, HiChevronDown } from "react-icons/hi2";
-import { LuGitBranch } from "react-icons/lu";
 import {
 	ArrowDown,
 	ArrowUp,
 	Check,
+	ChevronDown,
 	ChevronsDownUp,
 	ChevronsUpDown,
 	Columns2,
 	Eye,
+	GitBranch,
 	GitMerge,
 	GitPullRequest,
 	MoreHorizontal,
@@ -473,7 +473,7 @@ export const DiffSidebarHeader = memo(function DiffSidebarHeader({
 
 				{/* Branch name display (branch switching will be added later) */}
 				<div className="h-6 px-2 gap-1 text-xs font-medium min-w-0 flex items-center">
-					<LuGitBranch className="size-3.5 shrink-0 opacity-70" />
+					<GitBranch className="size-3.5 shrink-0 opacity-70" />
 					<span className="truncate max-w-[120px] text-foreground">
 						{currentBranch || "No branch"}
 					</span>
@@ -644,7 +644,7 @@ export const DiffSidebarHeader = memo(function DiffSidebarHeader({
 									)}
 									aria-label="More git options"
 								>
-									<HiChevronDown className="size-3" />
+									<ChevronDown className="size-3" />
 								</Button>
 							</DropdownMenuTrigger>
 							<DropdownMenuContent align="end" className="w-52">
@@ -654,7 +654,7 @@ export const DiffSidebarHeader = memo(function DiffSidebarHeader({
 									disabled={isFetchPending}
 									className="text-xs"
 								>
-									<HiArrowPath className={cn("mr-2 size-3.5", isFetchPending && "animate-spin")} />
+									<RefreshCw className={cn("mr-2 size-3.5", isFetchPending && "animate-spin")} />
 									<div className="flex-1">
 										<div>Fetch origin</div>
 										<div className="text-[10px] text-muted-foreground">

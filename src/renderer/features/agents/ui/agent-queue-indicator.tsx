@@ -1,7 +1,7 @@
 "use client"
 
-import { memo, useState, useCallback, useEffect } from "react"
-import { ChevronDown, ArrowUp, X } from "lucide-react"
+import { memo, useState, useCallback, useEffect, useRef } from "react"
+import { ChevronDown, ArrowUp, X, Pencil, Check } from "lucide-react"
 import { motion, AnimatePresence } from "motion/react"
 import {
   Tooltip,
@@ -21,11 +21,17 @@ const QueueItemRow = memo(function QueueItemRow({
   item,
   onRemove,
   onSendNow,
+  onUpdate,
 }: {
   item: AgentQueueItem
   onRemove?: (itemId: string) => void
   onSendNow?: (itemId: string) => void
+  onUpdate?: (itemId: string, message: string) => void
 }) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editValue, setEditValue] = useState(item.message)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
   const handleRemove = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
@@ -41,6 +47,46 @@ const QueueItemRow = memo(function QueueItemRow({
     },
     [item.id, onSendNow]
   )
+
+  const handleStartEdit = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      setEditValue(item.message)
+      setIsEditing(true)
+    },
+    [item.message]
+  )
+
+  const handleCommitEdit = useCallback(() => {
+    if (editValue.trim() !== item.message) {
+      onUpdate?.(item.id, editValue.trim() || item.message)
+    }
+    setIsEditing(false)
+  }, [editValue, item.id, item.message, onUpdate])
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault()
+        handleCommitEdit()
+      } else if (e.key === "Escape") {
+        setEditValue(item.message)
+        setIsEditing(false)
+      }
+    },
+    [handleCommitEdit, item.message]
+  )
+
+  // Auto-focus and select all when entering edit mode
+  useEffect(() => {
+    if (isEditing && textareaRef.current) {
+      textareaRef.current.focus()
+      textareaRef.current.select()
+      // Auto-resize
+      textareaRef.current.style.height = "auto"
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
+    }
+  }, [isEditing])
 
   // Build attachment summary parts by type (matching sent message bubble style)
   const attachmentParts: string[] = []
@@ -66,8 +112,43 @@ const QueueItemRow = memo(function QueueItemRow({
     attachmentParts.push(diffCount === 1 ? "code selection" : `${diffCount} code selections`)
   }
 
+  if (isEditing) {
+    return (
+      <div className="flex flex-col gap-1 px-3 py-2 text-xs bg-muted/60 border-b border-border/50">
+        <textarea
+          ref={textareaRef}
+          value={editValue}
+          onChange={(e) => {
+            setEditValue(e.target.value)
+            e.target.style.height = "auto"
+            e.target.style.height = `${e.target.scrollHeight}px`
+          }}
+          onKeyDown={handleKeyDown}
+          onBlur={handleCommitEdit}
+          rows={1}
+          className="w-full bg-transparent text-foreground resize-none outline-none leading-relaxed"
+          style={{ minHeight: "1.5rem", overflow: "hidden" }}
+        />
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground text-[10px]">Enter to save · Esc to cancel</span>
+          <button
+            onMouseDown={(e) => {
+              // Use mousedown so it fires before blur
+              e.preventDefault()
+              handleCommitEdit()
+            }}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-foreground/10 transition-all"
+          >
+            <Check className="w-3 h-3" />
+            <span className="text-[10px]">Save</span>
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors cursor-default">
+    <div className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors">
       {item.message ? (
         <span className="truncate flex-1 text-foreground">
           <RenderFileMentions text={item.message} />
@@ -83,6 +164,19 @@ const QueueItemRow = memo(function QueueItemRow({
         </span>
       )}
       <div className="flex items-center gap-1">
+        {onUpdate && item.message && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={handleStartEdit}
+                className="flex-shrink-0 p-1 hover:bg-foreground/10 rounded text-muted-foreground hover:text-foreground transition-all"
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Edit</TooltipContent>
+          </Tooltip>
+        )}
         {onSendNow && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -118,6 +212,7 @@ interface AgentQueueIndicatorProps {
   queue: AgentQueueItem[]
   onRemoveItem?: (itemId: string) => void
   onSendNow?: (itemId: string) => void
+  onUpdateItem?: (itemId: string, message: string) => void
   isStreaming?: boolean
   /** Whether there's a status card below this one - affects border radius */
   hasStatusCardBelow?: boolean
@@ -127,6 +222,7 @@ export const AgentQueueIndicator = memo(function AgentQueueIndicator({
   queue,
   onRemoveItem,
   onSendNow,
+  onUpdateItem,
   isStreaming = false,
   hasStatusCardBelow = false,
 }: AgentQueueIndicatorProps) {
@@ -201,6 +297,7 @@ export const AgentQueueIndicator = memo(function AgentQueueIndicator({
                   item={item}
                   onRemove={onRemoveItem}
                   onSendNow={onSendNow}
+                  onUpdate={onUpdateItem}
                 />
               ))}
             </div>

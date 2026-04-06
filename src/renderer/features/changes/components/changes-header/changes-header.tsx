@@ -8,7 +8,7 @@ import {
 } from "../../../../components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../../components/ui/tooltip";
 import { useEffect, useRef, useState } from "react";
-import { HiArrowPath } from "react-icons/hi2";
+import { RefreshCw } from "lucide-react";
 import { IconSpinner } from "../../../../icons";
 import { trpc } from "../../../../lib/trpc";
 import { PRIcon } from "../pr-icon";
@@ -137,7 +137,7 @@ export function ChangesHeader({
 							disabled={isManualRefresh}
 							className="size-6 p-0"
 						>
-							<HiArrowPath
+							<RefreshCw
 								className={`size-3.5 ${isManualRefresh ? "animate-spin" : ""}`}
 							/>
 						</Button>

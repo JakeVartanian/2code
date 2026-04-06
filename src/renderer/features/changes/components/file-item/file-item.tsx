@@ -18,7 +18,6 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../../components/ui/tooltip";
 import { cn } from "../../../../lib/utils";
 import { useState } from "react";
-import { HiMiniMinus, HiMiniPlus } from "react-icons/hi2";
 import { trpc } from "../../../../lib/trpc";
 import {
 	ClipboardIcon,
@@ -234,7 +233,7 @@ export function FileItem({
 									}}
 									disabled={isActioning}
 								>
-									<HiMiniPlus className="size-3" />
+									<Plus className="size-3" />
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent side="right">Stage</TooltipContent>
@@ -253,7 +252,7 @@ export function FileItem({
 									}}
 									disabled={isActioning}
 								>
-									<HiMiniMinus className="size-3" />
+									<Minus className="size-3" />
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent side="right">Unstage</TooltipContent>

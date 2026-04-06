@@ -60,7 +60,6 @@ import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 import type { FileStatus } from "../../../../shared/changes-types"
 import { getQueryClient } from "../../../contexts/TRPCProvider"
-import { trackMessageSent } from "../../../lib/analytics"
 import { apiFetch } from "../../../lib/api-fetch"
 import {
   chatSourceModeAtom,
@@ -2376,6 +2375,7 @@ const ChatViewInner = memo(function ChatViewInner({
   const queue = useMessageQueueStore((s) => s.queues[subChatId] ?? EMPTY_QUEUE)
   const addToQueue = useMessageQueueStore((s) => s.addToQueue)
   const removeFromQueue = useMessageQueueStore((s) => s.removeFromQueue)
+  const updateQueueItem = useMessageQueueStore((s) => s.updateItem)
   const popItemFromQueue = useMessageQueueStore((s) => s.popItem)
 
   // Plan approval pending state (for tool approval loading)
@@ -3923,13 +3923,6 @@ const ChatViewInner = memo(function ChatViewInner({
       clearSubChatDraft(parentChatId, subChatId)
     }
 
-    // Track message sent
-    trackMessageSent({
-      workspaceId: subChatId,
-      messageLength: finalText.length,
-      mode: subChatModeRef.current,
-    })
-
     // Trigger auto-rename on first message in a new sub-chat
     if (messagesLengthRef.current === 0 && !hasTriggeredRenameRef.current) {
       hasTriggeredRenameRef.current = true
@@ -4152,13 +4145,6 @@ const ChatViewInner = memo(function ChatViewInner({
         parts.push({ type: "text", text: mentionPrefix + (item.message || "") })
       }
 
-      // Track message sent
-      trackMessageSent({
-        workspaceId: subChatId,
-        messageLength: item.message.length,
-        mode: subChatModeRef.current,
-      })
-
       // Update timestamps
       useAgentSubChatStore.getState().updateSubChatTimestamp(subChatId)
 
@@ -4177,6 +4163,10 @@ const ChatViewInner = memo(function ChatViewInner({
   const handleRemoveFromQueue = useCallback((itemId: string) => {
     removeFromQueue(subChatId, itemId)
   }, [subChatId, removeFromQueue])
+
+  const handleUpdateQueueItem = useCallback((itemId: string, message: string) => {
+    updateQueueItem(subChatId, itemId, message)
+  }, [subChatId, updateQueueItem])
 
   // Force send - stop stream and send immediately, bypassing queue (Opt+Enter)
   const handleForceSend = useCallback(async () => {
@@ -4243,13 +4233,6 @@ const ChatViewInner = memo(function ChatViewInner({
     if (parentChatId) {
       clearSubChatDraft(parentChatId, subChatId)
     }
-
-    // Track message sent
-    trackMessageSent({
-      workspaceId: subChatId,
-      messageLength: finalText.length,
-      mode: subChatModeRef.current,
-    })
 
     // Build message parts
     const parts: any[] = [
@@ -4746,6 +4729,7 @@ const ChatViewInner = memo(function ChatViewInner({
                   queue={queue}
                   onRemoveItem={handleRemoveFromQueue}
                   onSendNow={handleSendFromQueue}
+                  onUpdateItem={handleUpdateQueueItem}
                   isStreaming={isStreaming}
                   hasStatusCardBelow={shouldShowStatusCard}
                 />
@@ -7787,8 +7771,8 @@ Make sure to preserve all functionality from both branches when resolving confli
                       opacity: isActive ? 1 : 0,
                       // Prevent pointer events on hidden tabs
                       pointerEvents: isActive ? "auto" : "none",
-                      // GPU layer hints
-                      willChange: "transform, opacity",
+                      // Only hint GPU layer on the active tab to save VRAM
+                      willChange: isActive ? "transform, opacity" : "auto",
                       // Изолируем layout - изменения внутри не влияют на другие табы
                       contain: "layout style paint",
                     }}

@@ -937,17 +937,19 @@ export const syncMessagesWithStatusAtom = atom(
     // 1. msg object itself is mutated in-place
     // 2. msg.parts array is mutated in-place
     // 3. Individual part objects inside parts are mutated in-place
-    const lastMessageId = newIds[newIds.length - 1] ?? null
+    //
+    // Only force-refresh the last 2 messages (the streaming assistant message and
+    // the user message before it, which AI SDK can also mutate). Earlier messages
+    // are only cloned when hasMessageChanged detects an actual change.
+    const lastTwoIds = new Set(newIds.slice(-2))
     for (const msg of messages) {
       const messageKey = getPerChatMessageKey(currentSubChatId, msg.id)
       const currentAtomValue = get(messageAtomFamily(messageKey))
       const msgChanged = hasMessageChanged(currentSubChatId, msg.id, msg)
-      const isLastMessage = msg.id === lastMessageId
+      const isRecentMessage = lastTwoIds.has(msg.id)
 
       // CRITICAL FIX: Also update if atom is null (not yet populated)
-      // Always refresh the last message because AI SDK can mutate non-last parts
-      // of the current streaming assistant message without changing the last part.
-      if (msgChanged || !currentAtomValue || isLastMessage) {
+      if (msgChanged || !currentAtomValue || isRecentMessage) {
         // Deep clone message with new parts array and new part objects
         const clonedMsg = {
           ...msg,
