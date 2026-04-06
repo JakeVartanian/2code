@@ -1,10 +1,8 @@
 import { eq, sql } from "drizzle-orm"
 import { safeStorage, shell } from "electron"
 import { z } from "zod"
-import { getAuthManager } from "../../../index"
 import { getClaudeShellEnvironment } from "../../claude"
-import { getExistingClaudeToken } from "../../claude-token"
-import { getApiUrl } from "../../config"
+import { getExistingClaudeToken, runClaudeSetupToken } from "../../claude-token"
 import {
   anthropicAccounts,
   anthropicSettings,
@@ -13,14 +11,6 @@ import {
 } from "../../db"
 import { createId } from "../../db/utils"
 import { publicProcedure, router } from "../index"
-
-/**
- * Get desktop auth token for server API calls
- */
-async function getDesktopToken(): Promise<string | null> {
-  const authManager = getAuthManager()
-  return authManager.getValidToken()
-}
 
 /**
  * Encrypt token using Electron's safeStorage
@@ -49,9 +39,6 @@ function decryptToken(encrypted: string): string {
  * If setAsActive is true, also sets this account as active
  */
 function storeOAuthToken(oauthToken: string, setAsActive = true): string {
-  const authManager = getAuthManager()
-  const user = authManager.getUser()
-
   const encryptedToken = encryptToken(oauthToken)
   const db = getDatabase()
   const newId = createId()
@@ -63,7 +50,7 @@ function storeOAuthToken(oauthToken: string, setAsActive = true): string {
       oauthToken: encryptedToken,
       displayName: "Anthropic Account",
       connectedAt: new Date(),
-      desktopUserId: user?.id ?? null,
+      desktopUserId: null,
     })
     .run()
 
@@ -95,7 +82,7 @@ function storeOAuthToken(oauthToken: string, setAsActive = true): string {
       id: "default",
       oauthToken: encryptedToken,
       connectedAt: new Date(),
-      userId: user?.id ?? null,
+      userId: null,
     })
     .run()
 
@@ -169,34 +156,34 @@ export const claudeCodeRouter = router({
   }),
 
   /**
-   * Start OAuth flow - calls server to create sandbox
+   * Run `claude setup-token` to authenticate via the CLI.
+   * Opens a browser for OAuth, waits for completion, reads token from keychain.
    */
-  startAuth: publicProcedure.mutation(async () => {
-    const token = await getDesktopToken()
-    if (!token) {
-      throw new Error("Not authenticated with 21st.dev")
-    }
+  setupAuth: publicProcedure.mutation(async () => {
+    const statusMessages: string[] = []
 
-    // Server creates sandbox (has CodeSandbox SDK)
-    const response = await fetch(`${getApiUrl()}/api/auth/claude-code/start`, {
-      method: "POST",
-      headers: { "x-desktop-token": token },
+    const result = await runClaudeSetupToken((message) => {
+      statusMessages.push(message)
+      console.log("[ClaudeCode] setup-token:", message)
     })
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unknown error" }))
-      throw new Error(error.error || `Start auth failed: ${response.status}`)
+    if (!result.success) {
+      throw new Error(result.error || "Authentication failed")
     }
 
-    return (await response.json()) as {
-      sandboxId: string
-      sandboxUrl: string
-      sessionId: string
+    const token = result.token || getExistingClaudeToken()
+    if (!token) {
+      throw new Error("No token found after authentication")
     }
+
+    storeOAuthToken(token)
+    console.log("[ClaudeCode] Token stored from CLI setup-token")
+    return { success: true }
   }),
 
   /**
    * Poll for OAuth URL - calls sandbox directly
+   * @deprecated - kept for reference, replaced by setupAuth
    */
   pollStatus: publicProcedure
     .input(
