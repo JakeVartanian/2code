@@ -15,8 +15,10 @@ export { DevicePresetsBar } from "./device-presets-bar"
 export { PreviewUrlInput } from "./preview-url-input"
 
 // Diff components
-export { AgentDiffView, diffViewModeAtom } from "./agent-diff-view"
-export type { DiffStats, AgentDiffViewRef, DiffViewMode } from "./agent-diff-view"
+export { AgentDiffView } from "./agent-diff-view"
+export type { DiffStats, AgentDiffViewRef } from "./agent-diff-view"
+export { diffViewModeAtom } from "./agent-diff-utils"
+export type { DiffViewMode } from "./agent-diff-utils"
 
 // Exploring group component
 export { AgentExploringGroup } from "./agent-exploring-group"

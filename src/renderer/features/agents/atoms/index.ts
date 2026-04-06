@@ -218,22 +218,6 @@ export const lastSelectedModelIdAtom = atomWithStorage<string>(
   { getOnInit: true },
 )
 
-export const lastSelectedCodexModelIdAtom = atomWithStorage<string>(
-  "agents:lastSelectedCodexModelId",
-  "gpt-5.3-codex",
-  undefined,
-  { getOnInit: true },
-)
-
-export type CodexThinkingPreference = "low" | "medium" | "high" | "xhigh"
-
-export const lastSelectedCodexThinkingAtom = atomWithStorage<CodexThinkingPreference>(
-  "agents:lastSelectedCodexThinking",
-  "high",
-  undefined,
-  { getOnInit: true },
-)
-
 // Storage for per-subChat Claude model selection.
 // Falls back to lastSelectedModelIdAtom when sub-chat has no explicit selection yet.
 const subChatModelIdsStorageAtom = atomWithStorage<Record<string, string>>(
@@ -257,68 +241,6 @@ export const subChatModelIdAtomFamily = atomFamily((subChatId: string) =>
       const current = get(subChatModelIdsStorageAtom)
       if (current[subChatId] === newModelId) return
       set(subChatModelIdsStorageAtom, { ...current, [subChatId]: newModelId })
-    },
-  ),
-)
-
-// Storage for per-subChat Codex model selection.
-// Falls back to lastSelectedCodexModelIdAtom when sub-chat has no explicit selection yet.
-const subChatCodexModelIdsStorageAtom = atomWithStorage<Record<string, string>>(
-  "agents:subChatCodexModelIds",
-  {},
-  undefined,
-  { getOnInit: true },
-)
-
-export const subChatCodexModelIdAtomFamily = atomFamily((subChatId: string) =>
-  atom(
-    (get) => {
-      if (!subChatId) return get(lastSelectedCodexModelIdAtom)
-      return (
-        get(subChatCodexModelIdsStorageAtom)[subChatId] ??
-        get(lastSelectedCodexModelIdAtom)
-      )
-    },
-    (get, set, newModelId: string) => {
-      if (!subChatId) {
-        set(lastSelectedCodexModelIdAtom, newModelId)
-        return
-      }
-      const current = get(subChatCodexModelIdsStorageAtom)
-      if (current[subChatId] === newModelId) return
-      set(subChatCodexModelIdsStorageAtom, { ...current, [subChatId]: newModelId })
-    },
-  ),
-)
-
-// Storage for per-subChat Codex thinking level.
-// Falls back to lastSelectedCodexThinkingAtom when sub-chat has no explicit selection yet.
-const subChatCodexThinkingStorageAtom = atomWithStorage<
-  Record<string, CodexThinkingPreference>
->(
-  "agents:subChatCodexThinking",
-  {},
-  undefined,
-  { getOnInit: true },
-)
-
-export const subChatCodexThinkingAtomFamily = atomFamily((subChatId: string) =>
-  atom(
-    (get) => {
-      if (!subChatId) return get(lastSelectedCodexThinkingAtom)
-      return (
-        get(subChatCodexThinkingStorageAtom)[subChatId] ??
-        get(lastSelectedCodexThinkingAtom)
-      )
-    },
-    (get, set, newThinking: CodexThinkingPreference) => {
-      if (!subChatId) {
-        set(lastSelectedCodexThinkingAtom, newThinking)
-        return
-      }
-      const current = get(subChatCodexThinkingStorageAtom)
-      if (current[subChatId] === newThinking) return
-      set(subChatCodexThinkingStorageAtom, { ...current, [subChatId]: newThinking })
     },
   ),
 )
@@ -705,7 +627,7 @@ export const pendingConflictResolutionMessageAtom = atom<{ message: string; subC
 // After successful OAuth flow, this triggers automatic retry of the message
 export type PendingAuthRetryMessage = {
   subChatId: string  // Required: only retry in the correct chat
-  provider: "claude-code" | "codex"
+  provider: "claude-code"
   prompt: string
   images?: Array<{
     base64Data: string

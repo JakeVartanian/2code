@@ -4,7 +4,6 @@
  */
 
 import { useMemo } from "react"
-import { normalizeCodexToolPart } from "../../shared/codex-tool-normalizer"
 import { trpc, trpcClient } from "./trpc"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -65,35 +64,7 @@ export const api = {
                           input: part.input || part.args,
                         }
                       }
-                      // Normalize Codex MCP wrapper shape (e.g. tool-Tool: notion/notion-search)
-                      // to canonical tool-mcp__{server}__{tool} so MCP renderer can parse it.
-                      if (
-                        part.type?.startsWith("tool-Tool:") ||
-                        part.toolName?.startsWith("Tool:") ||
-                        part.input?.toolName?.startsWith("Tool:")
-                      ) {
-                        const normalizedMcpPart = normalizeCodexToolPart(part) as AnyObj
-                        if (normalizedMcpPart !== part) {
-                          if (normalizedMcpPart.state) {
-                            let normalizedState = normalizedMcpPart.state
-                            if (normalizedMcpPart.state === "result") {
-                              normalizedState =
-                                normalizedMcpPart.result?.success === false
-                                  ? "output-error"
-                                  : "output-available"
-                            }
-                            return {
-                              ...normalizedMcpPart,
-                              state: normalizedState,
-                              output:
-                                normalizedMcpPart.output ||
-                                normalizedMcpPart.result,
-                            }
-                          }
-                          return normalizedMcpPart
-                        }
-                      }
-                      // Normalize ACP/codex tool types (e.g. "tool-Read README.md" → "tool-Read")
+                      // Normalize ACP tool types (e.g. "tool-Read README.md" → "tool-Read")
                       // Detects ACP parts by: title-based type with space, or proxy tool name, or input.toolName present
                       if (part.type?.startsWith("tool-") && (part.input?.toolName || part.type.includes(" ") || part.type === "tool-acp.acp_provider_agent_dynamic_tool")) {
                         const acpVerbMap: AnyObj = {

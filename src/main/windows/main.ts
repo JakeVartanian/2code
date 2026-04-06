@@ -17,7 +17,6 @@ import { createAppRouter } from "../lib/trpc/routers"
 import { getAuthManager, handleAuthCode, getBaseUrl } from "../index"
 import { registerGitWatcherIPC } from "../lib/git/watcher"
 import { hasActiveClaudeSessions, abortAllClaudeSessions } from "../lib/trpc/routers/claude"
-import { hasActiveCodexStreams, abortAllCodexStreams } from "../lib/trpc/routers/codex"
 import { registerThemeScannerIPC } from "../lib/vscode-theme-scanner"
 import { windowManager } from "./window-manager"
 
@@ -704,7 +703,7 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
       if (!input.shift) {
         // Block Cmd+R entirely
         event.preventDefault()
-      } else if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+      } else if (hasActiveClaudeSessions()) {
         // Cmd+Shift+R with active streams — intercept and confirm
         event.preventDefault()
         dialog
@@ -721,7 +720,6 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
           .then(({ response }) => {
             if (response === 1) {
               abortAllClaudeSessions()
-              abortAllCodexStreams()
               window.webContents.reloadIgnoringCache()
             }
           })
@@ -741,11 +739,10 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     if (isQuitting) {
       // Still abort sessions gracefully so partial state is saved
       abortAllClaudeSessions()
-      abortAllCodexStreams()
       return
     }
 
-    if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+    if (hasActiveClaudeSessions()) {
       event.preventDefault()
       dialog
         .showMessageBox(window, {
@@ -761,7 +758,6 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
         .then(({ response }) => {
           if (response === 1) {
             abortAllClaudeSessions()
-            abortAllCodexStreams()
             window.destroy()
           }
         })

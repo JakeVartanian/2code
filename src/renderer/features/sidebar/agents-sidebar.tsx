@@ -1,7 +1,8 @@
 "use client"
 
 import React from "react"
-import { useState, useRef, useMemo, useEffect, useCallback, memo, forwardRef } from "react"
+import { useState, useRef, useMemo, useEffect, useCallback, memo, forwardRef, type RefObject } from "react"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { createPortal } from "react-dom"
 import { motion, AnimatePresence } from "motion/react"
 import { Button as ButtonCustom } from "../../components/ui/button"
@@ -836,6 +837,7 @@ interface ChatListSectionProps {
     meta?: { repository?: string; branch?: string | null } | null
     remoteStats?: { fileCount: number; additions: number; deletions: number } | null
   }>
+  scrollContainerRef?: RefObject<HTMLDivElement | null>
   selectedChatId: string | null
   selectedChatIsRemote: boolean
   focusedChatIndex: number
@@ -875,10 +877,14 @@ interface ChatListSectionProps {
   justCreatedIds: Set<string>
 }
 
+// Virtualization threshold - only virtualize when there are many items
+const VIRTUALIZE_THRESHOLD = 50
+
 // Memoized Chat List Section component
 const ChatListSection = React.memo(function ChatListSection({
   title,
   chats,
+  scrollContainerRef,
   selectedChatId,
   selectedChatIsRemote,
   focusedChatIndex,
@@ -926,6 +932,110 @@ const ChatListSection = React.memo(function ChatListSection({
     return map
   }, [filteredChats])
 
+  const shouldVirtualize = chats.length >= VIRTUALIZE_THRESHOLD && !!scrollContainerRef
+
+  const virtualizer = useVirtualizer({
+    count: shouldVirtualize ? chats.length : 0,
+    getScrollElement: () => scrollContainerRef?.current ?? null,
+    estimateSize: () => 56, // ~56px per chat item (py-1.5 + content)
+    overscan: 10,
+    enabled: shouldVirtualize,
+  })
+
+  const renderChatItem = useCallback((chat: (typeof chats)[number], index: number) => {
+    const isLoading = loadingChatIds.has(chat.id)
+    const chatOriginalId = chat.isRemote ? chat.id.replace(/^remote_/, '') : chat.id
+    const isSelected = selectedChatId === chatOriginalId && selectedChatIsRemote === chat.isRemote
+    const isPinned = pinnedChatIds.has(chat.id)
+    const globalIndex = globalIndexMap.get(chat.id) ?? -1
+    const isFocused = focusedChatIndex === globalIndex && focusedChatIndex >= 0
+
+    const project = chat.projectId ? projectsMap.get(chat.projectId) : null
+    const repoName = chat.isRemote
+      ? chat.meta?.repository
+      : (project?.gitRepo || project?.name)
+    const displayText = chat.branch
+      ? repoName
+        ? `${repoName} • ${chat.branch}`
+        : chat.branch
+      : repoName || (chat.isRemote ? "Remote project" : "Local project")
+
+    const isChecked = selectedChatIds.has(chat.id)
+    const stats = chat.isRemote ? null : workspaceFileStats.get(chat.id)
+    const hasPendingPlan = workspacePendingPlans.has(chat.id)
+    const hasPendingQuestion = workspacePendingQuestions.has(chat.id)
+    const isLastInFilteredChats = globalIndex === filteredChats.length - 1
+    const isJustCreated = justCreatedIds.has(chat.id)
+
+    const gitOwner = chat.isRemote
+      ? chat.meta?.repository?.split('/')[0]
+      : project?.gitOwner
+    const gitProvider = chat.isRemote ? 'github' : project?.gitProvider
+
+    return (
+      <AgentChatItem
+        key={chat.id}
+        chatId={chat.id}
+        chatName={chat.name}
+        chatBranch={chat.branch}
+        chatUpdatedAt={chat.updatedAt}
+        chatProjectId={chat.projectId ?? ""}
+        globalIndex={globalIndex}
+        isSelected={isSelected}
+        isLoading={isLoading}
+        hasUnseenChanges={unseenChanges.has(chat.id)}
+        hasPendingPlan={hasPendingPlan}
+        hasPendingQuestion={hasPendingQuestion}
+        isMultiSelectMode={isMultiSelectMode}
+        isChecked={isChecked}
+        isFocused={isFocused}
+        isMobileFullscreen={isMobileFullscreen}
+        isDesktop={isDesktop}
+        isPinned={isPinned}
+        displayText={displayText}
+        gitOwner={gitOwner}
+        gitProvider={gitProvider}
+        stats={stats ?? undefined}
+        selectedChatIdsSize={selectedChatIds.size}
+        canShowPinOption={canShowPinOption}
+        areAllSelectedPinned={areAllSelectedPinned}
+        filteredChatsLength={filteredChats.length}
+        isLastInFilteredChats={isLastInFilteredChats}
+        showIcon={showIcon}
+        onChatClick={onChatClick}
+        onCheckboxClick={onCheckboxClick}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+        onArchive={onArchive}
+        onTogglePin={onTogglePin}
+        onRenameClick={onRenameClick}
+        onCopyBranch={onCopyBranch}
+        onArchiveAllBelow={onArchiveAllBelow}
+        onArchiveOthers={onArchiveOthers}
+        onOpenLocally={onOpenLocally}
+        onBulkPin={onBulkPin}
+        onBulkUnpin={onBulkUnpin}
+        onBulkArchive={onBulkArchive}
+        archivePending={archivePending}
+        archiveBatchPending={archiveBatchPending}
+        isRemote={chat.isRemote}
+        nameRefCallback={nameRefCallback}
+        formatTime={formatTime}
+        isJustCreated={isJustCreated}
+      />
+    )
+  }, [
+    loadingChatIds, selectedChatId, selectedChatIsRemote, pinnedChatIds,
+    globalIndexMap, focusedChatIndex, projectsMap, selectedChatIds,
+    workspaceFileStats, workspacePendingPlans, workspacePendingQuestions,
+    filteredChats, justCreatedIds, unseenChanges, isMultiSelectMode,
+    isMobileFullscreen, isDesktop, canShowPinOption, areAllSelectedPinned,
+    showIcon, onChatClick, onCheckboxClick, onMouseEnter, onMouseLeave,
+    onArchive, onTogglePin, onRenameClick, onCopyBranch, onArchiveAllBelow,
+    onArchiveOthers, onOpenLocally, onBulkPin, onBulkUnpin, onBulkArchive,
+    archivePending, archiveBatchPending, nameRefCallback, formatTime,
+  ])
+
   return (
     <>
       <div
@@ -938,97 +1048,36 @@ const ChatListSection = React.memo(function ChatListSection({
           {title}
         </h3>
       </div>
-      <div className="list-none p-0 m-0 mb-3">
-        {chats.map((chat) => {
-          const isLoading = loadingChatIds.has(chat.id)
-          // For remote chats, compare without prefix; for local, compare directly
-          // Remote chat IDs in list have "remote_" prefix, but selectedChatId is the original ID
-          const chatOriginalId = chat.isRemote ? chat.id.replace(/^remote_/, '') : chat.id
-          const isSelected = selectedChatId === chatOriginalId && selectedChatIsRemote === chat.isRemote
-          const isPinned = pinnedChatIds.has(chat.id)
-          const globalIndex = globalIndexMap.get(chat.id) ?? -1
-          const isFocused = focusedChatIndex === globalIndex && focusedChatIndex >= 0
-
-          // For remote chats, get repo info from meta; for local, from projectsMap
-          const project = chat.projectId ? projectsMap.get(chat.projectId) : null
-          const repoName = chat.isRemote
-            ? chat.meta?.repository
-            : (project?.gitRepo || project?.name)
-          const displayText = chat.branch
-            ? repoName
-              ? `${repoName} • ${chat.branch}`
-              : chat.branch
-            : repoName || (chat.isRemote ? "Remote project" : "Local project")
-
-          const isChecked = selectedChatIds.has(chat.id)
-          // TODO: remote stats disabled — backend no longer computes them (was causing 50s+ loads)
-          // Will re-enable once stats are precomputed at write time
-          const stats = chat.isRemote ? null : workspaceFileStats.get(chat.id)
-          const hasPendingPlan = workspacePendingPlans.has(chat.id)
-          const hasPendingQuestion = workspacePendingQuestions.has(chat.id)
-          const isLastInFilteredChats = globalIndex === filteredChats.length - 1
-          const isJustCreated = justCreatedIds.has(chat.id)
-
-          // For remote chats, extract gitOwner from meta.repository (e.g. "owner/repo" -> "owner")
-          const gitOwner = chat.isRemote
-            ? chat.meta?.repository?.split('/')[0]
-            : project?.gitOwner
-          const gitProvider = chat.isRemote ? 'github' : project?.gitProvider
-
-          return (
-            <AgentChatItem
-              key={chat.id}
-              chatId={chat.id}
-              chatName={chat.name}
-              chatBranch={chat.branch}
-              chatUpdatedAt={chat.updatedAt}
-              chatProjectId={chat.projectId ?? ""}
-              globalIndex={globalIndex}
-              isSelected={isSelected}
-              isLoading={isLoading}
-              hasUnseenChanges={unseenChanges.has(chat.id)}
-              hasPendingPlan={hasPendingPlan}
-              hasPendingQuestion={hasPendingQuestion}
-              isMultiSelectMode={isMultiSelectMode}
-              isChecked={isChecked}
-              isFocused={isFocused}
-              isMobileFullscreen={isMobileFullscreen}
-              isDesktop={isDesktop}
-              isPinned={isPinned}
-              displayText={displayText}
-              gitOwner={gitOwner}
-              gitProvider={gitProvider}
-              stats={stats ?? undefined}
-              selectedChatIdsSize={selectedChatIds.size}
-              canShowPinOption={canShowPinOption}
-              areAllSelectedPinned={areAllSelectedPinned}
-              filteredChatsLength={filteredChats.length}
-              isLastInFilteredChats={isLastInFilteredChats}
-              showIcon={showIcon}
-              onChatClick={onChatClick}
-              onCheckboxClick={onCheckboxClick}
-              onMouseEnter={onMouseEnter}
-              onMouseLeave={onMouseLeave}
-              onArchive={onArchive}
-              onTogglePin={onTogglePin}
-              onRenameClick={onRenameClick}
-              onCopyBranch={onCopyBranch}
-              onArchiveAllBelow={onArchiveAllBelow}
-              onArchiveOthers={onArchiveOthers}
-              onOpenLocally={onOpenLocally}
-              onBulkPin={onBulkPin}
-              onBulkUnpin={onBulkUnpin}
-              onBulkArchive={onBulkArchive}
-              archivePending={archivePending}
-              archiveBatchPending={archiveBatchPending}
-              isRemote={chat.isRemote}
-              nameRefCallback={nameRefCallback}
-              formatTime={formatTime}
-              isJustCreated={isJustCreated}
-            />
-          )
-        })}
-      </div>
+      {shouldVirtualize ? (
+        <div
+          className="list-none p-0 m-0 mb-3 relative"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {virtualizer.getVirtualItems().map((virtualItem) => {
+            const chat = chats[virtualItem.index]!
+            return (
+              <div
+                key={chat.id}
+                data-index={virtualItem.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${virtualItem.start}px)`,
+                }}
+              >
+                {renderChatItem(chat, virtualItem.index)}
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="list-none p-0 m-0 mb-3">
+          {chats.map((chat, index) => renderChatItem(chat, index))}
+        </div>
+      )}
     </>
   )
 }, chatListSectionPropsAreEqual)
@@ -3108,10 +3157,11 @@ export function AgentsSidebar({
                 justCreatedIds={justCreatedIds}
               />
 
-              {/* Unpinned section */}
+              {/* Unpinned section - virtualized when 50+ items */}
               <ChatListSection
                 title={pinnedAgents.length > 0 ? "Recent workspaces" : "Workspaces"}
                 chats={unpinnedAgents}
+                scrollContainerRef={scrollContainerRef}
                 selectedChatId={selectedChatId}
                 selectedChatIsRemote={selectedChatIsRemote}
                 focusedChatIndex={focusedChatIndex}

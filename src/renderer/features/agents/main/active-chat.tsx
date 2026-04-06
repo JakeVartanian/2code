@@ -46,7 +46,9 @@ import {
 import { AnimatePresence, motion } from "motion/react"
 import {
   createContext,
+  lazy,
   memo,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
@@ -91,10 +93,13 @@ import {
   unifiedSidebarEnabledAtom,
 } from "../../details-sidebar/atoms"
 import { DetailsSidebar } from "../../details-sidebar/details-sidebar"
-import { FileViewerSidebar } from "../../file-viewer"
+// Lazy-loaded: Monaco editor (~2-3MB) only loads when file viewer opens
+const FileViewerSidebar = lazy(() => import("../../file-viewer/components/file-viewer-sidebar").then(m => ({ default: m.FileViewerSidebar })))
 import { FileSearchDialog } from "../../file-viewer/components/file-search-dialog"
 import { terminalBottomHeightAtom, terminalDisplayModeAtom, terminalSidebarOpenAtomFamily } from "../../terminal/atoms"
-import { TerminalBottomPanelContent, TerminalSidebar } from "../../terminal/terminal-sidebar"
+// Lazy-loaded: xterm (~1.5MB) only loads when terminal opens
+const TerminalSidebar = lazy(() => import("../../terminal/terminal-sidebar").then(m => ({ default: m.TerminalSidebar })))
+const TerminalBottomPanelContent = lazy(() => import("../../terminal/terminal-sidebar").then(m => ({ default: m.TerminalBottomPanelContent })))
 import { getTerminalScopeKey } from "../../terminal/utils"
 import {
   agentsChangesPanelCollapsedAtom,
@@ -142,8 +147,6 @@ import {
   setLoading,
   subChatFilesAtom,
   agentsSidebarOpenAtom,
-  subChatCodexModelIdAtomFamily,
-  subChatCodexThinkingAtomFamily,
   subChatModelIdAtomFamily,
   subChatModeAtomFamily,
   suppressInputFocusAtom,
@@ -167,7 +170,6 @@ import { useHaptic } from "../hooks/use-haptic"
 import { usePastedTextFiles, type PastedTextFile } from "../hooks/use-pasted-text-files"
 import { useTextContextSelection } from "../hooks/use-text-context-selection"
 import { useToggleFocusOnCmdEsc } from "../hooks/use-toggle-focus-on-cmd-esc"
-import { ACPChatTransport } from "../lib/acp-chat-transport"
 import { formatHistoryForContext } from "../lib/export-chat"
 import {
   clearSubChatDraft,
@@ -204,14 +206,11 @@ import {
   useAgentSubChatStore,
   type SubChatMeta,
 } from "../stores/sub-chat-store"
-import type { DiffViewMode } from "../ui/agent-diff-view"
-import {
-  AgentDiffView,
-  diffViewModeAtom,
-  splitUnifiedDiffByFile,
-  type AgentDiffViewRef,
-  type ParsedDiffFile,
-} from "../ui/agent-diff-view"
+import type { AgentDiffViewRef } from "../ui/agent-diff-view"
+import type { DiffViewMode, ParsedDiffFile } from "../ui/agent-diff-utils"
+import { diffViewModeAtom, splitUnifiedDiffByFile } from "../ui/agent-diff-utils"
+// Lazy-loaded: @pierre/diffs (~10MB) only loads when diff view opens
+const AgentDiffView = lazy(() => import("../ui/agent-diff-view").then(m => ({ default: m.AgentDiffView })))
 import { AgentPlanSidebar } from "../ui/agent-plan-sidebar"
 import { AgentPreview } from "../ui/agent-preview"
 import { AgentQueueIndicator } from "../ui/agent-queue-indicator"
@@ -359,13 +358,6 @@ const CHAT_LAYOUT = {
   headerPaddingSidebarClosed: "p-2 pt-1.5",
 } as const
 
-// Codex icon (OpenAI style)
-const CodexIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
-    <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08-4.778 2.758a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
-  </svg>
-)
-
 // Model options for Claude Code
 const claudeModels = [
   { id: "opus", name: "Opus 4.6" },
@@ -377,7 +369,6 @@ const claudeModels = [
 const agents = [
   { id: "claude-code", name: "Claude Code", hasModels: true },
   { id: "cursor", name: "Cursor CLI", disabled: true },
-  { id: "codex", name: "OpenAI Codex", disabled: true },
 ]
 
 // Helper function to get agent icon
@@ -387,8 +378,6 @@ const getAgentIcon = (agentId: string, className?: string) => {
       return <ClaudeCodeIcon className={className} />
     case "cursor":
       return <CursorIcon className={className} />
-    case "codex":
-      return <CodexIcon className={className} />
     default:
       return null
   }
@@ -1366,22 +1355,24 @@ const DiffSidebarContent = memo(function DiffSidebarContent({
             "absolute inset-0 overflow-hidden",
             activeTab === "history" && selectedCommit ? "z-0 invisible" : "z-10"
           )}>
-            <AgentDiffView
-              ref={diffViewRef}
-              chatId={chatId}
-              sandboxId={sandboxId}
-              worktreePath={worktreePath || undefined}
-              repository={repository}
-              onStatsChange={setDiffStats}
-              initialDiff={effectiveDiff}
-              initialParsedFiles={effectiveParsedFiles}
-              prefetchedFileContents={effectivePrefetchedContents}
-              showFooter={false}
-              onCollapsedStateChange={setDiffCollapseState}
-              onSelectNextFile={handleSelectNextFile}
-              onViewedCountChange={handleViewedCountChange}
-              initialSelectedFile={initialSelectedFile}
-            />
+            <Suspense fallback={null}>
+              <AgentDiffView
+                ref={diffViewRef}
+                chatId={chatId}
+                sandboxId={sandboxId}
+                worktreePath={worktreePath || undefined}
+                repository={repository}
+                onStatsChange={setDiffStats}
+                initialDiff={effectiveDiff}
+                initialParsedFiles={effectiveParsedFiles}
+                prefetchedFileContents={effectivePrefetchedContents}
+                showFooter={false}
+                onCollapsedStateChange={setDiffCollapseState}
+                onSelectNextFile={handleSelectNextFile}
+                onViewedCountChange={handleViewedCountChange}
+                initialSelectedFile={initialSelectedFile}
+              />
+            </Suspense>
           </div>
         </div>
       </div>
@@ -1494,22 +1485,24 @@ const DiffSidebarContent = memo(function DiffSidebarContent({
           "absolute inset-0 overflow-hidden",
           activeTab === "history" && selectedCommit ? "z-0 invisible" : "z-10"
         )}>
-          <AgentDiffView
-            ref={diffViewRef}
-            chatId={chatId}
-            sandboxId={sandboxId}
-            worktreePath={worktreePath || undefined}
-            repository={repository}
-            onStatsChange={setDiffStats}
-            initialDiff={effectiveDiff}
-            initialParsedFiles={effectiveParsedFiles}
-            prefetchedFileContents={effectivePrefetchedContents}
-            showFooter={true}
-            onCollapsedStateChange={setDiffCollapseState}
-            onSelectNextFile={handleSelectNextFile}
-            onViewedCountChange={handleViewedCountChange}
-            initialSelectedFile={initialSelectedFile}
-          />
+          <Suspense fallback={null}>
+            <AgentDiffView
+              ref={diffViewRef}
+              chatId={chatId}
+              sandboxId={sandboxId}
+              worktreePath={worktreePath || undefined}
+              repository={repository}
+              onStatsChange={setDiffStats}
+              initialDiff={effectiveDiff}
+              initialParsedFiles={effectiveParsedFiles}
+              prefetchedFileContents={effectivePrefetchedContents}
+              showFooter={true}
+              onCollapsedStateChange={setDiffCollapseState}
+              onSelectNextFile={handleSelectNextFile}
+              onViewedCountChange={handleViewedCountChange}
+              initialSelectedFile={initialSelectedFile}
+            />
+          </Suspense>
         </div>
       </div>
     </div>
@@ -1939,13 +1932,13 @@ const ChatViewInner = memo(function ChatViewInner({
   chat: Chat<any>
   subChatId: string
   parentChatId: string
-  provider?: "claude-code" | "codex"
+  provider?: "claude-code"
   isFirstSubChat: boolean
   onAutoRename: (userMessage: string, subChatId: string) => void
   onCreateNewSubChat?: () => void
   onProviderChange?: (
     subChatId: string,
-    provider: "claude-code" | "codex",
+    provider: "claude-code",
   ) => void
   refreshDiff?: () => void
   teamId?: string
@@ -2752,17 +2745,11 @@ const ChatViewInner = memo(function ChatViewInner({
 
     const cacheReadInputTokens = metadata?.cacheReadInputTokens || 0
     const cacheCreationInputTokens = metadata?.cacheCreationInputTokens || 0
-    const codexInputTokensFromTotal =
-      metadata?.totalTokens !== undefined
-        ? Math.max(0, metadata.totalTokens - (metadata?.outputTokens ?? 0))
-        : undefined
 
     const totalInputTokens =
-      provider === "codex"
-        ? (codexInputTokensFromTotal ?? metadata?.inputTokens ?? 0)
-        : (metadata?.inputTokens || 0) +
-          cacheReadInputTokens +
-          cacheCreationInputTokens
+      (metadata?.inputTokens || 0) +
+      cacheReadInputTokens +
+      cacheCreationInputTokens
     const totalOutputTokens = metadata?.outputTokens || 0
     const totalCostUsd = metadata?.totalCostUsd || 0
     const contextWindow = metadata?.modelContextWindow
@@ -3505,14 +3492,6 @@ const ChatViewInner = memo(function ChatViewInner({
         appStore.set(
           subChatModelIdAtomFamily(newSubChat.id),
           appStore.get(subChatModelIdAtomFamily(subChatId)),
-        )
-        appStore.set(
-          subChatCodexModelIdAtomFamily(newSubChat.id),
-          appStore.get(subChatCodexModelIdAtomFamily(subChatId)),
-        )
-        appStore.set(
-          subChatCodexThinkingAtomFamily(newSubChat.id),
-          appStore.get(subChatCodexThinkingAtomFamily(subChatId)),
         )
 
         // Open the forked sub-chat tab and switch to it
@@ -4501,7 +4480,7 @@ const ChatViewInner = memo(function ChatViewInner({
   const shouldShowStackedCards =
     !displayQuestions && (queue.length > 0 || shouldShowStatusCard)
   const handleInputProviderChange = useCallback(
-    (nextProvider: "claude-code" | "codex") => {
+    (nextProvider: "claude-code") => {
       onProviderChange?.(subChatId, nextProvider)
     },
     [onProviderChange, subChatId],
@@ -4510,7 +4489,7 @@ const ChatViewInner = memo(function ChatViewInner({
   // Continue conversation with a different provider - creates new sub-chat with history attachment
   const isContinuingRef = useRef(false)
   const handleContinueWithProvider = useCallback(
-    async (targetProvider: "claude-code" | "codex") => {
+    async (targetProvider: "claude-code") => {
       if (isStreaming || isContinuingRef.current) return
       if (!messages || messages.length === 0) return
       isContinuingRef.current = true
@@ -4538,14 +4517,6 @@ const ChatViewInner = memo(function ChatViewInner({
         appStore.set(
           subChatModelIdAtomFamily(newId),
           appStore.get(subChatModelIdAtomFamily(subChatId)),
-        )
-        appStore.set(
-          subChatCodexModelIdAtomFamily(newId),
-          appStore.get(subChatCodexModelIdAtomFamily(subChatId)),
-        )
-        appStore.set(
-          subChatCodexThinkingAtomFamily(newId),
-          appStore.get(subChatCodexThinkingAtomFamily(subChatId)),
         )
 
         // 4. Store pending chat history for the new sub-chat to consume on mount
@@ -5288,7 +5259,7 @@ export function ChatView({
   const [
     subChatProviderOverrides,
     setSubChatProviderOverrides,
-  ] = useState<Record<string, "claude-code" | "codex">>({})
+  ] = useState<Record<string, "claude-code">>({})
 
   useEffect(() => {
     setSubChatProviderOverrides({})
@@ -6361,144 +6332,11 @@ Make sure to preserve all functionality from both branches when resolving confli
   }, [agentSubChats, activeSubChatIdForPlan, setCurrentPlanPath])
 
   const inferProviderFromMessages = useCallback(
-    (subChatId?: string): "claude-code" | "codex" => {
-      if (!subChatId) return "claude-code"
-
-      const override = subChatProviderOverrides[subChatId]
-      if (override) return override
-
-      const subChat = ((agentChat as any)?.subChats || []).find(
-        (sc: any) => sc?.id === subChatId,
-      ) as { messages?: any } | undefined
-      const rawMessages = subChat?.messages
-
-      let messages: any[] = []
-      if (Array.isArray(rawMessages)) {
-        messages = rawMessages
-      } else if (typeof rawMessages === "string") {
-        try {
-          const parsed = JSON.parse(rawMessages)
-          messages = Array.isArray(parsed) ? parsed : []
-        } catch {
-          messages = []
-        }
-      }
-
-      for (const message of messages) {
-        const model = (message as any)?.metadata?.model
-        if (typeof model !== "string") continue
-        const normalizedModel = model.toLowerCase()
-        if (
-          normalizedModel.includes("codex") ||
-          normalizedModel.startsWith("gpt-")
-        ) {
-          return "codex"
-        }
-      }
-
+    (_subChatId?: string): "claude-code" => {
       return "claude-code"
     },
-    [agentChat, subChatProviderOverrides],
+    [],
   )
-
-  const activeSubChatProvider = useMemo(
-    () => inferProviderFromMessages(activeSubChatId || undefined),
-    [activeSubChatId, inferProviderFromMessages],
-  )
-
-  const { data: codexMcpConfig } = trpc.codex.getAllMcpConfig.useQuery(undefined, {
-    enabled: activeSubChatProvider === "codex",
-    staleTime: 5 * 60 * 1000,
-  })
-
-  const codexMcpSessionData = useMemo(() => {
-    if (activeSubChatProvider !== "codex") return null
-    if (!codexMcpConfig) return null
-
-    const groups = codexMcpConfig?.groups || []
-    if (groups.length === 0) {
-      return {
-        mcpServers: [],
-        mcpTools: [],
-      }
-    }
-
-    const orderedGroups = [
-      ...groups.filter((group) => group.projectPath === null),
-      ...groups.filter(
-        (group) =>
-          group.projectPath !== null &&
-          !!originalProjectPath &&
-          group.projectPath === originalProjectPath,
-      ),
-    ]
-
-    const effectiveServers = new Map<string, (typeof groups)[number]["mcpServers"][number]>()
-    for (const group of orderedGroups) {
-      for (const server of group.mcpServers || []) {
-        if (typeof server?.name !== "string" || server.name.length === 0) continue
-        effectiveServers.set(server.name, server)
-      }
-    }
-
-    const mcpServers: Array<{
-      name: string
-      status: "connected" | "failed" | "pending" | "needs-auth"
-      serverInfo?: { name: string; version: string; icons?: Array<{ src: string }> }
-      error?: string
-    }> = []
-    const mcpToolIds = new Set<string>()
-
-    for (const server of effectiveServers.values()) {
-      const status =
-        server.status === "connected" ||
-        server.status === "failed" ||
-        server.status === "pending" ||
-        server.status === "needs-auth"
-          ? server.status
-          : "failed"
-
-      mcpServers.push({
-        name: server.name,
-        status,
-        ...(server.serverInfo ? { serverInfo: server.serverInfo } : {}),
-        ...(server.error ? { error: server.error } : {}),
-      })
-
-      for (const tool of Array.isArray(server.tools) ? server.tools : []) {
-        const toolName =
-          typeof tool === "string"
-            ? tool
-            : typeof tool?.name === "string"
-              ? tool.name
-              : null
-        if (!toolName) continue
-        mcpToolIds.add(`mcp__${server.name}__${toolName}`)
-      }
-    }
-
-    return {
-      mcpServers,
-      mcpTools: [...mcpToolIds].sort((a, b) => a.localeCompare(b)),
-    }
-  }, [activeSubChatProvider, codexMcpConfig?.groups, originalProjectPath])
-
-  useEffect(() => {
-    if (activeSubChatProvider !== "codex" || !codexMcpSessionData) return
-
-    setSessionInfo((prev) => {
-      const nonMcpTools = (prev?.tools || []).filter(
-        (tool) => !tool.startsWith("mcp__"),
-      )
-
-      return {
-        tools: [...nonMcpTools, ...codexMcpSessionData.mcpTools],
-        mcpServers: codexMcpSessionData.mcpServers,
-        plugins: prev?.plugins || [],
-        skills: prev?.skills || [],
-      }
-    })
-  }, [activeSubChatProvider, codexMcpSessionData, setSessionInfo])
 
   const syncFinishedMessagesToChatCache = useCallback(
     (subChatId: string, chat: Chat<any>) => {
@@ -6559,10 +6397,7 @@ Make sure to preserve all functionality from both branches when resolving confli
         const overrideProvider = subChatProviderOverrides[subChatId]
         if (!overrideProvider) return existing
 
-        const existingProvider: "claude-code" | "codex" =
-          (existing as any)?.transport instanceof ACPChatTransport
-            ? "codex"
-            : "claude-code"
+        const existingProvider: "claude-code" = "claude-code"
         if (existingProvider === overrideProvider) return existing
 
         const subChatForOverride = agentSubChats.find((sc) => sc.id === subChatId)
@@ -6606,8 +6441,6 @@ Make sure to preserve all functionality from both branches when resolving confli
         .allSubChats.find((sc) => sc.id === subChatId)
       const subChatMode = subChatMeta?.mode || currentMode
 
-      const chatProvider = inferProviderFromMessages(subChatId)
-
       console.log("[getOrCreateChat] Transport selection", {
         subChatId: subChatId.slice(-8),
         isRemoteChat,
@@ -6616,7 +6449,7 @@ Make sure to preserve all functionality from both branches when resolving confli
         worktreePath: worktreePath ? "exists" : "none",
       })
 
-      let transport: IPCChatTransport | RemoteChatTransport | ACPChatTransport | null = null
+      let transport: IPCChatTransport | RemoteChatTransport | null = null
 
       if (isRemoteChat && chatSandboxUrl) {
         // Remote sandbox chat: use HTTP SSE transport
@@ -6636,26 +6469,14 @@ Make sure to preserve all functionality from both branches when resolving confli
           model: modelString,
         })
       } else if (worktreePath) {
-        if (chatProvider === "codex") {
-          console.log("[getOrCreateChat] Using ACPChatTransport", { provider: chatProvider })
-          transport = new ACPChatTransport({
-            chatId,
-            subChatId,
-            cwd: worktreePath,
-            projectPath,
-            mode: subChatMode,
-            provider: "codex",
-          })
-        } else {
-          // Local worktree chat: use IPC transport
-          transport = new IPCChatTransport({
-            chatId,
-            subChatId,
-            cwd: worktreePath,
-            projectPath,
-            mode: subChatMode,
-          })
-        }
+        // Local worktree chat: use IPC transport
+        transport = new IPCChatTransport({
+          chatId,
+          subChatId,
+          cwd: worktreePath,
+          projectPath,
+          mode: subChatMode,
+        })
       }
 
       if (!transport) {
@@ -6766,7 +6587,7 @@ Make sure to preserve all functionality from both branches when resolving confli
   )
 
   const handleProviderChange = useCallback(
-    (subChatId: string, nextProvider: "claude-code" | "codex") => {
+    (subChatId: string, nextProvider: "claude-code") => {
       // Provider switch is only allowed for brand new sub-chats.
       const activeChat = agentChatStore.get(subChatId) as any
       let messageCount = Array.isArray(activeChat?.messages)
@@ -6874,14 +6695,6 @@ Make sure to preserve all functionality from both branches when resolving confli
       subChatModelIdAtomFamily(newId),
       appStore.get(subChatModelIdAtomFamily(sourceSubChatId)),
     )
-    appStore.set(
-      subChatCodexModelIdAtomFamily(newId),
-      appStore.get(subChatCodexModelIdAtomFamily(sourceSubChatId)),
-    )
-    appStore.set(
-      subChatCodexThinkingAtomFamily(newId),
-      appStore.get(subChatCodexThinkingAtomFamily(sourceSubChatId)),
-    )
 
     // Add to open tabs and set as active
     store.addToOpenSubChats(newId)
@@ -6900,8 +6713,7 @@ Make sure to preserve all functionality from both branches when resolving confli
       newSubChatSandboxUrl,
     })
 
-    const chatProvider = newSubChatProvider
-    let newSubChatTransport: IPCChatTransport | RemoteChatTransport | ACPChatTransport | null = null
+    let newSubChatTransport: IPCChatTransport | RemoteChatTransport | null = null
 
     if (isNewSubChatRemote && newSubChatSandboxUrl) {
       // Remote sandbox chat: use HTTP SSE transport
@@ -6917,26 +6729,14 @@ Make sure to preserve all functionality from both branches when resolving confli
         model: modelString,
       })
     } else if (worktreePath) {
-      if (chatProvider === "codex") {
-        console.log("[createNewSubChat] Using ACPChatTransport", { provider: chatProvider })
-        newSubChatTransport = new ACPChatTransport({
-          chatId,
-          subChatId: newId,
-          cwd: worktreePath,
-          projectPath,
-          mode: newSubChatMode,
-          provider: "codex",
-        })
-      } else {
-        // Local worktree chat: use IPC transport
-        newSubChatTransport = new IPCChatTransport({
-          chatId,
-          subChatId: newId,
-          cwd: worktreePath,
-          projectPath,
-          mode: newSubChatMode,
-        })
-      }
+      // Local worktree chat: use IPC transport
+      newSubChatTransport = new IPCChatTransport({
+        chatId,
+        subChatId: newId,
+        cwd: worktreePath,
+        projectPath,
+        mode: newSubChatMode,
+      })
     }
 
     if (newSubChatTransport) {
@@ -8061,11 +7861,13 @@ Make sure to preserve all functionality from both branches when resolving confli
             className="bg-tl-background border-l"
             style={{ borderLeftWidth: "0.5px" }}
           >
-            <FileViewerSidebar
-              filePath={fileViewerPath}
-              projectPath={worktreePath}
-              onClose={() => setFileViewerPath(null)}
-            />
+            <Suspense fallback={null}>
+              <FileViewerSidebar
+                filePath={fileViewerPath}
+                projectPath={worktreePath}
+                onClose={() => setFileViewerPath(null)}
+              />
+            </Suspense>
           </ResizableSidebar>
         )}
         {fileViewerPath && worktreePath && fileViewerDisplayMode === "center-peek" && (
@@ -8073,11 +7875,13 @@ Make sure to preserve all functionality from both branches when resolving confli
             isOpen={!!fileViewerPath}
             onClose={() => setFileViewerPath(null)}
           >
-            <FileViewerSidebar
-              filePath={fileViewerPath}
-              projectPath={worktreePath}
-              onClose={() => setFileViewerPath(null)}
-            />
+            <Suspense fallback={null}>
+              <FileViewerSidebar
+                filePath={fileViewerPath}
+                projectPath={worktreePath}
+                onClose={() => setFileViewerPath(null)}
+              />
+            </Suspense>
           </DiffCenterPeekDialog>
         )}
         {fileViewerPath && worktreePath && fileViewerDisplayMode === "full-page" && (
@@ -8085,22 +7889,26 @@ Make sure to preserve all functionality from both branches when resolving confli
             isOpen={!!fileViewerPath}
             onClose={() => setFileViewerPath(null)}
           >
-            <FileViewerSidebar
-              filePath={fileViewerPath}
-              projectPath={worktreePath}
-              onClose={() => setFileViewerPath(null)}
-            />
+            <Suspense fallback={null}>
+              <FileViewerSidebar
+                filePath={fileViewerPath}
+                projectPath={worktreePath}
+                onClose={() => setFileViewerPath(null)}
+              />
+            </Suspense>
           </DiffFullPageView>
         )}
 
         {/* Terminal Sidebar - shows when worktree exists (desktop only) */}
         {worktreePath && (
-          <TerminalSidebar
-            chatId={chatId}
-            scopeKey={terminalScopeKey}
-            cwd={worktreePath}
-            workspaceId={chatId}
-          />
+          <Suspense fallback={null}>
+            <TerminalSidebar
+              chatId={chatId}
+              scopeKey={terminalScopeKey}
+              cwd={worktreePath}
+              workspaceId={chatId}
+            />
+          </Suspense>
         )}
 
         {/* Open Locally Dialog - for importing sandbox chats to local */}
@@ -8169,13 +7977,15 @@ Make sure to preserve all functionality from both branches when resolving confli
           className="bg-background border-t"
           style={{ borderTopWidth: "0.5px" }}
         >
-          <TerminalBottomPanelContent
-            chatId={chatId}
-            scopeKey={terminalScopeKey}
-            cwd={worktreePath}
-            workspaceId={chatId}
-            onClose={() => setIsTerminalSidebarOpen(false)}
-          />
+          <Suspense fallback={null}>
+            <TerminalBottomPanelContent
+              chatId={chatId}
+              scopeKey={terminalScopeKey}
+              cwd={worktreePath}
+              workspaceId={chatId}
+              onClose={() => setIsTerminalSidebarOpen(false)}
+            />
+          </Suspense>
         </ResizableBottomPanel>
       )}
     </div>

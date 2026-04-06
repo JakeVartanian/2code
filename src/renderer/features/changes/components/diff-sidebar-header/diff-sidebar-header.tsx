@@ -47,7 +47,7 @@ import { cn } from "../../../../lib/utils";
 import { usePRStatus } from "../../../../hooks/usePRStatus";
 import { PRIcon } from "../pr-icon";
 import { toast } from "sonner";
-import type { DiffViewMode } from "@/features/agents/ui/agent-diff-view";
+import type { DiffViewMode } from "@/features/agents/ui/agent-diff-utils";
 import { getSyncActionKind } from "../../utils/sync-actions";
 import { usePushAction } from "../../hooks/use-push-action";
 

@@ -671,8 +671,6 @@ export const recordingHotkeyForActionAtom = atom<string | null>(null)
 
 // Login modal (shown when Claude Code auth fails)
 export const agentsLoginModalOpenAtom = atom<boolean>(false)
-export const codexLoginModalOpenAtom = atom<boolean>(false)
-
 export type ClaudeLoginModalConfig = {
   hideCustomModelSettingsLink: boolean
   autoStartAuth: boolean
@@ -750,16 +748,12 @@ export const isFullscreenAtom = atom<boolean | null>(null)
 // "claude-subscription" = use Claude Pro/Max via OAuth
 // "api-key" = use Anthropic API key directly
 // "custom-model" = use custom base URL and model (e.g. for proxies or alternative providers)
-// "codex-subscription" = use Codex via ChatGPT subscription login
-// "codex-api-key" = use Codex via app-managed API key
 // null = not yet selected (show billing method selection screen)
 export type BillingMethod =
   | "claude-subscription"
   | "api-key"
   | "custom-model"
   | "openrouter"
-  | "codex-subscription"
-  | "codex-api-key"
   | null
 
 export const billingMethodAtom = atomWithStorage<BillingMethod>(
@@ -788,41 +782,6 @@ export const apiKeyOnboardingCompletedAtom = atomWithStorage<boolean>(
   { getOnInit: true },
 )
 
-// Whether user has completed Codex auth during onboarding
-// Only relevant when billingMethod is a Codex method
-export const codexOnboardingCompletedAtom = atomWithStorage<boolean>(
-  "onboarding:codex-completed",
-  false,
-  undefined,
-  { getOnInit: true },
-)
-
-export type CodexOnboardingAuthMethod = "chatgpt" | "api_key"
-
-// Preferred/last successful Codex auth method
-export const codexOnboardingAuthMethodAtom =
-  atomWithStorage<CodexOnboardingAuthMethod>(
-    "onboarding:codex-auth-method",
-    "chatgpt",
-    undefined,
-    { getOnInit: true },
-  )
-
-// App-managed Codex API key (separate from voice OpenAI key)
-export const codexApiKeyAtom = atomWithStorage<string>(
-  "onboarding:codex-api-key",
-  "",
-  undefined,
-  { getOnInit: true },
-)
-
-export function normalizeCodexApiKey(apiKey: string): string | null {
-  const trimmed = apiKey.trim()
-  if (!trimmed) return null
-  if (!trimmed.startsWith("sk-")) return null
-  return trimmed
-}
-
 // ============================================
 // MODEL VISIBILITY (hide specific models from selector)
 // ============================================
@@ -831,7 +790,7 @@ export function normalizeCodexApiKey(apiKey: string): string | null {
 // Models are shown by default; only hidden models are stored
 export const hiddenModelsAtom = atomWithStorage<string[]>(
   "preferences:hidden-models-v4",
-  ["gpt-5.1-codex-max", "gpt-5.1-codex-mini"],
+  [],
   undefined,
   { getOnInit: true },
 )

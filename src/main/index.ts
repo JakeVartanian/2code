@@ -20,7 +20,6 @@ import {
 import { cleanupGitWatchers } from "./lib/git/watcher"
 import { cancelAllPendingOAuth, handleMcpOAuthCallback } from "./lib/mcp-auth"
 import { getAllMcpConfigHandler, hasActiveClaudeSessions, abortAllClaudeSessions } from "./lib/trpc/routers/claude"
-import { getAllCodexMcpConfigHandler, hasActiveCodexStreams, abortAllCodexStreams } from "./lib/trpc/routers/codex"
 import {
   createMainWindow,
   createWindow,
@@ -676,7 +675,7 @@ if (gotTheLock) {
               label: "Quit",
               accelerator: "CmdOrCtrl+Q",
               click: async () => {
-                if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+                if (hasActiveClaudeSessions()) {
                   const { dialog } = await import("electron")
                   const { response } = await dialog.showMessageBox({
                     type: "warning",
@@ -689,7 +688,6 @@ if (gotTheLock) {
                   })
                   if (response === 1) {
                     abortAllClaudeSessions()
-                    abortAllCodexStreams()
                     setIsQuitting(true)
                     app.quit()
                   }
@@ -761,7 +759,7 @@ if (gotTheLock) {
               click: () => {
                 const win = BrowserWindow.getFocusedWindow()
                 if (!win) return
-                if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+                if (hasActiveClaudeSessions()) {
                   dialog
                     .showMessageBox(win, {
                       type: "warning",
@@ -776,7 +774,6 @@ if (gotTheLock) {
                     .then(({ response }) => {
                       if (response === 1) {
                         abortAllClaudeSessions()
-                        abortAllCodexStreams()
                         win.webContents.reloadIgnoringCache()
                       }
                     })
@@ -910,17 +907,7 @@ if (gotTheLock) {
     // This populates the cache so all future sessions can use filtered MCP servers
     setTimeout(async () => {
       try {
-        const results = await Promise.allSettled([
-          getAllMcpConfigHandler(),
-          getAllCodexMcpConfigHandler(),
-        ])
-
-        if (results[0].status === "rejected") {
-          console.error("[App] Claude MCP warmup failed:", results[0].reason)
-        }
-        if (results[1].status === "rejected") {
-          console.error("[App] Codex MCP warmup failed:", results[1].reason)
-        }
+        await getAllMcpConfigHandler()
       } catch (error) {
         console.error("[App] MCP warmup failed:", error)
       }

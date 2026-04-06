@@ -54,7 +54,6 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
   if (!metadata || isStreaming) return null
 
   const {
-    model,
     inputTokens = 0,
     outputTokens = 0,
     totalTokens = 0,
@@ -66,12 +65,7 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
 
   if (!hasUsage) return null
 
-  const normalizedModel = typeof model === "string" ? model.toLowerCase() : ""
-  const isCodexModel =
-    normalizedModel.includes("codex") || normalizedModel.startsWith("gpt-")
-  const displayTokens = isCodexModel
-    ? inputTokens + outputTokens
-    : totalTokens || inputTokens + outputTokens
+  const displayTokens = totalTokens || inputTokens + outputTokens
 
   return (
     <HoverCard openDelay={400} closeDelay={100}>
