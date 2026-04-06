@@ -20,7 +20,7 @@ export interface DetectedWorktreeConfig {
 }
 
 const CURSOR_CONFIG_PATH = ".cursor/worktrees.json"
-const TWOCODE_CONFIG_PATH = ".2code/worktree.json"
+const ONECODE_CONFIG_PATH = ".2code/worktree.json"
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -69,7 +69,7 @@ export async function detectWorktreeConfig(
   }
 
   // 3. Check .2code/worktree.json
-  const onecodePath = join(projectPath, TWOCODE_CONFIG_PATH)
+  const onecodePath = join(projectPath, ONECODE_CONFIG_PATH)
   if (await fileExists(onecodePath)) {
     const config = await readJsonFile<WorktreeConfig>(onecodePath)
     if (config) {
@@ -119,7 +119,7 @@ export async function saveWorktreeConfig(
   if (target === "cursor") {
     targetPath = join(projectPath, CURSOR_CONFIG_PATH)
   } else if (target === "2code") {
-    targetPath = join(projectPath, TWOCODE_CONFIG_PATH)
+    targetPath = join(projectPath, ONECODE_CONFIG_PATH)
   } else {
     // Custom path
     targetPath = isAbsolute(target) ? target : join(projectPath, target)

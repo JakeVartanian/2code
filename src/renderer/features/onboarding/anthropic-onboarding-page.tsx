@@ -2,40 +2,282 @@
 
 import { useSetAtom } from "jotai"
 import { ChevronLeft } from "lucide-react"
-import React, { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { ClaudeCodeIcon, IconSpinner } from "../../components/ui/icons"
+import { Input } from "../../components/ui/input"
+import { Logo } from "../../components/ui/logo"
 import {
   anthropicOnboardingCompletedAtom,
   billingMethodAtom,
 } from "../../lib/atoms"
 import { trpc } from "../../lib/trpc"
 
+type AuthFlowState =
+  | { step: "idle" }
+  | { step: "starting" }
+  | {
+      step: "waiting_url"
+      sandboxId: string
+      sandboxUrl: string
+      sessionId: string
+    }
+  | {
+      step: "has_url"
+      sandboxId: string
+      oauthUrl: string
+      sandboxUrl: string
+      sessionId: string
+    }
+  | { step: "submitting" }
+  | { step: "error"; message: string }
+
 export function AnthropicOnboardingPage() {
-  const [status, setStatus] = useState<"idle" | "running" | "error">("idle")
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const setAnthropicOnboardingCompleted = useSetAtom(anthropicOnboardingCompletedAtom)
+  const [flowState, setFlowState] = useState<AuthFlowState>({ step: "idle" })
+  const [authCode, setAuthCode] = useState("")
+  const [userClickedConnect, setUserClickedConnect] = useState(false)
+  const [urlOpened, setUrlOpened] = useState(false)
+  const [savedOauthUrl, setSavedOauthUrl] = useState<string | null>(null)
+  const [ignoredExistingToken, setIgnoredExistingToken] = useState(false)
+  const [isUsingExistingToken, setIsUsingExistingToken] = useState(false)
+  const [existingTokenError, setExistingTokenError] = useState<string | null>(null)
+  const urlOpenedRef = useRef(false)
+  const setAnthropicOnboardingCompleted = useSetAtom(
+    anthropicOnboardingCompletedAtom
+  )
   const setBillingMethod = useSetAtom(billingMethodAtom)
-
-  const setupAuthMutation = trpc.claudeCode.setupAuth.useMutation({
-    onSuccess: () => {
-      setAnthropicOnboardingCompleted(true)
-    },
-    onError: (err) => {
-      setStatus("error")
-      setErrorMessage(err.message || "Authentication failed")
-    },
-  })
-
-  const handleConnect = () => {
-    setStatus("running")
-    setErrorMessage(null)
-    setupAuthMutation.mutate()
-  }
 
   const handleBack = () => {
     setBillingMethod(null)
   }
+
+  const formatTokenPreview = (token: string) => {
+    const trimmed = token.trim()
+    if (trimmed.length <= 16) return trimmed
+    return `${trimmed.slice(0, 19)}...${trimmed.slice(-6)}`
+  }
+
+  // tRPC mutations
+  const startAuthMutation = trpc.claudeCode.startAuth.useMutation()
+  const submitCodeMutation = trpc.claudeCode.submitCode.useMutation()
+  const openOAuthUrlMutation = trpc.claudeCode.openOAuthUrl.useMutation()
+  const importSystemTokenMutation = trpc.claudeCode.importSystemToken.useMutation()
+  // Disabled: importing CLI token is broken — access tokens expire in ~8 hours
+  // and we don't store the refresh token. Always use sandbox OAuth flow instead.
+  // const existingTokenQuery = trpc.claudeCode.getSystemToken.useQuery()
+  // const existingToken = existingTokenQuery.data?.token ?? null
+  const existingToken = null
+  const hasExistingToken = false
+  const checkedExistingToken = true
+  const shouldOfferExistingToken = false
+
+  // Poll for OAuth URL and auto-completion (localhost callback)
+  const isPolling = flowState.step === "waiting_url" || flowState.step === "has_url"
+  const pollStatusQuery = trpc.claudeCode.pollStatus.useQuery(
+    {
+      sandboxUrl: isPolling ? flowState.sandboxUrl : "",
+      sessionId: isPolling ? flowState.sessionId : "",
+    },
+    {
+      enabled: isPolling,
+      refetchInterval: 1500,
+    }
+  )
+
+  // Track whether auth was started so integrationQuery keeps running even after error
+  const [authStarted, setAuthStarted] = useState(false)
+
+  // Always poll getIntegration once auth has started — belt-and-suspenders for success detection.
+  // We intentionally keep polling even in error state in case the token was stored before the error fired.
+  const integrationQuery = trpc.claudeCode.getIntegration.useQuery(undefined, {
+    enabled: authStarted || isPolling,
+    refetchInterval: isPolling || authStarted ? 1500 : false,
+  })
+
+  // Auto-start auth on mount
+  useEffect(() => {
+    if (!checkedExistingToken || shouldOfferExistingToken) return
+
+    if (flowState.step === "idle") {
+      setFlowState({ step: "starting" })
+      startAuthMutation.mutate(undefined, {
+        onSuccess: (result) => {
+          setAuthStarted(true)
+          setFlowState({
+            step: "waiting_url",
+            sandboxId: result.sandboxId,
+            sandboxUrl: result.sandboxUrl,
+            sessionId: result.sessionId,
+          })
+        },
+        onError: (err) => {
+          setFlowState({
+            step: "error",
+            message: err.message || "Failed to start authentication",
+          })
+        },
+      })
+    }
+  }, [flowState.step, startAuthMutation, checkedExistingToken, shouldOfferExistingToken])
+
+  // Complete onboarding as soon as the token is stored in the DB — belt-and-suspenders.
+  // Only fires after auth has been started (so we don't complete on stale data from a previous session).
+  useEffect(() => {
+    if ((authStarted || isPolling) && integrationQuery.data?.isConnected) {
+      setAnthropicOnboardingCompleted(true)
+    }
+  }, [authStarted, isPolling, integrationQuery.data?.isConnected, setAnthropicOnboardingCompleted])
+
+  // Update flow state from poll results
+  useEffect(() => {
+    if (!pollStatusQuery.data) return
+
+    // Auto-complete: localhost callback captured the code and exchanged the token
+    if (pollStatusQuery.data.state === "success") {
+      setAnthropicOnboardingCompleted(true)
+      return
+    }
+
+    if (flowState.step === "waiting_url" && pollStatusQuery.data.oauthUrl) {
+      setSavedOauthUrl(pollStatusQuery.data.oauthUrl)
+      setFlowState({
+        step: "has_url",
+        sandboxId: flowState.sandboxId,
+        oauthUrl: pollStatusQuery.data.oauthUrl,
+        sandboxUrl: flowState.sandboxUrl,
+        sessionId: flowState.sessionId,
+      })
+    } else if (
+      (flowState.step === "waiting_url" || flowState.step === "has_url") &&
+      pollStatusQuery.data.state === "error" &&
+      !integrationQuery.data?.isConnected
+    ) {
+      // Only show error if we haven't already stored the token successfully
+      setFlowState({
+        step: "error",
+        message: pollStatusQuery.data.error || "Failed to get OAuth URL",
+      })
+    }
+  }, [pollStatusQuery.data, flowState, integrationQuery.data?.isConnected, setAnthropicOnboardingCompleted])
+
+  // Browser is opened automatically in startAuth — mark as opened when we reach has_url
+  useEffect(() => {
+    if (flowState.step === "has_url" && !urlOpenedRef.current) {
+      urlOpenedRef.current = true
+      setUrlOpened(true)
+    }
+  }, [flowState.step])
+
+  // Check if the code looks like a valid Claude auth code (format: XXX#YYY)
+  const isValidCodeFormat = (code: string) => {
+    const trimmed = code.trim()
+    return trimmed.length > 50 && trimmed.includes("#")
+  }
+
+  const handleConnectClick = async () => {
+    setUserClickedConnect(true)
+
+    if (flowState.step === "has_url") {
+      // Browser was already opened automatically in startAuth — just mark state
+      urlOpenedRef.current = true
+      setUrlOpened(true)
+    } else if (flowState.step === "error") {
+      // Retry on error
+      urlOpenedRef.current = false
+      setUrlOpened(false)
+      setFlowState({ step: "starting" })
+      try {
+        const result = await startAuthMutation.mutateAsync()
+        setFlowState({
+          step: "waiting_url",
+          sandboxId: result.sandboxId,
+          sandboxUrl: result.sandboxUrl,
+          sessionId: result.sessionId,
+        })
+      } catch (err) {
+        setFlowState({
+          step: "error",
+          message:
+            err instanceof Error ? err.message : "Failed to start authentication",
+        })
+      }
+    }
+    // For idle, starting, waiting_url states - the useEffect will handle opening the URL
+    // when it becomes ready (userClickedConnect is now true)
+  }
+
+  const handleUseExistingToken = async () => {
+    if (!hasExistingToken || isUsingExistingToken) return
+
+    setIsUsingExistingToken(true)
+    setExistingTokenError(null)
+
+    try {
+      await importSystemTokenMutation.mutateAsync()
+      setAnthropicOnboardingCompleted(true)
+    } catch (err) {
+      setExistingTokenError(
+        err instanceof Error ? err.message : "Failed to use existing token"
+      )
+      setIsUsingExistingToken(false)
+    }
+  }
+
+  const handleRejectExistingToken = () => {
+    setIgnoredExistingToken(true)
+    setExistingTokenError(null)
+    handleConnectClick()
+  }
+
+  // Submit code - reusable for both auto-submit and manual Enter
+  const submitCode = async (code: string) => {
+    if (!code.trim() || flowState.step !== "has_url") return
+
+    const { sandboxUrl, sessionId } = flowState
+    setFlowState({ step: "submitting" })
+
+    try {
+      await submitCodeMutation.mutateAsync({
+        sandboxUrl,
+        sessionId,
+        code: code.trim(),
+      })
+      // Success - mark onboarding as completed
+      setAnthropicOnboardingCompleted(true)
+    } catch (err) {
+      setFlowState({
+        step: "error",
+        message: err instanceof Error ? err.message : "Failed to submit code",
+      })
+    }
+  }
+
+  const handleCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    setAuthCode(value)
+
+    // Auto-submit if the pasted value looks like a valid auth code
+    if (isValidCodeFormat(value) && flowState.step === "has_url") {
+      // Small delay to let the UI update before submitting
+      setTimeout(() => submitCode(value), 100)
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && authCode.trim()) {
+      submitCode(authCode)
+    }
+  }
+
+  const handleOpenFallbackUrl = () => {
+    if (savedOauthUrl) {
+      openOAuthUrlMutation.mutate(savedOauthUrl)
+    }
+  }
+
+  const isLoadingAuth =
+    flowState.step === "starting" || flowState.step === "waiting_url"
+  const isSubmitting = flowState.step === "submitting"
 
   return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-background select-none">
@@ -45,7 +287,7 @@ export function AnthropicOnboardingPage() {
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       />
 
-      {/* Back button */}
+      {/* Back button - fixed in top left corner below traffic lights */}
       <button
         onClick={handleBack}
         className="fixed top-12 left-4 flex items-center justify-center h-8 w-8 rounded-full hover:bg-foreground/5 transition-colors"
@@ -54,9 +296,12 @@ export function AnthropicOnboardingPage() {
       </button>
 
       <div className="w-full max-w-[440px] space-y-8 px-4">
-        {/* Header */}
+        {/* Header with dual icons */}
         <div className="text-center space-y-4">
           <div className="flex items-center justify-center gap-2 p-2 mx-auto w-max rounded-full border border-border">
+            <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center">
+              <Logo className="w-5 h-5" fill="white" />
+            </div>
             <div className="w-10 h-10 rounded-full bg-[#D97757] flex items-center justify-center">
               <ClaudeCodeIcon className="w-6 h-6 text-white" />
             </div>
@@ -66,49 +311,111 @@ export function AnthropicOnboardingPage() {
               Connect Claude Code
             </h1>
             <p className="text-sm text-muted-foreground">
-              Sign in with your Claude Pro or Max subscription
+              Connect your Claude Code subscription to get started
             </p>
           </div>
         </div>
 
-        <div className="space-y-4 flex flex-col items-center">
-          {status === "idle" && (
-            <>
-              <p className="text-xs text-muted-foreground text-center">
-                Clicking Connect will open your browser to authenticate with Anthropic.
-                Once complete, return here — the app will continue automatically.
-              </p>
-              <button
-                onClick={handleConnect}
-                className="h-8 px-4 min-w-[85px] bg-primary text-primary-foreground rounded-lg text-sm font-medium transition-[background-color,transform] duration-150 hover:bg-primary/90 active:scale-[0.97] shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] flex items-center justify-center"
-              >
-                Connect
-              </button>
-            </>
-          )}
-
-          {status === "running" && (
-            <div className="flex flex-col items-center gap-3">
-              <IconSpinner className="h-5 w-5" />
-              <p className="text-sm text-muted-foreground text-center">
-                Browser opened — authenticate and return here.
-              </p>
+        {/* Content */}
+        <div className="space-y-6 flex flex-col items-center">
+          {/* Existing token prompt */}
+          {shouldOfferExistingToken && flowState.step === "idle" && (
+            <div className="space-y-4 w-full">
+              <div className="p-4 bg-muted/50 border border-border rounded-lg">
+                <p className="text-sm font-medium">
+                  Existing Claude Code credentials found
+                </p>
+                {existingToken && (
+                  <pre className="mt-2 px-2.5 py-2 text-xs text-foreground whitespace-pre-wrap break-words font-mono bg-background/60 rounded border border-border/60">
+                    {formatTokenPreview(existingToken)}
+                  </pre>
+                )}
+              </div>
+              {existingTokenError && (
+                <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                  <p className="text-sm text-destructive">
+                    {existingTokenError}
+                  </p>
+                </div>
+              )}
+              <div className="flex w-full gap-2">
+                <button
+                  onClick={handleRejectExistingToken}
+                  disabled={isUsingExistingToken}
+                  className="h-8 px-3 flex-1 bg-muted text-foreground rounded-lg text-sm font-medium transition-[background-color,transform] duration-150 hover:bg-muted/80 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                >
+                  Auth with Anthropic
+                </button>
+                <button
+                  onClick={handleUseExistingToken}
+                  disabled={isUsingExistingToken}
+                  className="h-8 px-3 flex-1 bg-primary text-primary-foreground rounded-lg text-sm font-medium transition-[background-color,transform] duration-150 hover:bg-primary/90 active:scale-[0.97] shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] dark:shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                >
+                  {isUsingExistingToken ? (
+                    <IconSpinner className="h-4 w-4" />
+                  ) : (
+                    "Use existing token"
+                  )}
+                </button>
+              </div>
             </div>
           )}
 
-          {status === "error" && (
-            <div className="space-y-4 w-full">
+          {/* Connect Button - shows loader only if user clicked AND loading */}
+          {checkedExistingToken &&
+            !shouldOfferExistingToken &&
+            !urlOpened &&
+            flowState.step !== "has_url" &&
+            flowState.step !== "error" && (
+              <button
+                onClick={handleConnectClick}
+                disabled={userClickedConnect && isLoadingAuth}
+                className="h-8 px-4 min-w-[85px] bg-primary text-primary-foreground rounded-lg text-sm font-medium transition-[background-color,transform] duration-150 hover:bg-primary/90 active:scale-[0.97] shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] dark:shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+              >
+                {userClickedConnect && isLoadingAuth ? (
+                  <IconSpinner className="h-4 w-4" />
+                ) : (
+                  "Connect"
+                )}
+              </button>
+            )}
+
+          {/* Waiting for browser OAuth to complete */}
+          {(urlOpened || flowState.step === "has_url") && (
+            <div className="space-y-3 flex flex-col items-center">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <IconSpinner className="h-4 w-4 shrink-0" />
+                <span>Complete sign-in in the browser window…</span>
+              </div>
+              {savedOauthUrl && (
+                <p className="text-xs text-muted-foreground text-center">
+                  Browser didn't open?{" "}
+                  <button
+                    onClick={handleOpenFallbackUrl}
+                    className="text-primary hover:underline"
+                  >
+                    Click here to open it
+                  </button>
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Error State */}
+          {flowState.step === "error" && (
+            <div className="space-y-4">
               <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
-                <p className="text-sm text-destructive">{errorMessage}</p>
+                <p className="text-sm text-destructive">{flowState.message}</p>
               </div>
               <button
-                onClick={handleConnect}
+                onClick={handleConnectClick}
                 className="w-full h-8 px-3 bg-muted text-foreground rounded-lg text-sm font-medium transition-[background-color,transform] duration-150 hover:bg-muted/80 active:scale-[0.97] flex items-center justify-center"
               >
                 Try Again
               </button>
             </div>
           )}
+
         </div>
       </div>
     </div>

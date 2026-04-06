@@ -5,9 +5,9 @@ import { AUTH_SERVER_PORT } from "./constants"
 // Get API URL - in packaged app always use production, in dev allow override
 function getApiBaseUrl(): string {
   if (app.isPackaged) {
-    return "https://21st.dev"
+    return "https://localhost" // 2Code: no remote backend
   }
-  return import.meta.env.MAIN_VITE_API_URL || "https://21st.dev"
+  return import.meta.env.MAIN_VITE_API_URL || "https://localhost"
 }
 
 export class AuthManager {
@@ -201,6 +201,46 @@ export class AuthManager {
       this.refreshTimer = undefined
     }
     this.store.clear()
+  }
+
+  /**
+   * Set CLI credentials (for Claude CLI subscription auth)
+   * Marks the user as authenticated using the CLI token
+   */
+  setCliCredentials(accessToken: string): void {
+    const authData: AuthData = {
+      token: accessToken,
+      refreshToken: "",
+      expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+      user: {
+        id: "cli-user",
+        email: "cli@local",
+        name: "Claude CLI User",
+        imageUrl: null,
+        username: null,
+      },
+    }
+    this.store.save(authData)
+  }
+
+  /**
+   * Mark user as authenticated without credentials (for API key / OpenRouter flow)
+   * The actual API key is stored in renderer atoms, not here
+   */
+  markAsAuthenticated(): void {
+    const authData: AuthData = {
+      token: "local",
+      refreshToken: "",
+      expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+      user: {
+        id: "local-user",
+        email: "local@2code",
+        name: "2Code User",
+        imageUrl: null,
+        username: null,
+      },
+    }
+    this.store.save(authData)
   }
 
   /**

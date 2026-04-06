@@ -70,24 +70,8 @@ export function AgentsHelpPopover({
 
   useEffect(() => {
     let cancelled = false
-    window.desktopApi
-      .signedFetch("https://21st.dev/api/changelog/desktop?per_page=3")
-      .then((result) => {
-        if (cancelled) return
-        const data = result.data as {
-          releases?: Array<{ version?: string; content?: string }>
-        }
-        if (data?.releases) {
-          const items: ReleaseHighlight[] = []
-          for (const release of data.releases) {
-            if (release.version) {
-              items.push({ version: release.version, title: parseFirstHighlight(release.content || "") })
-            }
-          }
-          setHighlights(items)
-        }
-      })
-      .catch(() => {})
+    // 2Code: changelog fetch disabled (no remote backend)
+    void cancelled
     return () => {
       cancelled = true
     }
@@ -98,12 +82,12 @@ export function AgentsHelpPopover({
   }
 
   const handleChangelogClick = () => {
-    window.desktopApi.openExternal("https://2code.dev/agents/changelog")
+    window.desktopApi.openExternal("https://github.com") // TODO: Set 2Code changelog URL
   }
 
   const handleReleaseClick = (version: string) => {
     window.desktopApi.openExternal(
-      `https://2code.dev/agents/changelog#${version}`,
+      `https://github.com`, // TODO: Set 2Code changelog URL
     )
   }
 

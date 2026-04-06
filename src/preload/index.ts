@@ -152,6 +152,11 @@ contextBridge.exposeInMainWorld("desktopApi", {
   updateUser: (updates: { name?: string }) => ipcRenderer.invoke("auth:update-user", updates),
   getAuthToken: () => ipcRenderer.invoke("auth:get-token"),
 
+  // Claude CLI auth (for login.html)
+  checkClaudeCliAuth: () => ipcRenderer.invoke("auth:check-claude-cli"),
+  authenticateWithCli: () => ipcRenderer.invoke("auth:authenticate-with-cli"),
+  skipToApp: () => ipcRenderer.invoke("auth:skip-to-app"),
+
   // Signed fetch - proxies through main process (no CORS issues)
   signedFetch: (
     url: string,
@@ -357,6 +362,10 @@ export interface DesktopApi {
     username: string | null
   } | null>
   getAuthToken: () => Promise<string | null>
+  // Claude CLI auth
+  checkClaudeCliAuth: () => Promise<{ cliInstalled: boolean; hasCredentials: boolean }>
+  authenticateWithCli: () => Promise<{ success: boolean; error?: string }>
+  skipToApp: () => Promise<void>
   signedFetch: (
     url: string,
     options?: { method?: string; body?: string; headers?: Record<string, string> },

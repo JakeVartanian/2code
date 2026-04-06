@@ -152,7 +152,7 @@ function AppContent() {
   }
 
   if (
-    (billingMethod === "api-key" || billingMethod === "custom-model") &&
+    (billingMethod === "api-key" || billingMethod === "custom-model" || billingMethod === "openrouter") &&
     !apiKeyOnboardingCompleted
   ) {
     return <ApiKeyOnboardingPage />
