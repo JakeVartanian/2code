@@ -23,7 +23,7 @@
     "dist:upload": "node scripts/upload-release.mjs",
     "claude:download": "node scripts/download-claude-binary.mjs --version=2.1.45",
     "claude:download:all": "node scripts/download-claude-binary.mjs --version=2.1.45 --all",
-    "release": "rm -rf release && bun i && bun run claude:download && bun run build && bun run package:mac && bun run dist:manifest && ./scripts/upload-release-wrangler.sh",
+    "release": "rm -rf release && (test -d node_modules || bun i) && bun run claude:download && bun run build && bun run package:mac && bun run dist:manifest && ./scripts/upload-release-wrangler.sh",
     "release:dev": "rm -rf release && bun run claude:download && bun run build && bun run package:mac && rm -rf node_modules && bun i",
     "sync:public": "./scripts/sync-to-public.sh",
     "icon:generate": "node scripts/generate-icon.mjs",
@@ -106,7 +106,7 @@
     "trpc-electron": "^0.1.2",
     "unique-names-generator": "^4.7.1",
     "xterm": "^5.3.0",
-    "zod": "^3.24.1",
+    "zod": "^4.0.0",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
