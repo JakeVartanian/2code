@@ -9,6 +9,8 @@ import {
   openaiApiKeyAtom,
   openRouterApiKeyAtom,
   openRouterFreeOnlyAtom,
+  openRouterModelsAtom,
+  openRouterModelsLoadingAtom,
 } from "../../../lib/atoms"
 import { ClaudeCodeIcon, SearchIcon } from "../../ui/icons"
 import { CLAUDE_MODELS } from "../../../features/agents/lib/models"
@@ -335,8 +337,8 @@ export function AgentsModelsTab() {
   const [storedOpenRouterKey, setStoredOpenRouterKey] = useAtom(openRouterApiKeyAtom)
   const [openRouterFreeOnly, setOpenRouterFreeOnly] = useAtom(openRouterFreeOnlyAtom)
   const [openRouterKey, setOpenRouterKey] = useState(storedOpenRouterKey)
-  const [isFetchingOpenRouterModels, setIsFetchingOpenRouterModels] = useState(false)
-  const [openRouterModels, setOpenRouterModels] = useState<{ id: string; name: string; isFree: boolean }[]>([])
+  const [openRouterModels, setOpenRouterModels] = useAtom(openRouterModelsAtom)
+  const [isFetchingOpenRouterModels, setIsFetchingOpenRouterModels] = useAtom(openRouterModelsLoadingAtom)
 
   useEffect(() => {
     setOpenRouterKey(storedOpenRouterKey)
@@ -359,10 +361,11 @@ export function AgentsModelsTab() {
       setOpenRouterModels(models)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to fetch OpenRouter models")
+      setOpenRouterModels([])
     } finally {
       setIsFetchingOpenRouterModels(false)
     }
-  }, [])
+  }, [setOpenRouterModels, setIsFetchingOpenRouterModels])
 
   const handleOpenRouterKeyBlur = useCallback(async () => {
     const trimmed = openRouterKey.trim()
@@ -383,11 +386,11 @@ export function AgentsModelsTab() {
 
   // Load OpenRouter models on mount if key is set
   useEffect(() => {
-    if (storedOpenRouterKey) {
+    if (storedOpenRouterKey && openRouterModels.length === 0) {
       void fetchOpenRouterModels(storedOpenRouterKey)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [storedOpenRouterKey])
 
   const filteredOpenRouterModels = useMemo(() => {
     if (!openRouterFreeOnly) return openRouterModels

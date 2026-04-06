@@ -286,6 +286,12 @@ export const openRouterFreeOnlyAtom = atomWithStorage<boolean>(
   { getOnInit: true },
 )
 
+// OpenRouter models fetched from API
+export const openRouterModelsAtom = atom<{ id: string; name: string; isFree: boolean }[]>([])
+
+// Loading state for OpenRouter models
+export const openRouterModelsLoadingAtom = atom<boolean>(false)
+
 // New: Model profiles storage
 export const modelProfilesAtom = atomWithStorage<ModelProfile[]>(
   "agents:model-profiles",
