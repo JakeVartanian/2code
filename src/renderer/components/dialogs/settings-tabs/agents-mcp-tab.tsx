@@ -5,7 +5,6 @@ import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
-  lastSelectedAgentIdAtom,
   selectedProjectAtom,
   settingsMcpSidebarWidthAtom,
 } from "../../../features/agents/atoms"
@@ -26,10 +25,10 @@ import {
 } from "./mcp"
 import { useListKeyboardNav } from "./use-list-keyboard-nav"
 
-type McpProvider = "claude-code" | "codex"
+type McpProvider = "claude-code"
 type ProviderSection = {
   provider: McpProvider
-  title: "CODEX" | "CLAUDE CODE"
+  title: "CLAUDE CODE"
 }
 
 type ListedServer = {
@@ -83,15 +82,6 @@ function getConnectionInfo(config: Record<string, unknown>) {
   return { type: "unknown" as const, url: undefined, command: undefined, args: undefined, env: undefined }
 }
 
-function isCodexHttpServer(provider: McpProvider, server: McpServer): boolean {
-  if (provider !== "codex") return false
-  const transportType = String((server.config as Record<string, unknown>).transportType || "").toLowerCase()
-  if (transportType === "http" || transportType === "sse" || transportType === "streamable_http") {
-    return true
-  }
-  return typeof (server.config as Record<string, unknown>).url === "string"
-}
-
 function isServerDisabled(server: McpServer): boolean {
   const config = server.config as Record<string, unknown>
   return config.disabled === true || config.enabled === false
@@ -124,7 +114,7 @@ function McpServerDetail({
   const isConnected = server.status === "connected"
   const isDisabled = isServerDisabled(server)
   const connection = getConnectionInfo(server.config)
-  const hideToolsCount = isCodexHttpServer(provider, server)
+  const hideToolsCount = false
 
   return (
     <div className="h-full overflow-y-auto">
@@ -281,19 +271,15 @@ function CreateMcpServerForm({
   projectName?: string
 }) {
   const addClaudeServerMutation = trpc.claude.addMcpServer.useMutation()
-  const addCodexServerMutation = trpc.codex.addMcpServer.useMutation()
-  const [provider, setProvider] = useState<McpProvider>(defaultProvider)
-  const isSaving =
-    provider === "codex"
-      ? addCodexServerMutation.isPending
-      : addClaudeServerMutation.isPending
+  const [provider] = useState<McpProvider>(defaultProvider)
+  const isSaving = addClaudeServerMutation.isPending
   const [name, setName] = useState("")
   const [type, setType] = useState<"stdio" | "http">("stdio")
   const [command, setCommand] = useState("")
   const [args, setArgs] = useState("")
   const [url, setUrl] = useState("")
   const [scope, setScope] = useState<"global" | "project">("global")
-  const effectiveScope = provider === "codex" ? "global" : scope
+  const effectiveScope = scope
 
   const canSave = name.trim().length > 0 && (effectiveScope !== "project" || !!projectPath) && (
     (type === "stdio" && command.trim().length > 0) ||
@@ -303,26 +289,15 @@ function CreateMcpServerForm({
   const handleSubmit = async () => {
     const parsedArgs = args.trim() ? args.split(/\s+/) : undefined
     try {
-      if (provider === "codex") {
-        await addCodexServerMutation.mutateAsync({
-          name: name.trim(),
-          transport: type,
-          command: type === "stdio" ? command.trim() : undefined,
-          args: type === "stdio" ? parsedArgs : undefined,
-          url: type === "http" ? url.trim() : undefined,
-          scope: "global",
-        })
-      } else {
-        await addClaudeServerMutation.mutateAsync({
-          name: name.trim(),
-          transport: type,
-          command: type === "stdio" ? command.trim() : undefined,
-          args: type === "stdio" ? parsedArgs : undefined,
-          url: type === "http" ? url.trim() : undefined,
-          scope: effectiveScope,
-          ...(effectiveScope === "project" && projectPath ? { projectPath } : {}),
-        })
-      }
+      await addClaudeServerMutation.mutateAsync({
+        name: name.trim(),
+        transport: type,
+        command: type === "stdio" ? command.trim() : undefined,
+        args: type === "stdio" ? parsedArgs : undefined,
+        url: type === "http" ? url.trim() : undefined,
+        scope: effectiveScope,
+        ...(effectiveScope === "project" && projectPath ? { projectPath } : {}),
+      })
       toast.success(`"${name.trim()}" is added, refreshing...`)
       onCreated()
     } catch (error) {
@@ -342,28 +317,6 @@ function CreateMcpServerForm({
               {isSaving ? "Adding..." : "Add"}
             </Button>
           </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>Provider</Label>
-          <Select
-            value={provider}
-            onValueChange={(v) => {
-              const nextProvider = v as McpProvider
-              setProvider(nextProvider)
-              if (nextProvider === "codex") {
-                setScope("global")
-              }
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="codex">OpenAI Codex</SelectItem>
-              <SelectItem value="claude-code">Claude Code</SelectItem>
-            </SelectContent>
-          </Select>
         </div>
 
         <div className="space-y-1.5">
@@ -423,19 +376,7 @@ function CreateMcpServerForm({
           </div>
         )}
 
-        {provider === "codex" ? (
-          <div className="space-y-1.5">
-            <Label>Scope</Label>
-            <Select value="global" disabled>
-              <SelectTrigger disabled>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="global">Global (~/.codex/config.toml)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        ) : hasProject && (
+        {hasProject && (
           <div className="space-y-1.5">
             <Label>Scope</Label>
             <Select value={scope} onValueChange={(v) => setScope(v as "global" | "project")}>
@@ -456,9 +397,7 @@ function CreateMcpServerForm({
 
 // --- Main Component ---
 export function AgentsMcpTab() {
-  const lastSelectedAgentId = useAtomValue(lastSelectedAgentIdAtom)
-  const defaultAddProvider: McpProvider =
-    lastSelectedAgentId === "codex" ? "codex" : "claude-code"
+  const defaultAddProvider: McpProvider = "claude-code"
   const [selectedServerKey, setSelectedServerKey] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [showAddForm, setShowAddForm] = useState(false)
@@ -473,7 +412,6 @@ export function AgentsMcpTab() {
   const providerSections = useMemo<ProviderSection[]>(
     () => [
       { provider: "claude-code", title: "CLAUDE CODE" },
-      { provider: "codex", title: "CODEX" },
     ],
     [],
   )
@@ -495,26 +433,16 @@ export function AgentsMcpTab() {
   const claudeMcpQuery = trpc.claude.getAllMcpConfig.useQuery(undefined, {
     staleTime: 10 * 60 * 1000,
   })
-  const codexMcpQuery = trpc.codex.getAllMcpConfig.useQuery(undefined, {
-    staleTime: 10 * 60 * 1000,
-  })
-  const hasAnyData = Boolean(claudeMcpQuery.data || codexMcpQuery.data)
-  const isLoadingConfig =
-    !hasAnyData && (claudeMcpQuery.isLoading || codexMcpQuery.isLoading)
+  const hasAnyData = Boolean(claudeMcpQuery.data)
+  const isLoadingConfig = !hasAnyData && claudeMcpQuery.isLoading
   const refreshClaudeMcpMutation = trpc.claude.refreshMcpConfig.useMutation()
-  const refreshCodexMcpMutation = trpc.codex.refreshMcpConfig.useMutation()
   const isRefreshingConfig =
     claudeMcpQuery.isFetching ||
-    codexMcpQuery.isFetching ||
-    refreshClaudeMcpMutation.isPending ||
-    refreshCodexMcpMutation.isPending
+    refreshClaudeMcpMutation.isPending
 
   const startClaudeOAuthMutation = trpc.claude.startMcpOAuth.useMutation()
-  const startCodexOAuthMutation = trpc.codex.startMcpOAuth.useMutation()
-  const logoutCodexMcpMutation = trpc.codex.logoutMcpServer.useMutation()
   const updateMutation = trpc.claude.updateMcpServer.useMutation()
   const removeClaudeMcpMutation = trpc.claude.removeMcpServer.useMutation()
-  const removeCodexMcpMutation = trpc.codex.removeMcpServer.useMutation()
 
   const sortedGroupsByProvider = useMemo(() => {
     const statusOrder: Record<string, number> = {
@@ -535,17 +463,13 @@ export function AgentsMcpTab() {
       }))
 
     return {
-      codex: sortGroups(codexMcpQuery.data?.groups || []),
       claudeCode: sortGroups(claudeMcpQuery.data?.groups || []),
     }
-  }, [codexMcpQuery.data?.groups, claudeMcpQuery.data?.groups])
+  }, [claudeMcpQuery.data?.groups])
 
   const allListedServers = useMemo<ListedServer[]>(() => {
     return providerSections.flatMap((section) => {
-      const groups =
-        section.provider === "codex"
-          ? sortedGroupsByProvider.codex
-          : sortedGroupsByProvider.claudeCode
+      const groups = sortedGroupsByProvider.claudeCode
 
       return groups.flatMap((group) =>
         group.mcpServers.map((server) => ({
@@ -612,24 +536,10 @@ export function AgentsMcpTab() {
   }, [selectedServerKey, allListedServers])
 
   const handleRefresh = useCallback(
-    async (silent = false, targetProvider?: McpProvider) => {
+    async (silent = false, _targetProvider?: McpProvider) => {
       try {
-        if (targetProvider === "codex") {
-          await refreshCodexMcpMutation.mutateAsync()
-          await codexMcpQuery.refetch({ cancelRefetch: false })
-        } else if (targetProvider === "claude-code") {
-          await refreshClaudeMcpMutation.mutateAsync()
-          await claudeMcpQuery.refetch({ cancelRefetch: false })
-        } else {
-          await Promise.all([
-            refreshCodexMcpMutation.mutateAsync(),
-            refreshClaudeMcpMutation.mutateAsync(),
-          ])
-          await Promise.all([
-            codexMcpQuery.refetch({ cancelRefetch: false }),
-            claudeMcpQuery.refetch({ cancelRefetch: false }),
-          ])
-        }
+        await refreshClaudeMcpMutation.mutateAsync()
+        await claudeMcpQuery.refetch({ cancelRefetch: false })
         if (!silent) {
           toast.success("Refreshed MCP servers")
         }
@@ -639,12 +549,7 @@ export function AgentsMcpTab() {
         }
       }
     },
-    [
-      codexMcpQuery,
-      claudeMcpQuery,
-      refreshCodexMcpMutation,
-      refreshClaudeMcpMutation,
-    ],
+    [claudeMcpQuery, refreshClaudeMcpMutation],
   )
 
 
@@ -654,47 +559,20 @@ export function AgentsMcpTab() {
     projectPath: string | null,
   ) => {
     try {
-      const result = provider === "codex"
-        ? await startCodexOAuthMutation.mutateAsync({
-            serverName,
-            ...(projectPath ? { projectPath } : {}),
-          })
-        : await startClaudeOAuthMutation.mutateAsync({
-            serverName,
-            projectPath: projectPath ?? "__global__",
-          })
+      const result = await startClaudeOAuthMutation.mutateAsync({
+        serverName,
+        projectPath: projectPath ?? "__global__",
+      })
 
       if (result.success) {
         toast.success(`"${serverName}" is authenticated, refreshing...`)
-        // Plugin servers get promoted to Global after OAuth — update selection
-          setSelectedServerKey(`${provider}:Global:${serverName}`)
+        setSelectedServerKey(`${provider}:Global:${serverName}`)
         await handleRefresh(true, provider)
       } else {
         toast.error(result.error || "Authentication failed")
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Authentication failed"
-      toast.error(message)
-    }
-  }
-
-  const handleCodexAuthLogout = async (
-    serverName: string,
-    projectPath?: string | null,
-  ) => {
-    try {
-      const result = await logoutCodexMcpMutation.mutateAsync({
-        serverName,
-        ...(projectPath ? { projectPath } : {}),
-      })
-      if (result.success) {
-        toast.success(`"${serverName}" is logged out, refreshing...`)
-        await handleRefresh(true, "codex")
-      } else {
-        toast.error(result.error || "Logout failed")
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Logout failed"
       toast.error(message)
     }
   }
@@ -723,18 +601,11 @@ export function AgentsMcpTab() {
   const handleDelete = async () => {
     if (!deletingServer) return
     try {
-      if (deletingServer.provider === "codex") {
-        await removeCodexMcpMutation.mutateAsync({
-          name: deletingServer.server.name,
-          scope: "global",
-        })
-      } else {
-        await removeClaudeMcpMutation.mutateAsync({
-          name: deletingServer.server.name,
-          scope: deletingServer.scope,
-          projectPath: deletingServer.projectPath ?? undefined,
-        })
-      }
+      await removeClaudeMcpMutation.mutateAsync({
+        name: deletingServer.server.name,
+        scope: deletingServer.scope,
+        projectPath: deletingServer.projectPath ?? undefined,
+      })
       toast.success(`"${deletingServer.server.name}" is removed, refreshing...`)
       setDeletingServer(null)
       setSelectedServerKey(null)
@@ -745,20 +616,7 @@ export function AgentsMcpTab() {
     }
   }
 
-  const canCodexLogout = (server: McpServer) => {
-    const authStatus = String(
-      (server.config as Record<string, unknown>).authStatus || "",
-    )
-      .trim()
-      .toLowerCase()
-    return authStatus === "o_auth" || authStatus === "bearer_token"
-  }
-
   const isEditableServer = (item: ListedServer): boolean => {
-    if (item.provider === "codex") {
-      // Codex edit/delete currently supports global scope only.
-      return !item.projectPath
-    }
     return !item.groupName.toLowerCase().includes("plugin")
   }
 
@@ -849,7 +707,6 @@ export function AgentsMcpTab() {
                       const key = item.key
                       const server = item.server
                       const isDisabled = isServerDisabled(server)
-                      const hideToolsCount = isCodexHttpServer(item.provider, server)
                       const isSelected = selectedServerKey === key
                       return (
                         <button
@@ -889,7 +746,7 @@ export function AgentsMcpTab() {
                                     {isDisabled
                                       ? "Disabled"
                                       : server.status === "connected"
-                                        ? (hideToolsCount ? "Connected" : `${server.tools.length} tool${server.tools.length !== 1 ? "s" : ""}`)
+                                        ? `${server.tools.length} tool${server.tools.length !== 1 ? "s" : ""}`
                                         : getStatusText(server.status)}
                                   </span>
                                 )}
@@ -930,11 +787,7 @@ export function AgentsMcpTab() {
                 selectedServer.projectPath,
               )
             }
-            onLogout={
-              selectedServer.provider === "codex" && canCodexLogout(selectedServer.server)
-                ? () => handleCodexAuthLogout(selectedServer.server.name, selectedServer.projectPath)
-                : undefined
-            }
+            onLogout={undefined}
             onDelete={
               isEditableServer(selectedServer)
                 ? () =>
@@ -987,7 +840,7 @@ export function AgentsMcpTab() {
         onOpenChange={(open) => { if (!open) setDeletingServer(null) }}
         serverName={deletingServer?.server.name ?? ""}
         onConfirm={handleDelete}
-        isDeleting={removeClaudeMcpMutation.isPending || removeCodexMcpMutation.isPending}
+        isDeleting={removeClaudeMcpMutation.isPending}
       />
     </div>
   )

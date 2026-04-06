@@ -17,8 +17,6 @@ import { createAppRouter } from "../lib/trpc/routers"
 import { getAuthManager, handleAuthCode, getBaseUrl } from "../index"
 import { registerGitWatcherIPC } from "../lib/git/watcher"
 import { hasActiveClaudeSessions, abortAllClaudeSessions } from "../lib/trpc/routers/claude"
-import { hasActiveCodexStreams, abortAllCodexStreams } from "../lib/trpc/routers/codex"
-import { isClaudeCliInstalled, getExistingClaudeCredentials } from "../lib/claude-token"
 import { registerThemeScannerIPC } from "../lib/vscode-theme-scanner"
 import { windowManager } from "./window-manager"
 
@@ -279,12 +277,6 @@ function registerIpcHandlers(): void {
     }
   })
 
-  // Analytics
-  ipcMain.handle("analytics:set-opt-out", async (_event, optedOut: boolean) => {
-    const { setOptOut } = await import("../lib/analytics")
-    setOptOut(optedOut)
-  })
-
   // Shell
   ipcMain.handle("shell:open-external", (_event, url: string) =>
     shell.openExternal(url),
@@ -340,7 +332,7 @@ function registerIpcHandlers(): void {
       const parsed = new URL(senderUrl)
       if (parsed.protocol === "file:") return true
       const hostname = parsed.hostname.toLowerCase()
-      const trusted = ["localhost", "127.0.0.1"]
+      const trusted = ["21st.dev", "localhost", "127.0.0.1"]
       return trusted.some((h) => hostname === h || hostname.endsWith(`.${h}`))
     } catch {
       return false
@@ -405,39 +397,6 @@ function registerIpcHandlers(): void {
   ipcMain.handle("auth:get-token", async (event) => {
     if (!validateSender(event)) return null
     return getAuthManager().getValidToken()
-  })
-
-  // Claude CLI auth handlers (for login.html)
-  ipcMain.handle("auth:check-claude-cli", (event) => {
-    if (!validateSender(event)) return { cliInstalled: false, hasCredentials: false }
-    const cliInstalled = isClaudeCliInstalled()
-    const hasCredentials = cliInstalled ? !!getExistingClaudeCredentials() : false
-    return { cliInstalled, hasCredentials }
-  })
-
-  ipcMain.handle("auth:authenticate-with-cli", async (event) => {
-    if (!validateSender(event)) return { success: false, error: "Unauthorized" }
-    if (!isClaudeCliInstalled()) {
-      return { success: false, error: "Claude CLI is not installed. Install it with: npm install -g @anthropic-ai/claude-code" }
-    }
-    const creds = getExistingClaudeCredentials()
-    if (!creds?.accessToken) {
-      return { success: false, error: "No Claude CLI credentials found. Run 'claude login' in your terminal first." }
-    }
-    // Mark as authenticated and load main app
-    const authManager = getAuthManager()
-    authManager?.setCliCredentials(creds.accessToken)
-    const win = getWindowFromEvent(event)
-    if (win) loadAppInWindow(win)
-    return { success: true }
-  })
-
-  ipcMain.handle("auth:skip-to-app", (event) => {
-    if (!validateSender(event)) return
-    // Mark as authenticated so the app loads (user will configure API key in onboarding)
-    getAuthManager()?.markAsAuthenticated()
-    const win = getWindowFromEvent(event)
-    if (win) loadAppInWindow(win)
   })
 
   // Signed fetch - proxies requests through main process (no CORS)
@@ -573,26 +532,6 @@ function registerIpcHandlers(): void {
 
   // Register VS Code theme scanner IPC handlers
   registerThemeScannerIPC()
-}
-
-/**
- * Load main app (renderer/index.html) in a window
- * Used by skipToApp and authenticateWithCli IPC handlers
- */
-function loadAppInWindow(window: BrowserWindow): void {
-  const devServerUrl = process.env.ELECTRON_RENDERER_URL
-  const windowId = windowManager.getStableId(window)
-  if (devServerUrl) {
-    const url = new URL(devServerUrl)
-    url.searchParams.set("windowId", windowId)
-    window.loadURL(url.toString())
-  } else {
-    const hashParams = new URLSearchParams()
-    hashParams.set("windowId", windowId)
-    window.loadFile(join(__dirname, "../renderer/index.html"), {
-      hash: hashParams.toString(),
-    })
-  }
 }
 
 /**
@@ -764,7 +703,7 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
       if (!input.shift) {
         // Block Cmd+R entirely
         event.preventDefault()
-      } else if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+      } else if (hasActiveClaudeSessions()) {
         // Cmd+Shift+R with active streams — intercept and confirm
         event.preventDefault()
         dialog
@@ -781,7 +720,6 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
           .then(({ response }) => {
             if (response === 1) {
               abortAllClaudeSessions()
-              abortAllCodexStreams()
               window.webContents.reloadIgnoringCache()
             }
           })
@@ -801,11 +739,10 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     if (isQuitting) {
       // Still abort sessions gracefully so partial state is saved
       abortAllClaudeSessions()
-      abortAllCodexStreams()
       return
     }
 
-    if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+    if (hasActiveClaudeSessions()) {
       event.preventDefault()
       dialog
         .showMessageBox(window, {
@@ -821,7 +758,6 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
         .then(({ response }) => {
           if (response === 1) {
             abortAllClaudeSessions()
-            abortAllCodexStreams()
             window.destroy()
           }
         })
@@ -865,20 +801,6 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
       hash: hashParams.toString(),
     })
   }
-
-  // Recover from renderer process crashes
-  window.webContents.on("render-process-gone", (_event, details) => {
-    console.error(
-      `[Main] Renderer process gone in window ${window.id}: reason=${details.reason}, exitCode=${details.exitCode}`,
-    )
-    if (!window.isDestroyed()) {
-      // Reload the window for recoverable crashes
-      if (details.reason === "crashed" || details.reason === "oom") {
-        console.log(`[Main] Attempting to reload window ${window.id} after crash`)
-        window.webContents.reload()
-      }
-    }
-  })
 
   // Log page load - traffic light visibility is managed by the renderer
   window.webContents.on("did-finish-load", () => {

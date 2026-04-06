@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { useQuery } from "@tanstack/react-query"
 // import { useSearchParams, useRouter } from "next/navigation" // Desktop doesn't use next/navigation
@@ -28,7 +28,6 @@ import {
   billingMethodAtom,
   anthropicOnboardingCompletedAtom,
   apiKeyOnboardingCompletedAtom,
-  codexOnboardingCompletedAtom,
   agentsQuickSwitchOpenAtom,
   agentsQuickSwitchSelectedIndexAtom,
   subChatsQuickSwitchOpenAtom,
@@ -48,8 +47,11 @@ import { useIsMobile } from "../../../lib/hooks/use-mobile"
 import { AgentsSidebar } from "../../sidebar/agents-sidebar"
 import { AgentsSubChatsSidebar } from "../../sidebar/agents-subchats-sidebar"
 import { AgentPreview } from "./agent-preview"
-import { AgentDiffView } from "./agent-diff-view"
-import { TerminalSidebar, terminalSidebarOpenAtomFamily } from "../../terminal"
+import { terminalSidebarOpenAtomFamily } from "../../terminal"
+
+// Lazy-loaded heavy components (Monaco ~2-3MB, xterm ~1.5MB, diffs ~500KB)
+const AgentDiffView = lazy(() => import("./agent-diff-view").then(m => ({ default: m.AgentDiffView })))
+const TerminalSidebar = lazy(() => import("../../terminal/terminal-sidebar").then(m => ({ default: m.TerminalSidebar })))
 import { getTerminalScopeKey } from "../../terminal/utils"
 import {
   useAgentSubChatStore,
@@ -68,7 +70,7 @@ import { AgentsQuickSwitchDialog } from "../components/agents-quick-switch-dialo
 import { SubChatsQuickSwitchDialog } from "../components/subchats-quick-switch-dialog"
 import { isDesktopApp } from "../../../lib/utils/platform"
 import { remoteTrpc } from "../../../lib/remote-trpc"
-import { SettingsContent } from "../../settings/settings-content"
+const SettingsContent = lazy(() => import("../../settings/settings-content").then(m => ({ default: m.SettingsContent })))
 // Desktop mock
 const useIsAdmin = () => false
 
@@ -89,7 +91,6 @@ export function AgentsContent() {
     anthropicOnboardingCompletedAtom,
   )
   const setApiKeyOnboardingCompleted = useSetAtom(apiKeyOnboardingCompletedAtom)
-  const setCodexOnboardingCompleted = useSetAtom(codexOnboardingCompletedAtom)
   const [sidebarOpen, setSidebarOpen] = useAtom(agentsSidebarOpenAtom)
   const [previewSidebarOpen, setPreviewSidebarOpen] = useAtom(
     agentsPreviewSidebarOpenAtom,
@@ -770,7 +771,6 @@ export function AgentsContent() {
     setBillingMethod(null)
     setAnthropicOnboardingCompleted(false)
     setApiKeyOnboardingCompleted(false)
-    setCodexOnboardingCompleted(false)
 
     // Check if running in Electron desktop app
     if (typeof window !== "undefined" && window.desktopApi) {
@@ -862,7 +862,7 @@ export function AgentsContent() {
       >
         {/* Mobile: Settings/Automations/Inbox fullscreen views */}
         {desktopView === "settings" ? (
-          <SettingsContent />
+          <Suspense fallback={null}><SettingsContent /></Suspense>
         ) : betaAutomationsEnabled && desktopView === "automations" ? (
           <AutomationsView />
         ) : betaAutomationsEnabled && desktopView === "automations-detail" ? (
@@ -890,27 +890,31 @@ export function AgentsContent() {
           />
         ) : mobileViewMode === "diff" && selectedChatId && canShowDiff ? (
           // Diff Mode - fullscreen diff view
-          <AgentDiffView
-            chatId={selectedChatId}
-            sandboxId={chatData!.sandbox_id!}
-            worktreePath={worktreePath}
-            repository={chatMeta?.repository}
-            showFooter={true}
-            isMobile={true}
-            onClose={() => setMobileViewMode("chat")}
-          />
+          <Suspense fallback={null}>
+            <AgentDiffView
+              chatId={selectedChatId}
+              sandboxId={chatData!.sandbox_id!}
+              worktreePath={worktreePath}
+              repository={chatMeta?.repository}
+              showFooter={true}
+              isMobile={true}
+              onClose={() => setMobileViewMode("chat")}
+            />
+          </Suspense>
         ) : mobileViewMode === "terminal" &&
           selectedChatId &&
           canShowTerminal ? (
           // Terminal Mode - fullscreen terminal
-          <TerminalSidebar
-            chatId={selectedChatId}
-            scopeKey={terminalScopeKey}
-            cwd={worktreePath!}
-            workspaceId={selectedChatId}
-            isMobileFullscreen={true}
-            onClose={() => setMobileViewMode("chat")}
-          />
+          <Suspense fallback={null}>
+            <TerminalSidebar
+              chatId={selectedChatId}
+              scopeKey={terminalScopeKey}
+              cwd={worktreePath!}
+              workspaceId={selectedChatId}
+              isMobileFullscreen={true}
+              onClose={() => setMobileViewMode("chat")}
+            />
+          </Suspense>
         ) : (
           // Chat Mode - shows either ChatView or NewChatForm
           <div
@@ -1001,7 +1005,7 @@ export function AgentsContent() {
           style={{ minWidth: "350px" }}
         >
           {desktopView === "settings" ? (
-            <SettingsContent />
+            <Suspense fallback={null}><SettingsContent /></Suspense>
           ) : betaAutomationsEnabled && desktopView === "automations" ? (
             <AutomationsView />
           ) : betaAutomationsEnabled && desktopView === "automations-detail" ? (

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, memo, forwardRef, useImperativeHandle } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { atom } from "jotai"
-import { HiChevronRight } from "react-icons/hi2"
+import { ChevronRight } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { trpc } from "@/lib/trpc"
@@ -238,7 +238,7 @@ const TreeNode = memo(function TreeNode({
           >
             <span className="w-4 h-full flex items-center justify-center shrink-0">
               {isFolder ? (
-                <HiChevronRight
+                <ChevronRight
                   className={cn(
                     "size-2.5 text-muted-foreground transition-transform duration-150",
                     isExpanded && "rotate-90",

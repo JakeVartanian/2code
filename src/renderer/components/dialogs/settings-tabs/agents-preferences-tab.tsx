@@ -1,18 +1,21 @@
 import { useAtom } from "jotai"
 import { useEffect, useState } from "react"
 import {
-  analyticsOptOutAtom,
   autoAdvanceTargetAtom,
   ctrlTabTargetAtom,
   defaultAgentModeAtom,
   desktopNotificationsEnabledAtom,
-  extendedThinkingEnabledAtom,
+  effortLevelAtom,
   notifyWhenFocusedAtom,
   soundNotificationsEnabledAtom,
   preferredEditorAtom,
+  thinkingBudgetTokensAtom,
+  thinkingModeAtom,
   type AgentMode,
   type AutoAdvanceTarget,
   type CtrlTabTarget,
+  type EffortLevel,
+  type ThinkingMode,
 } from "../../../lib/atoms"
 import { APP_META, type ExternalApp } from "../../../../shared/external-apps"
 
@@ -123,6 +126,7 @@ import {
 import { ChevronDown } from "lucide-react"
 import { Switch } from "../../ui/switch"
 import { trpc } from "../../../lib/trpc"
+import { cn } from "../../../lib/utils"
 
 // Hook to detect narrow screen
 function useIsNarrowScreen(): boolean {
@@ -142,13 +146,12 @@ function useIsNarrowScreen(): boolean {
 }
 
 export function AgentsPreferencesTab() {
-  const [thinkingEnabled, setThinkingEnabled] = useAtom(
-    extendedThinkingEnabledAtom,
-  )
+  const [thinkingMode, setThinkingMode] = useAtom(thinkingModeAtom)
+  const [thinkingBudget, setThinkingBudget] = useAtom(thinkingBudgetTokensAtom)
+  const [effortLevel, setEffortLevel] = useAtom(effortLevelAtom)
   const [soundEnabled, setSoundEnabled] = useAtom(soundNotificationsEnabledAtom)
   const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useAtom(desktopNotificationsEnabledAtom)
   const [notifyWhenFocused, setNotifyWhenFocused] = useAtom(notifyWhenFocusedAtom)
-  const [analyticsOptOut, setAnalyticsOptOut] = useAtom(analyticsOptOutAtom)
   const [ctrlTabTarget, setCtrlTabTarget] = useAtom(ctrlTabTargetAtom)
   const [autoAdvanceTarget, setAutoAdvanceTarget] = useAtom(autoAdvanceTargetAtom)
   const [defaultAgentMode, setDefaultAgentMode] = useAtom(defaultAgentModeAtom)
@@ -169,17 +172,6 @@ export function AgentsPreferencesTab() {
     setCoAuthoredByMutation.mutate({ enabled })
   }
 
-  // Sync opt-out status to main process
-  const handleAnalyticsToggle = async (optedOut: boolean) => {
-    setAnalyticsOptOut(optedOut)
-    // Notify main process
-    try {
-      await window.desktopApi?.setAnalyticsOptOut(optedOut)
-    } catch (error) {
-      console.error("Failed to sync analytics opt-out to main process:", error)
-    }
-  }
-
   return (
     <div className="p-6 space-y-6">
       {/* Header - hidden on narrow screens since it's in the navigation bar */}
@@ -192,23 +184,91 @@ export function AgentsPreferencesTab() {
         </div>
       )}
 
-      {/* Agent Behavior */}
+      {/* Reasoning & Thinking */}
       <div className="bg-background rounded-lg border border-border overflow-hidden">
         <div className="flex items-center justify-between p-4">
           <div className="flex flex-col space-y-1">
             <span className="text-sm font-medium text-foreground">
-              Extended Thinking
+              Thinking Mode
             </span>
             <span className="text-xs text-muted-foreground">
-              Enable deeper reasoning with more thinking tokens (uses more
-              credits).{" "}
-              <span className="text-foreground/70">Disables response streaming.</span>
+              {thinkingMode === "adaptive"
+                ? "Claude decides when to use extended thinking"
+                : thinkingMode === "enabled"
+                  ? "Always use extended thinking (uses more credits)"
+                  : "Extended thinking is disabled"}
             </span>
           </div>
-          <Switch
-            checked={thinkingEnabled}
-            onCheckedChange={setThinkingEnabled}
-          />
+          <div className="flex items-center rounded-md border border-input bg-muted/30 p-0.5">
+            {(["adaptive", "enabled", "disabled"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setThinkingMode(mode)}
+                className={cn(
+                  "px-2.5 py-1 text-xs rounded-[4px] transition-colors capitalize",
+                  thinkingMode === mode
+                    ? "bg-background text-foreground shadow-sm font-medium"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {mode === "adaptive" ? "Auto" : mode === "enabled" ? "On" : "Off"}
+              </button>
+            ))}
+          </div>
+        </div>
+        {thinkingMode === "enabled" && (
+          <div className="flex items-center justify-between p-4 border-t border-border">
+            <div className="flex flex-col space-y-1">
+              <span className="text-sm font-medium text-foreground">
+                Thinking Budget
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Max tokens for thinking ({(thinkingBudget / 1000).toFixed(0)}k)
+              </span>
+            </div>
+            <Select
+              value={String(thinkingBudget)}
+              onValueChange={(v) => setThinkingBudget(Number(v))}
+            >
+              <SelectTrigger className="w-auto px-2">
+                <span className="text-xs">{(thinkingBudget / 1000).toFixed(0)}k tokens</span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="8000">8k</SelectItem>
+                <SelectItem value="16000">16k</SelectItem>
+                <SelectItem value="32000">32k</SelectItem>
+                <SelectItem value="64000">64k</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        <div className="flex items-center justify-between p-4 border-t border-border">
+          <div className="flex flex-col space-y-1">
+            <span className="text-sm font-medium text-foreground">
+              Effort Level
+            </span>
+            <span className="text-xs text-muted-foreground">
+              Controls how much reasoning Claude uses per response
+            </span>
+          </div>
+          <div className="flex items-center rounded-md border border-input bg-muted/30 p-0.5">
+            {(["low", "medium", "high", "max"] as const).map((level) => (
+              <button
+                key={level}
+                type="button"
+                onClick={() => setEffortLevel(level)}
+                className={cn(
+                  "px-2 py-1 text-xs rounded-[4px] transition-colors capitalize",
+                  effortLevel === level
+                    ? "bg-background text-foreground shadow-sm font-medium"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {level === "medium" ? "Med" : level.charAt(0).toUpperCase() + level.slice(1)}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center justify-between p-4 border-t border-border">
           <div className="flex flex-col space-y-1">
@@ -453,23 +513,6 @@ export function AgentsPreferencesTab() {
         </div>
       </div>
 
-      {/* Privacy */}
-      <div className="bg-background rounded-lg border border-border overflow-hidden">
-        <div className="flex items-center justify-between gap-6 p-4">
-          <div className="flex flex-col space-y-1">
-            <span className="text-sm font-medium text-foreground">
-              Share Usage Analytics
-            </span>
-            <span className="text-xs text-muted-foreground">
-              Help us improve Agents by sharing anonymous usage data. We only track feature usage and app performance–never your code, prompts, or messages. No AI training on your data.
-            </span>
-          </div>
-          <Switch
-            checked={!analyticsOptOut}
-            onCheckedChange={(enabled) => handleAnalyticsToggle(!enabled)}
-          />
-        </div>
-      </div>
     </div>
   )
 }

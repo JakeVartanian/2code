@@ -6,24 +6,19 @@ import { useMemo, useState } from "react"
 
 import {
   ClaudeCodeIcon,
-  CodexIcon,
   KeyFilledIcon,
   SettingsFilledIcon,
   GlobeIcon,
 } from "../../components/ui/icons"
 import {
   billingMethodAtom,
-  codexOnboardingCompletedAtom,
   type BillingMethod,
 } from "../../lib/atoms"
 import { cn } from "../../lib/utils"
 
-type BillingOptionGroup = "claude-code" | "codex"
-
 type BillingOption = {
   id: string
   method: Exclude<BillingMethod, null>
-  group: BillingOptionGroup
   title: string
   subtitle: string
   recommended?: boolean
@@ -34,7 +29,6 @@ const billingOptions: BillingOption[] = [
   {
     id: "claude-subscription",
     method: "claude-subscription",
-    group: "claude-code",
     title: "Claude Pro/Max",
     subtitle: "Use your Claude subscription for unlimited access.",
     recommended: true,
@@ -43,7 +37,6 @@ const billingOptions: BillingOption[] = [
   {
     id: "api-key",
     method: "api-key",
-    group: "claude-code",
     title: "Anthropic API Key",
     subtitle: "Pay-as-you-go with your own API key.",
     icon: <KeyFilledIcon className="w-5 h-5" />,
@@ -59,42 +52,16 @@ const billingOptions: BillingOption[] = [
   {
     id: "custom-model",
     method: "custom-model",
-    group: "claude-code",
     title: "Custom Model",
     subtitle: "Use a custom base URL and model.",
     icon: <SettingsFilledIcon className="w-5 h-5" />,
-  },
-  {
-    id: "codex-subscription",
-    method: "codex-subscription",
-    group: "codex",
-    title: "Codex Subscription",
-    subtitle: "Use your Codex ChatGPT login.",
-    recommended: true,
-    icon: <CodexIcon className="w-5 h-5" />,
-  },
-  {
-    id: "codex-api-key",
-    method: "codex-api-key",
-    group: "codex",
-    title: "API Key",
-    subtitle: "Use an app-managed OpenAI API key for Codex.",
-    icon: <KeyFilledIcon className="w-5 h-5" />,
   },
 ]
 
 export function BillingMethodPage() {
   const setBillingMethod = useSetAtom(billingMethodAtom)
-  const setCodexOnboardingCompleted = useSetAtom(codexOnboardingCompletedAtom)
-  const [selectedGroup, setSelectedGroup] =
-    useState<BillingOptionGroup>("claude-code")
   const [selectedOptionId, setSelectedOptionId] =
     useState<string>("claude-subscription")
-
-  const visibleOptions = useMemo(
-    () => billingOptions.filter((option) => option.group === selectedGroup),
-    [selectedGroup],
-  )
 
   const selectedOption = useMemo(() => {
     const found = billingOptions.find((option) => option.id === selectedOptionId)
@@ -102,14 +69,6 @@ export function BillingMethodPage() {
   }, [selectedOptionId])
 
   const handleContinue = () => {
-    if (
-      selectedOption.method === "codex-subscription" ||
-      selectedOption.method === "codex-api-key"
-    ) {
-      // Force Codex onboarding step when user explicitly chooses a Codex auth mode.
-      setCodexOnboardingCompleted(false)
-    }
-
     setBillingMethod(selectedOption.method)
   }
 
@@ -132,42 +91,9 @@ export function BillingMethodPage() {
           </p>
         </div>
 
-        <div className="flex items-center rounded-full bg-muted p-1">
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedGroup("claude-code")
-              setSelectedOptionId("claude-subscription")
-            }}
-            className={cn(
-              "h-8 flex-1 rounded-full text-sm font-medium transition-colors",
-              selectedGroup === "claude-code"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Claude Code
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedGroup("codex")
-              setSelectedOptionId("codex-subscription")
-            }}
-            className={cn(
-              "h-8 flex-1 rounded-full text-sm font-medium transition-colors",
-              selectedGroup === "codex"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Codex
-          </button>
-        </div>
-
         {/* Billing Options */}
         <div className="space-y-3">
-          {visibleOptions.map((option) => (
+          {billingOptions.map((option) => (
             <button
               key={option.id}
               onClick={() => setSelectedOptionId(option.id)}
@@ -193,8 +119,6 @@ export function BillingMethodPage() {
                     "w-10 h-10 rounded-lg flex items-center justify-center shrink-0",
                     option.id === "claude-subscription"
                       ? "bg-[#D97757] text-white"
-                      : option.id === "codex-subscription"
-                        ? "bg-white text-black"
                       : selectedOptionId === option.id
                         ? "bg-foreground text-background"
                         : "bg-muted text-muted-foreground"

@@ -12,7 +12,6 @@ import {
   apiKeyOnboardingCompletedAtom,
   billingMethodAtom,
   claudeLoginModalConfigAtom,
-  codexOnboardingCompletedAtom,
   isDesktopAtom,
   isFullscreenAtom,
   anthropicOnboardingCompletedAtom,
@@ -24,7 +23,6 @@ import { trpc } from "../../lib/trpc"
 import { useAgentsHotkeys } from "../agents/lib/agents-hotkeys-manager"
 import { toggleSearchAtom } from "../agents/search"
 import { ClaudeLoginModal } from "../../components/dialogs/claude-login-modal"
-import { CodexLoginModal } from "../../components/dialogs/codex-login-modal"
 import { TooltipProvider } from "../../components/ui/tooltip"
 import { ResizableSidebar } from "../../components/ui/resizable-sidebar"
 import { AgentsSidebar } from "../sidebar/agents-sidebar"
@@ -107,7 +105,6 @@ export function AgentsLayout() {
     anthropicOnboardingCompletedAtom
   )
   const setApiKeyOnboardingCompleted = useSetAtom(apiKeyOnboardingCompletedAtom)
-  const setCodexOnboardingCompleted = useSetAtom(codexOnboardingCompletedAtom)
   const setBillingMethod = useSetAtom(billingMethodAtom)
   const claudeLoginModalConfig = useAtomValue(claudeLoginModalConfigAtom)
 
@@ -247,7 +244,6 @@ export function AgentsLayout() {
     setBillingMethod(null)
     setAnthropicOnboardingCompleted(false)
     setApiKeyOnboardingCompleted(false)
-    setCodexOnboardingCompleted(false)
     if (window.desktopApi?.logout) {
       await window.desktopApi.logout()
     }
@@ -257,7 +253,6 @@ export function AgentsLayout() {
     setBillingMethod,
     setAnthropicOnboardingCompleted,
     setApiKeyOnboardingCompleted,
-    setCodexOnboardingCompleted,
   ])
 
   // Clear sub-chat store when no chat is selected
@@ -302,7 +297,6 @@ export function AgentsLayout() {
         }
         autoStartAuth={claudeLoginModalConfig.autoStartAuth}
       />
-      <CodexLoginModal />
       <div className="flex flex-col w-full h-full relative overflow-hidden bg-background select-none">
         {/* Windows Title Bar (only shown on Windows with frameless window) */}
         <WindowsTitleBar />

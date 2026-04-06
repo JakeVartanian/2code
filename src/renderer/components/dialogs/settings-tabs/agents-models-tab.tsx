@@ -5,16 +5,13 @@ import { toast } from "sonner"
 import {
   agentsLoginModalOpenAtom,
   claudeLoginModalConfigAtom,
-  codexLoginModalOpenAtom,
-  codexOnboardingAuthMethodAtom,
-  codexOnboardingCompletedAtom,
   hiddenModelsAtom,
   openaiApiKeyAtom,
   openRouterApiKeyAtom,
   openRouterFreeOnlyAtom,
 } from "../../../lib/atoms"
-import { ClaudeCodeIcon, CodexIcon, SearchIcon } from "../../ui/icons"
-import { CLAUDE_MODELS, CODEX_MODELS } from "../../../features/agents/lib/models"
+import { ClaudeCodeIcon, SearchIcon } from "../../ui/icons"
+import { CLAUDE_MODELS } from "../../../features/agents/lib/models"
 import { trpc } from "../../../lib/trpc"
 import { Badge } from "../../ui/badge"
 import { Button } from "../../ui/button"
@@ -255,20 +252,14 @@ function AnthropicAccountsSection() {
 export function AgentsModelsTab() {
   const setClaudeLoginModalConfig = useSetAtom(claudeLoginModalConfigAtom)
   const setClaudeLoginModalOpen = useSetAtom(agentsLoginModalOpenAtom)
-  const setCodexLoginModalOpen = useSetAtom(codexLoginModalOpenAtom)
   const isNarrowScreen = useIsNarrowScreen()
   const { data: claudeCodeIntegration, isLoading: isClaudeCodeLoading } =
     trpc.claudeCode.getIntegration.useQuery()
   const isClaudeCodeConnected = claudeCodeIntegration?.isConnected
-  const { data: codexIntegration, isLoading: isCodexLoading } =
-    trpc.codex.getIntegration.useQuery()
 
-  const codexOnboardingCompleted = useAtomValue(codexOnboardingCompletedAtom)
-  const codexOnboardingAuthMethod = useAtomValue(codexOnboardingAuthMethodAtom)
   const [storedOpenAIKey, setStoredOpenAIKey] = useAtom(openaiApiKeyAtom)
   const [openaiKey, setOpenaiKey] = useState(storedOpenAIKey)
   const setOpenAIKeyMutation = trpc.voice.setOpenAIKey.useMutation()
-  const codexLogoutMutation = trpc.codex.logout.useMutation()
   const trpcUtils = trpc.useUtils()
 
   useEffect(() => {
@@ -283,33 +274,6 @@ export function AgentsModelsTab() {
     setClaudeLoginModalOpen(true)
   }
 
-  const handleCodexSetup = () => {
-    setCodexLoginModalOpen(true)
-  }
-
-  const handleCodexLogout = async () => {
-    const confirmed = window.confirm(
-      "Log out from Codex on this device?",
-    )
-    if (!confirmed) return
-
-    try {
-      await codexLogoutMutation.mutateAsync()
-      await trpcUtils.codex.getIntegration.invalidate()
-      toast.success("Codex disconnected")
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to disconnect Codex"
-      toast.error(message)
-    }
-  }
-
-  const hasLocalCodexSubscription =
-    codexOnboardingCompleted && codexOnboardingAuthMethod === "chatgpt"
-  const isCodexSubscriptionConnected =
-    codexIntegration?.state === "connected_chatgpt" ||
-    (!codexIntegration && hasLocalCodexSubscription)
-  const isCodexSubscriptionActive = isCodexSubscriptionConnected
   const [hiddenModels, setHiddenModels] = useAtom(hiddenModelsAtom)
 
   const toggleModelVisibility = useCallback((modelId: string) => {
@@ -320,16 +284,6 @@ export function AgentsModelsTab() {
       return [...prev, modelId]
     })
   }, [setHiddenModels])
-
-  const codexConnectionText = isCodexSubscriptionConnected
-    ? "Connected via ChatGPT"
-    : codexIntegration?.state === "connected_api_key"
-      ? "Not connected to subscription"
-      : codexIntegration?.state === "not_logged_in"
-        ? "Not connected"
-        : "Status unavailable"
-  const showCodexLoading =
-    isCodexLoading && !hasLocalCodexSubscription
 
   // OpenAI key handlers
   const trimmedOpenAIKey = openaiKey.trim()
@@ -365,16 +319,9 @@ export function AgentsModelsTab() {
     }
   }
 
-  // All models merged into one list for the top section
+  // All models list for the top section
   const allModels = useMemo(() => {
-    const items: { id: string; name: string; provider: "claude" | "codex" }[] = []
-    for (const m of CLAUDE_MODELS) {
-      items.push({ id: m.id, name: `${m.name} ${m.version}`, provider: "claude" })
-    }
-    for (const m of CODEX_MODELS) {
-      items.push({ id: m.id, name: m.name, provider: "codex" })
-    }
-    return items
+    return CLAUDE_MODELS.map((m) => ({ id: m.id, name: `${m.name} ${m.version}`, provider: "claude" as const }))
   }, [])
 
   const [modelSearch, setModelSearch] = useState("")
@@ -485,11 +432,7 @@ export function AgentsModelsTab() {
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{m.name}</span>
-                    {m.provider === "claude" ? (
-                      <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground" />
-                    ) : (
-                      <CodexIcon className="h-3.5 w-3.5 text-muted-foreground" />
-                    )}
+                    <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground" />
                   </div>
                   <Switch
                     checked={isEnabled}
@@ -531,68 +474,6 @@ export function AgentsModelsTab() {
         </div>
 
         <AnthropicAccountsSection />
-      </div>
-
-      <div className="space-y-2">
-        <div className="pb-2 flex items-center justify-between">
-          <div>
-            <h4 className="text-sm font-medium text-foreground">
-              Codex Account
-            </h4>
-            <p className="text-xs text-muted-foreground">
-              Manage your Codex account
-            </p>
-          </div>
-        </div>
-
-        <div className="bg-background rounded-lg border border-border overflow-hidden divide-y divide-border">
-          {showCodexLoading ? (
-            <div className="p-4 text-center text-sm text-muted-foreground">
-              Loading account...
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center justify-between gap-6 p-4 hover:bg-muted/50">
-                <div>
-                  <div className="text-sm font-medium">Codex Subscription</div>
-                  <div className="text-xs text-muted-foreground">
-                    {codexConnectionText}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {isCodexSubscriptionActive && (
-                    <Badge variant="secondary" className="text-xs">
-                      Active
-                    </Badge>
-                  )}
-                  {isCodexSubscriptionConnected ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void handleCodexLogout()}
-                      disabled={codexLogoutMutation.isPending}
-                    >
-                      {codexLogoutMutation.isPending ? "..." : "Logout"}
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void handleCodexSetup()}
-                      disabled={
-                        isCodexLoading ||
-                        codexLogoutMutation.isPending
-                      }
-                    >
-                      Connect
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
       </div>
 
       {/* ===== API Keys Section (Collapsible) ===== */}

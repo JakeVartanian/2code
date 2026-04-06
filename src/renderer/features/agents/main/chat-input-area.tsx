@@ -42,24 +42,19 @@ import {
   agentsSettingsDialogOpenAtom,
   anthropicOnboardingCompletedAtom,
   apiKeyOnboardingCompletedAtom,
-  codexApiKeyAtom,
-  codexOnboardingCompletedAtom,
   customClaudeConfigAtom,
+  effortLevelAtom,
   extendedThinkingEnabledAtom,
   hiddenModelsAtom,
-  normalizeCodexApiKey,
   normalizeCustomClaudeConfig,
   selectedOllamaModelAtom,
   showOfflineModeFeaturesAtom,
+  type EffortLevel,
 } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
 import {
-  lastSelectedCodexModelIdAtom,
-  lastSelectedCodexThinkingAtom,
   lastSelectedModelIdAtom,
-  subChatCodexModelIdAtomFamily,
-  subChatCodexThinkingAtomFamily,
   subChatModelIdAtomFamily,
   subChatModeAtomFamily,
   getNextMode,
@@ -77,8 +72,6 @@ import {
 } from "../lib/drafts"
 import {
   CLAUDE_MODELS,
-  CODEX_MODELS,
-  type CodexThinkingLevel,
 } from "../lib/models"
 import type { DiffTextContext, SelectedTextContext } from "../lib/queue-utils"
 import {
@@ -183,7 +176,7 @@ export interface ChatInputAreaProps {
   // Context
   subChatId: string
   parentChatId: string
-  provider?: "claude-code" | "codex"
+  provider?: "claude-code"
   teamId?: string
   repository?: string
   sandboxId?: string
@@ -199,10 +192,6 @@ export interface ChatInputAreaProps {
   onInputContentChange?: (hasContent: boolean) => void
   // Callback to send message with question answer (Enter sends immediately, not to queue)
   onSubmitWithQuestionAnswer?: () => void
-  // Callback to switch provider for brand new (empty) sub-chats
-  onProviderChange?: (provider: "claude-code" | "codex") => void
-  // Callback to continue chat with a different provider (creates new sub-chat with history)
-  onContinueWithProvider?: (provider: "claude-code" | "codex") => void
   // Whether this sub-chat tab is the active/visible one (prevents window-level hotkeys in background tabs)
   isActive?: boolean
 }
@@ -257,8 +246,6 @@ function arePropsEqual(prevProps: ChatInputAreaProps, nextProps: ChatInputAreaPr
     prevProps.onCacheFileContent !== nextProps.onCacheFileContent ||
     prevProps.onInputContentChange !== nextProps.onInputContentChange ||
     prevProps.onSubmitWithQuestionAnswer !== nextProps.onSubmitWithQuestionAnswer ||
-    prevProps.onProviderChange !== nextProps.onProviderChange ||
-    prevProps.onContinueWithProvider !== nextProps.onContinueWithProvider ||
     prevProps.onSendFromQueue !== nextProps.onSendFromQueue
   ) {
     return false
@@ -408,8 +395,6 @@ export const ChatInputArea = memo(function ChatInputArea({
   firstQueueItemId,
   onInputContentChange,
   onSubmitWithQuestionAnswer,
-  onProviderChange,
-  onContinueWithProvider,
   isActive = true,
 }: ChatInputAreaProps) {
   // Local state - changes here don't re-render parent
@@ -458,23 +443,7 @@ export const ChatInputArea = memo(function ChatInputArea({
   const [selectedSubChatModelId, setSelectedSubChatModelId] = useAtom(
     subChatModelIdAtom,
   )
-  const subChatCodexModelIdAtom = useMemo(
-    () => subChatCodexModelIdAtomFamily(subChatId),
-    [subChatId],
-  )
-  const [selectedSubChatCodexModelId, setSelectedSubChatCodexModelId] = useAtom(
-    subChatCodexModelIdAtom,
-  )
-  const subChatCodexThinkingAtom = useMemo(
-    () => subChatCodexThinkingAtomFamily(subChatId),
-    [subChatId],
-  )
-  const [selectedSubChatCodexThinking, setSelectedSubChatCodexThinking] = useAtom(
-    subChatCodexThinkingAtom,
-  )
   const setLastSelectedModelId = useSetAtom(lastSelectedModelIdAtom)
-  const setLastSelectedCodexModelId = useSetAtom(lastSelectedCodexModelIdAtom)
-  const setLastSelectedCodexThinking = useSetAtom(lastSelectedCodexThinkingAtom)
   const [selectedOllamaModel, setSelectedOllamaModel] = useAtom(selectedOllamaModelAtom)
   const availableModels = useAvailableModels()
   const [selectedModel, setSelectedModel] = useState(
@@ -499,81 +468,13 @@ export const ChatInputArea = memo(function ChatInputArea({
     setSelectedSubChatModelId(selectedModel.id)
   }, [provider, selectedModel?.id, setSelectedSubChatModelId])
 
-  const storedCodexApiKey = useAtomValue(codexApiKeyAtom)
-  const hasAppCodexApiKey = Boolean(normalizeCodexApiKey(storedCodexApiKey))
   const hiddenModels = useAtomValue(hiddenModelsAtom)
 
   // Connection status for providers
   const anthropicOnboardingCompleted = useAtomValue(anthropicOnboardingCompletedAtom)
   const apiKeyOnboardingCompleted = useAtomValue(apiKeyOnboardingCompletedAtom)
-  const codexOnboardingCompleted = useAtomValue(codexOnboardingCompletedAtom)
   const { data: claudeCodeIntegration } =
     trpc.claudeCode.getIntegration.useQuery()
-  const codexUiModels = useMemo(
-    () => {
-      let models = hasAppCodexApiKey
-        ? CODEX_MODELS.filter((model) => model.id !== "gpt-5.3-codex")
-        : CODEX_MODELS
-      return models.filter((model) => !hiddenModels.includes(model.id))
-    },
-    [hasAppCodexApiKey, hiddenModels],
-  )
-  const selectedCodexModel = useMemo(
-    () =>
-      codexUiModels.find((model) => model.id === selectedSubChatCodexModelId) ||
-      codexUiModels[0] ||
-      CODEX_MODELS[0]!,
-    [codexUiModels, selectedSubChatCodexModelId],
-  )
-
-  const selectedCodexThinking = useMemo<CodexThinkingLevel>(() => {
-    if (
-      selectedCodexModel.thinkings.includes(
-        selectedSubChatCodexThinking as CodexThinkingLevel,
-      )
-    ) {
-      return selectedSubChatCodexThinking as CodexThinkingLevel
-    }
-
-    if (selectedCodexModel.thinkings.includes("high")) {
-      return "high"
-    }
-
-    return selectedCodexModel.thinkings[0]!
-  }, [selectedCodexModel, selectedSubChatCodexThinking])
-
-  useEffect(() => {
-    if (
-      selectedCodexModel.thinkings.includes(
-        selectedSubChatCodexThinking as CodexThinkingLevel,
-      )
-    ) {
-      return
-    }
-
-    setSelectedSubChatCodexThinking(selectedCodexThinking)
-  }, [
-    selectedCodexModel,
-    selectedSubChatCodexThinking,
-    selectedCodexThinking,
-    setSelectedSubChatCodexThinking,
-  ])
-
-  // Materialize resolved Codex model/thinking into per-subChat storage once mounted.
-  // This prevents later global default changes from affecting existing sub-chats.
-  useEffect(() => {
-    if (provider !== "codex") return
-    if (selectedCodexModel?.id) {
-      setSelectedSubChatCodexModelId(selectedCodexModel.id)
-    }
-    setSelectedSubChatCodexThinking(selectedCodexThinking)
-  }, [
-    provider,
-    selectedCodexModel?.id,
-    selectedCodexThinking,
-    setSelectedSubChatCodexModelId,
-    setSelectedSubChatCodexThinking,
-  ])
 
   const customClaudeConfig = useAtomValue(customClaudeConfigAtom)
   const normalizedCustomClaudeConfig =
@@ -598,11 +499,11 @@ export const ChatInputArea = memo(function ChatInputArea({
   // Extended thinking (reasoning) toggle
   const [thinkingEnabled, setThinkingEnabled] = useAtom(extendedThinkingEnabledAtom)
 
-  const selectedModelLabel = useMemo(() => {
-    if (provider === "codex") {
-      return selectedCodexModel.name
-    }
+  // Effort level control
+  const [effortLevel, setEffortLevel] = useAtom(effortLevelAtom)
+  const [effortDropdownOpen, setEffortDropdownOpen] = useState(false)
 
+  const selectedModelLabel = useMemo(() => {
     if (availableModels.isOffline && availableModels.hasOllama) {
       return currentOllamaModel || "Ollama"
     }
@@ -617,16 +518,12 @@ export const ChatInputArea = memo(function ChatInputArea({
 
     return `${selectedModel.name} ${selectedModel.version}`
   }, [
-    provider,
-    selectedCodexModel.name,
     availableModels.isOffline,
     availableModels.hasOllama,
     currentOllamaModel,
     hasCustomClaudeConfig,
     selectedModel,
   ])
-  const canSwitchProvider =
-    messageTokenData.messageCount === 0 && !isStreaming && !sandboxId
 
   // MCP status - from getAllMcpConfig query (provides global/local grouping)
   const setSettingsOpen = useSetAtom(agentsSettingsDialogOpenAtom)
@@ -1543,18 +1440,51 @@ export const ChatInputArea = memo(function ChatInputArea({
                       )}
                   </DropdownMenu>
 
+                  {/* Effort level selector */}
+                  <DropdownMenu
+                    open={effortDropdownOpen}
+                    onOpenChange={setEffortDropdownOpen}
+                  >
+                    <DropdownMenuTrigger asChild>
+                      <button className="flex items-center gap-1 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
+                        <span className="text-[11px] opacity-60">E:</span>
+                        <span className="truncate capitalize text-xs">
+                          {effortLevel === "medium" ? "Med" : effortLevel}
+                        </span>
+                        <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="start"
+                      sideOffset={6}
+                      className="!min-w-[120px] !w-[120px]"
+                      onCloseAutoFocus={(e) => e.preventDefault()}
+                    >
+                      {(["low", "medium", "high", "max"] as const).map((level) => (
+                        <DropdownMenuItem
+                          key={level}
+                          onClick={() => {
+                            setEffortLevel(level)
+                            setEffortDropdownOpen(false)
+                          }}
+                          className="justify-between gap-2"
+                        >
+                          <span className="capitalize">{level}</span>
+                          {effortLevel === level && (
+                            <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
                   <div className="group/model-controls flex items-center gap-0.5">
                     <AgentModelSelector
                       open={isModelDropdownOpen}
                       onOpenChange={setIsModelDropdownOpen}
-                      selectedAgentId={provider}
-                      onSelectedAgentIdChange={(nextProvider) => {
-                        if (!canSwitchProvider) return
-                        if (nextProvider === provider) return
-                        onProviderChange?.(nextProvider)
-                      }}
-                      allowProviderSwitch={canSwitchProvider}
-                      onContinueWithProvider={!canSwitchProvider ? onContinueWithProvider : undefined}
+                      selectedAgentId="claude-code"
+                      onSelectedAgentIdChange={() => {}}
+                      allowProviderSwitch={false}
                       selectedModelLabel={selectedModelLabel}
                       onOpenModelsSettings={() => {
                         setSettingsTab("models")
@@ -1581,32 +1511,6 @@ export const ChatInputArea = memo(function ChatInputArea({
                         isConnected: isClaudeConnected,
                         thinkingEnabled,
                         onThinkingChange: setThinkingEnabled,
-                      }}
-                      codex={{
-                        models: codexUiModels,
-                        selectedModelId: selectedCodexModel.id,
-                        onSelectModel: (modelId) => {
-                          const model = codexUiModels.find((item) => item.id === modelId)
-                          if (!model) return
-                          const nextThinking = model.thinkings.includes(
-                            selectedSubChatCodexThinking as CodexThinkingLevel,
-                          )
-                            ? (selectedSubChatCodexThinking as CodexThinkingLevel)
-                            : (model.thinkings.includes("high")
-                              ? "high"
-                              : model.thinkings[0]!)
-
-                          setSelectedSubChatCodexModelId(model.id)
-                          setSelectedSubChatCodexThinking(nextThinking)
-                          setLastSelectedCodexModelId(model.id)
-                          setLastSelectedCodexThinking(nextThinking)
-                        },
-                        selectedThinking: selectedCodexThinking,
-                        onSelectThinking: (thinking) => {
-                          setSelectedSubChatCodexThinking(thinking)
-                          setLastSelectedCodexThinking(thinking)
-                        },
-                        isConnected: codexOnboardingCompleted,
                       }}
                     />
                   </div>

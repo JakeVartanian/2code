@@ -4,13 +4,6 @@ import * as fs from "fs/promises"
 import * as path from "path"
 import simpleGit from "simple-git"
 import { z } from "zod"
-import { getAuthManager } from "../../../index"
-import {
-  trackPRCreated,
-  trackWorkspaceArchived,
-  trackWorkspaceCreated,
-  trackWorkspaceDeleted,
-} from "../../analytics"
 import { chats, getDatabase, projects, subChats } from "../../db"
 import {
   createWorktreeForChat,
@@ -24,7 +17,7 @@ import { computeContentHash, gitCache } from "../../git/cache"
 import { splitUnifiedDiffByFile } from "../../git/diff-parser"
 import { execWithShellEnv } from "../../git/shell-env"
 import { applyRollbackStash } from "../../git/stash"
-import { checkInternetConnection, checkOllamaStatus } from "../../ollama"
+import { checkOllamaStatus } from "../../ollama"
 import { terminalManager } from "../../terminal/manager"
 import { publicProcedure, router } from "../index"
 
@@ -456,13 +449,6 @@ export const chatsRouter = router({
         subChats: [subChat],
       }
 
-      // Track workspace created
-      trackWorkspaceCreated({
-        id: chat.id,
-        projectId: input.projectId,
-        useWorktree: input.useWorktree,
-      })
-
       console.log("[chats.create] returning:", response)
       return response
     }),
@@ -510,9 +496,6 @@ export const chatsRouter = router({
         .where(eq(chats.id, input.id))
         .returning()
         .get()
-
-      // Track workspace archived
-      trackWorkspaceArchived(input.id)
 
       // Kill terminal processes only for worktree-mode workspaces.
       // Local-mode terminals are shared across workspaces on the same project path,
@@ -663,9 +646,6 @@ export const chatsRouter = router({
           console.error(`[chats.delete] Error killing processes:`, error)
         })
       }
-
-      // Track workspace deleted
-      trackWorkspaceDeleted(input.id)
 
       // Invalidate git cache for this worktree
       if (chat?.worktreePath) {
@@ -1252,28 +1232,20 @@ export const chatsRouter = router({
       const additions = files.reduce((sum, f) => sum + f.additions, 0)
       const deletions = files.reduce((sum, f) => sum + f.deletions, 0)
 
-      // Check internet first - if offline, use Ollama
-      const hasInternet = await checkInternetConnection()
-
-      if (!hasInternet) {
-        console.log("[generateCommitMessage] Offline - trying Ollama...")
-        const ollamaMessage = await generateCommitMessageWithOllama(
-          filteredDiff,
-          files.length,
-          additions,
-          deletions,
-          input.ollamaModel
-        )
-        if (ollamaMessage) {
-          console.log("[generateCommitMessage] Generated via Ollama:", ollamaMessage)
-          return { message: ollamaMessage }
-        }
-        console.log("[generateCommitMessage] Ollama failed, using heuristic fallback")
-        // Fall through to heuristic fallback below
-      } else {
-        // 2Code: no remote backend — fall through to heuristic fallback
-        console.log("[generateCommitMessage] No remote backend, using heuristic fallback")
+      // Try Ollama first
+      console.log("[generateCommitMessage] Trying Ollama...")
+      const ollamaMessage = await generateCommitMessageWithOllama(
+        filteredDiff,
+        files.length,
+        additions,
+        deletions,
+        input.ollamaModel
+      )
+      if (ollamaMessage) {
+        console.log("[generateCommitMessage] Generated via Ollama:", ollamaMessage)
+        return { message: ollamaMessage }
       }
+      console.log("[generateCommitMessage] Ollama failed, using heuristic fallback")
 
       // Fallback: Generate commit message with conventional commits style
       const fileNames = files.map((f) => {
@@ -1342,22 +1314,14 @@ export const chatsRouter = router({
     }))
     .mutation(async ({ input }) => {
       try {
-        // Check internet first - if offline, use Ollama
-        const hasInternet = await checkInternetConnection()
-
-        if (!hasInternet) {
-          console.log("[generateSubChatName] Offline - trying Ollama...")
-          const ollamaName = await generateChatNameWithOllama(input.userMessage, input.ollamaModel)
-          if (ollamaName) {
-            console.log("[generateSubChatName] Generated name via Ollama:", ollamaName)
-            return { name: ollamaName }
-          }
-          console.log("[generateSubChatName] Ollama failed, using fallback")
-          return { name: getFallbackName(input.userMessage) }
+        // Try Ollama first
+        console.log("[generateSubChatName] Trying Ollama...")
+        const ollamaName = await generateChatNameWithOllama(input.userMessage, input.ollamaModel)
+        if (ollamaName) {
+          console.log("[generateSubChatName] Generated name via Ollama:", ollamaName)
+          return { name: ollamaName }
         }
-
-        // 2Code: no remote backend — use fallback name
-        console.log("[generateSubChatName] No remote backend, using fallback")
+        console.log("[generateSubChatName] Ollama failed, using fallback")
         return { name: getFallbackName(input.userMessage) }
       } catch (error) {
         console.error("[generateSubChatName] Error:", error)
@@ -1435,12 +1399,6 @@ export const chatsRouter = router({
         .where(eq(chats.id, input.chatId))
         .returning()
         .get()
-
-      // Track PR created
-      trackPRCreated({
-        workspaceId: input.chatId,
-        prNumber: input.prNumber,
-      })
 
       return result
     }),

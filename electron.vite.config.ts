@@ -69,6 +69,22 @@ export default defineConfig({
           index: resolve(__dirname, "src/renderer/index.html"),
           login: resolve(__dirname, "src/renderer/login.html"),
         },
+        output: {
+          manualChunks(id) {
+            // Monaco editor (~2-3MB) - only loaded when file viewer opens
+            if (id.includes("monaco-editor") || id.includes("@monaco-editor")) {
+              return "vendor-monaco"
+            }
+            // xterm (~1.5MB) - only loaded when terminal opens
+            if (id.includes("xterm") || id.includes("@xterm")) {
+              return "vendor-xterm"
+            }
+            // Diff viewer (~500KB-1MB) - only loaded when diff view opens
+            if (id.includes("@pierre/diffs") || (id.includes("node_modules/diff") && !id.includes("diff-match-patch"))) {
+              return "vendor-diff"
+            }
+          },
+        },
       },
     },
     css: {

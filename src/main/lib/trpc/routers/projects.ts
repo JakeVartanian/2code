@@ -10,7 +10,6 @@ import { existsSync } from "node:fs"
 import { mkdir, copyFile, unlink } from "node:fs/promises"
 import { extname } from "node:path"
 import { getGitRemoteInfo } from "../../git"
-import { trackProjectOpened } from "../../analytics"
 import { getLaunchDirectory } from "../../cli"
 
 const execAsync = promisify(exec)
@@ -101,12 +100,6 @@ export const projectsRouter = router({
         .returning()
         .get()
 
-      // Track project opened
-      trackProjectOpened({
-        id: updatedProject!.id,
-        hasGitRemote: !!gitInfo.remoteUrl,
-      })
-
       return updatedProject
     }
 
@@ -123,12 +116,6 @@ export const projectsRouter = router({
       })
       .returning()
       .get()
-
-    // Track project opened
-    trackProjectOpened({
-      id: newProject!.id,
-      hasGitRemote: !!gitInfo.remoteUrl,
-    })
 
     return newProject
   }),
@@ -291,10 +278,6 @@ export const projectsRouter = router({
           .get()
 
         if (existing) {
-          trackProjectOpened({
-            id: existing.id,
-            hasGitRemote: !!existing.gitRemoteUrl,
-          })
           return existing
         }
 
@@ -313,10 +296,6 @@ export const projectsRouter = router({
           .returning()
           .get()
 
-        trackProjectOpened({
-          id: newProject!.id,
-          hasGitRemote: !!gitInfo.remoteUrl,
-        })
         return newProject
       }
 
@@ -343,11 +322,6 @@ export const projectsRouter = router({
         })
         .returning()
         .get()
-
-      trackProjectOpened({
-        id: newProject!.id,
-        hasGitRemote: !!gitInfo.remoteUrl,
-      })
 
       return newProject
     }),

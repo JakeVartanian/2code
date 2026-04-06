@@ -18,6 +18,7 @@ interface MessageQueueState {
   // Actions
   addToQueue: (subChatId: string, item: AgentQueueItem) => void
   removeFromQueue: (subChatId: string, itemId: string) => void
+  updateItem: (subChatId: string, itemId: string, message: string) => void
   getQueue: (subChatId: string) => AgentQueueItem[]
   getNextItem: (subChatId: string) => AgentQueueItem | null
   clearQueue: (subChatId: string) => void
@@ -50,6 +51,20 @@ export const useMessageQueueStore = create<MessageQueueState>()(
         queues: {
           ...state.queues,
           [subChatId]: removeQueueItem(currentQueue, itemId),
+        },
+      }
+    })
+  },
+
+  updateItem: (subChatId, itemId, message) => {
+    set((state) => {
+      const currentQueue = state.queues[subChatId] || []
+      return {
+        queues: {
+          ...state.queues,
+          [subChatId]: currentQueue.map((item) =>
+            item.id === itemId ? { ...item, message } : item
+          ),
         },
       }
     })

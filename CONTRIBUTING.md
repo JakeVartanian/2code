@@ -27,10 +27,6 @@ This is the open-source version of 1Code. Some features require the hosted backe
 | Private Discord & support | No | Yes |
 | Early access to new features | No | Yes |
 
-## Analytics & Telemetry
-
-Analytics (PostHog) and error tracking (Sentry) are **disabled by default** in open source builds. They only activate if you set the environment variables in `.env.local`.
-
 ## Contributing
 
 1. Fork the repo

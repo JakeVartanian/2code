@@ -47,9 +47,9 @@ export interface OAuthCallbacks {
 const CALLBACK_PORT = 8914;
 const CALLBACK_PATH = '/callback';
 // Client names for OAuth registration
-// Some MCP servers (like Figma) have an allowlist - try '2code' first, fall back to 'Codex'
+// Some MCP servers (like Figma) have an allowlist - try '2code' first, fall back to 'claude'
 const CLIENT_NAME = '2code';
-const FALLBACK_CLIENT_NAME = 'Codex';
+const FALLBACK_CLIENT_NAME = 'claude';
 
 /**
  * Generate a styled OAuth callback page with terminal emulator aesthetic

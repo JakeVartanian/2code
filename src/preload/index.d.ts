@@ -62,9 +62,6 @@ export interface DesktopApi {
   // DevTools
   toggleDevTools: () => Promise<void>
 
-  // Analytics
-  setAnalyticsOptOut: (optedOut: boolean) => Promise<void>
-
   // Native features
   setBadge: (count: number | null) => Promise<void>
   showNotification: (options: { title: string; body: string }) => Promise<void>

@@ -5,7 +5,7 @@ import {
 } from "../../../../components/ui/collapsible";
 import { cn } from "../../../../lib/utils";
 import type { ReactNode } from "react";
-import { HiChevronRight } from "react-icons/hi2";
+import { ChevronRight } from "lucide-react";
 
 interface CategorySectionProps {
 	title: string;
@@ -42,7 +42,7 @@ export function CategorySection({
 						"hover:bg-accent/30 cursor-pointer transition-colors",
 					)}
 				>
-					<HiChevronRight
+					<ChevronRight
 						className={cn(
 							"size-3 text-muted-foreground shrink-0 transition-transform duration-150",
 							isExpanded && "rotate-90",

@@ -30,9 +30,6 @@ import { cn } from "../../../lib/utils"
 import {
   agentsDebugModeAtom,
   justCreatedIdsAtom,
-  lastSelectedAgentIdAtom,
-  lastSelectedCodexModelIdAtom,
-  lastSelectedCodexThinkingAtom,
   lastSelectedBranchesAtom,
   lastSelectedModelIdAtom,
   lastSelectedRepoAtom,
@@ -55,12 +52,9 @@ import {
   agentsSettingsDialogActiveTabAtom,
   anthropicOnboardingCompletedAtom,
   apiKeyOnboardingCompletedAtom,
-  codexApiKeyAtom,
-  codexOnboardingCompletedAtom,
   customClaudeConfigAtom,
   extendedThinkingEnabledAtom,
   hiddenModelsAtom,
-  normalizeCodexApiKey,
   normalizeCustomClaudeConfig,
   showOfflineModeFeaturesAtom,
   selectedOllamaModelAtom,
@@ -120,8 +114,6 @@ import {
 } from "../lib/drafts"
 import {
   CLAUDE_MODELS,
-  CODEX_MODELS,
-  type CodexThinkingLevel,
 } from "../lib/models"
 // import type { PlanType } from "@/lib/config/subscription-plans"
 type PlanType = string
@@ -163,13 +155,6 @@ function useAvailableModels() {
     hasOllama: false,
   }
 }
-
-// Agent providers
-const agents = [
-  { id: "claude-code", name: "Claude Code", hasModels: true },
-  { id: "cursor", name: "Cursor CLI", disabled: true },
-  { id: "codex", name: "OpenAI Codex" },
-]
 
 interface NewChatFormProps {
   isMobileFullscreen?: boolean
@@ -220,9 +205,6 @@ export function NewChatForm({
       setSelectedProject(null)
     }
   }, [selectedProject, projectsList, validatedProject, setSelectedProject])
-  const [lastSelectedAgentId, setLastSelectedAgentId] = useAtom(
-    lastSelectedAgentIdAtom,
-  )
   const [lastSelectedModelId, setLastSelectedModelId] = useAtom(
     lastSelectedModelIdAtom,
   )
@@ -243,7 +225,6 @@ export function NewChatForm({
   // Connection status for providers
   const anthropicOnboardingCompleted = useAtomValue(anthropicOnboardingCompletedAtom)
   const apiKeyOnboardingCompleted = useAtomValue(apiKeyOnboardingCompletedAtom)
-  const codexOnboardingCompleted = useAtomValue(codexOnboardingCompletedAtom)
   const { data: claudeCodeIntegration } =
     trpc.claudeCode.getIntegration.useQuery()
   const isClaudeConnected =
@@ -297,36 +278,9 @@ export function NewChatForm({
     if (!match) return null
     return `${match[1]}/${match[2].replace(/\.git$/, "")}`
   }
-  const enabledAgents = useMemo(
-    () => agents.filter((agent) => !agent.disabled),
-    [],
-  )
-  const fallbackAgent = enabledAgents[0] ?? agents[0]!
-  const [selectedAgent, setSelectedAgent] = useState(
-    () =>
-      enabledAgents.find((agent) => agent.id === lastSelectedAgentId) ||
-      fallbackAgent,
-  )
-
-  useEffect(() => {
-    const nextAgent =
-      enabledAgents.find((agent) => agent.id === lastSelectedAgentId) ||
-      fallbackAgent
-
-    if (nextAgent && nextAgent.id !== selectedAgent.id) {
-      setSelectedAgent(nextAgent)
-    }
-  }, [enabledAgents, fallbackAgent, lastSelectedAgentId, selectedAgent.id])
-
   // Get available models (with offline support)
   const availableModels = useAvailableModels()
   const [selectedOllamaModel, setSelectedOllamaModel] = useAtom(selectedOllamaModelAtom)
-  const [lastSelectedCodexModelId, setLastSelectedCodexModelId] = useAtom(
-    lastSelectedCodexModelIdAtom,
-  )
-  const [lastSelectedCodexThinking, setLastSelectedCodexThinking] = useAtom(
-    lastSelectedCodexThinkingAtom,
-  )
   const [thinkingEnabled, setThinkingEnabled] = useAtom(
     extendedThinkingEnabledAtom,
   )
@@ -344,80 +298,13 @@ export function NewChatForm({
     }
   }, [lastSelectedModelId])
 
-  const storedCodexApiKey = useAtomValue(codexApiKeyAtom)
-  const hasAppCodexApiKey = Boolean(normalizeCodexApiKey(storedCodexApiKey))
   const hiddenModels = useAtomValue(hiddenModelsAtom)
-  const codexUiModels = useMemo(
-    () => {
-      let models = hasAppCodexApiKey
-        ? CODEX_MODELS.filter((model) => model.id !== "gpt-5.3-codex")
-        : CODEX_MODELS
-      return models.filter((model) => !hiddenModels.includes(model.id))
-    },
-    [hasAppCodexApiKey, hiddenModels],
-  )
-  const selectedCodexModel = useMemo(
-    () =>
-      codexUiModels.find((model) => model.id === lastSelectedCodexModelId) ||
-      codexUiModels[0] ||
-      CODEX_MODELS[0]!,
-    [codexUiModels, lastSelectedCodexModelId],
-  )
 
-  const selectedCodexThinking = useMemo<CodexThinkingLevel>(() => {
-    if (
-      selectedCodexModel.thinkings.includes(
-        lastSelectedCodexThinking as CodexThinkingLevel,
-      )
-    ) {
-      return lastSelectedCodexThinking as CodexThinkingLevel
-    }
-
-    if (selectedCodexModel.thinkings.includes("high")) {
-      return "high"
-    }
-
-    return selectedCodexModel.thinkings[0]!
-  }, [selectedCodexModel, lastSelectedCodexThinking])
-
-  useEffect(() => {
-    if (
-      selectedCodexModel.thinkings.includes(
-        lastSelectedCodexThinking as CodexThinkingLevel,
-      )
-    ) {
-      return
-    }
-
-    setLastSelectedCodexThinking(selectedCodexThinking)
-  }, [
-    selectedCodexModel,
-    lastSelectedCodexThinking,
-    selectedCodexThinking,
-    setLastSelectedCodexThinking,
-  ])
-
-  const selectedChatModel = useMemo(() => {
-    if (selectedAgent.id === "codex") {
-      return `${selectedCodexModel.id}/${selectedCodexThinking}`
-    }
-    return selectedModel?.id ?? "opus"
-  }, [
-    selectedAgent.id,
-    selectedCodexModel.id,
-    selectedCodexThinking,
-    selectedModel?.id,
-  ])
+  const selectedChatModel = selectedModel?.id ?? "opus"
 
   // Determine current Ollama model (selected or recommended)
   const currentOllamaModel = selectedOllamaModel || availableModels.recommendedModel || availableModels.ollamaModels[0]
-  const claudeAgent =
-    enabledAgents.find((agent) => agent.id === "claude-code") || fallbackAgent
   const selectedModelLabel = useMemo(() => {
-    if (selectedAgent.id === "codex") {
-      return selectedCodexModel.name
-    }
-
     if (availableModels.isOffline && availableModels.hasOllama) {
       return currentOllamaModel || "Ollama"
     }
@@ -432,8 +319,6 @@ export function NewChatForm({
 
     return `${selectedModel.name} ${selectedModel.version}`
   }, [
-    selectedAgent.id,
-    selectedCodexModel.name,
     availableModels.isOffline,
     availableModels.hasOllama,
     currentOllamaModel,
@@ -1873,15 +1758,9 @@ export function NewChatForm({
                         <AgentModelSelector
                           open={isModelDropdownOpen}
                           onOpenChange={setIsModelDropdownOpen}
-                          selectedAgentId={selectedAgent.id as "claude-code" | "codex"}
-                          onSelectedAgentIdChange={(provider) => {
-                            if (provider === "claude-code") {
-                              setSelectedAgent(claudeAgent)
-                            } else {
-                              setSelectedAgent(enabledAgents.find((agent) => agent.id === "codex") || fallbackAgent)
-                            }
-                            setLastSelectedAgentId(provider)
-                          }}
+                          selectedAgentId="claude-code"
+                          onSelectedAgentIdChange={() => {}}
+                          allowProviderSwitch={false}
                           selectedModelLabel={selectedModelLabel}
                           onOpenModelsSettings={() => {
                             setSettingsActiveTab("models")
@@ -1907,27 +1786,6 @@ export function NewChatForm({
                             isConnected: isClaudeConnected,
                             thinkingEnabled,
                             onThinkingChange: setThinkingEnabled,
-                          }}
-                          codex={{
-                            models: codexUiModels,
-                            selectedModelId: selectedCodexModel.id,
-                            onSelectModel: (modelId) => {
-                              const model = codexUiModels.find((item) => item.id === modelId)
-                              if (!model) return
-                              const nextThinking = model.thinkings.includes(
-                                lastSelectedCodexThinking as CodexThinkingLevel,
-                              )
-                                ? (lastSelectedCodexThinking as CodexThinkingLevel)
-                                : (model.thinkings.includes("high")
-                                  ? "high"
-                                  : model.thinkings[0]!)
-
-                              setLastSelectedCodexModelId(model.id)
-                              setLastSelectedCodexThinking(nextThinking)
-                            },
-                            selectedThinking: selectedCodexThinking,
-                            onSelectThinking: setLastSelectedCodexThinking,
-                            isConnected: codexOnboardingCompleted,
                           }}
                         />
                       </div>

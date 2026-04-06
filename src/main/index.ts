@@ -1,17 +1,8 @@
-import * as Sentry from "@sentry/electron/main"
 import { app, BrowserWindow, dialog, Menu, nativeImage, session } from "electron"
 import { existsSync, readFileSync, readlinkSync, unlinkSync } from "fs"
 import { createServer } from "http"
 import { join } from "path"
 import { AuthManager, initAuthManager, getAuthManager as getAuthManagerFromModule } from "./auth-manager"
-import {
-  identify,
-  initAnalytics,
-  setSubscriptionPlan,
-  shutdown as shutdownAnalytics,
-  trackAppOpened,
-  trackAuthCompleted,
-} from "./lib/analytics"
 import {
   checkForUpdates,
   downloadUpdate,
@@ -28,9 +19,7 @@ import {
 } from "./lib/cli"
 import { cleanupGitWatchers } from "./lib/git/watcher"
 import { cancelAllPendingOAuth, handleMcpOAuthCallback } from "./lib/mcp-auth"
-import { terminalManager } from "./lib/terminal/manager"
 import { getAllMcpConfigHandler, hasActiveClaudeSessions, abortAllClaudeSessions } from "./lib/trpc/routers/claude"
-import { getAllCodexMcpConfigHandler, hasActiveCodexStreams, abortAllCodexStreams } from "./lib/trpc/routers/codex"
 import {
   createMainWindow,
   createWindow,
@@ -59,37 +48,19 @@ if (IS_DEV) {
 // under heavy multi-chat workloads. Must be set before app readiness/window creation.
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=8192")
 
-// Initialize Sentry before app is ready (production only)
-if (app.isPackaged && !IS_DEV) {
-  const sentryDsn = import.meta.env.MAIN_VITE_SENTRY_DSN
-  if (sentryDsn) {
-    try {
-      Sentry.init({
-        dsn: sentryDsn,
-      })
-      console.log("[App] Sentry initialized")
-    } catch (error) {
-      console.warn("[App] Failed to initialize Sentry:", error)
-    }
-  } else {
-    console.log("[App] Skipping Sentry initialization (no DSN configured)")
-  }
-} else {
-  console.log("[App] Skipping Sentry initialization (dev mode)")
-}
 
 // URL configuration (exported for use in other modules)
 // In packaged app, ALWAYS use production URL to prevent localhost leaking into releases
 // In dev mode, allow override via MAIN_VITE_API_URL env variable
 export function getBaseUrl(): string {
   if (app.isPackaged) {
-    return "https://localhost" // 2Code: no remote backend
+    return "https://21st.dev"
   }
-  return import.meta.env.MAIN_VITE_API_URL || "https://localhost"
+  return import.meta.env.MAIN_VITE_API_URL || "https://21st.dev"
 }
 
 export function getAppUrl(): string {
-  return process.env.ELECTRON_RENDERER_URL || "https://localhost"
+  return process.env.ELECTRON_RENDERER_URL || "https://21st.dev/agents"
 }
 
 // Auth manager singleton (use the one from auth-manager module)
@@ -107,19 +78,6 @@ export async function handleAuthCode(code: string): Promise<void> {
   try {
     const authData = await authManager.exchangeCode(code)
     console.log("[Auth] Success for user:", authData.user.email)
-
-    // Track successful authentication
-    trackAuthCompleted(authData.user.id, authData.user.email)
-
-    // Fetch and set subscription plan for analytics
-    try {
-      const planData = await authManager.fetchUserPlan()
-      if (planData) {
-        setSubscriptionPlan(planData.plan)
-      }
-    } catch (e) {
-      console.warn("[Auth] Failed to fetch user plan for analytics:", e)
-    }
 
     // Set desktop token cookie using persist:main partition
     const ses = session.fromPartition("persist:main")
@@ -197,7 +155,7 @@ function handleDeepLink(url: string): void {
     if (parsed.pathname === "/auth" || parsed.host === "auth") {
       const code = parsed.searchParams.get("code")
       if (code) {
-        handleAuthCode(code)
+        handleAuthCode(code).catch((err) => console.error("[Auth] handleAuthCode failed:", err))
         return
       }
     }
@@ -207,7 +165,7 @@ function handleDeepLink(url: string): void {
       const code = parsed.searchParams.get("code")
       const state = parsed.searchParams.get("state")
       if (code && state) {
-        handleMcpOAuthCallback(code, state)
+        handleMcpOAuthCallback(code, state).catch((err) => console.error("[Auth] MCP OAuth callback failed:", err))
         return
       }
     }
@@ -309,7 +267,7 @@ const server = createServer((req, res) => {
 
       if (code) {
         // Handle the auth code
-        handleAuthCode(code)
+        handleAuthCode(code).catch((err) => console.error("[Auth Server] handleAuthCode failed:", err))
 
         // Send success response and close the browser tab
         res.writeHead(200, { "Content-Type": "text/html" })
@@ -393,7 +351,7 @@ const server = createServer((req, res) => {
 
       if (code && state) {
         // Handle the MCP OAuth callback
-        handleMcpOAuthCallback(code, state)
+        handleMcpOAuthCallback(code, state).catch((err) => console.error("[Auth Server] MCP OAuth callback failed:", err))
 
         // Send success response and close the browser tab
         res.writeHead(200, { "Content-Type": "text/html" })
@@ -469,6 +427,14 @@ const server = createServer((req, res) => {
       res.end("Not found")
     }
   })
+
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.warn(`[Auth Server] Port ${AUTH_SERVER_PORT} already in use — auth callbacks will use deep links only`)
+  } else {
+    console.error("[Auth Server] Failed to start:", err)
+  }
+})
 
 server.listen(AUTH_SERVER_PORT, () => {
   console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
@@ -572,7 +538,7 @@ if (gotTheLock) {
 
     // Set app user model ID for Windows (different in dev to avoid taskbar conflicts)
     if (process.platform === "win32") {
-      app.setAppUserModelId(IS_DEV ? "com.2code.app.dev" : "com.2code.app")
+      app.setAppUserModelId(IS_DEV ? "dev.21st.2code.dev" : "dev.21st.2code")
     }
 
     console.log(`[App] Starting 2Code${IS_DEV ? " (DEV)" : ""}...`)
@@ -602,7 +568,7 @@ if (gotTheLock) {
       applicationName: "2Code",
       applicationVersion: app.getVersion(),
       version: `Claude Code ${claudeCodeVersion}`,
-      copyright: "Copyright © 2026 2Code",
+      copyright: "Copyright © 2026 21st.dev",
     })
 
     // Track update availability for menu
@@ -709,7 +675,7 @@ if (gotTheLock) {
               label: "Quit",
               accelerator: "CmdOrCtrl+Q",
               click: async () => {
-                if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+                if (hasActiveClaudeSessions()) {
                   const { dialog } = await import("electron")
                   const { response } = await dialog.showMessageBox({
                     type: "warning",
@@ -722,7 +688,6 @@ if (gotTheLock) {
                   })
                   if (response === 1) {
                     abortAllClaudeSessions()
-                    abortAllCodexStreams()
                     setIsQuitting(true)
                     app.quit()
                   }
@@ -794,7 +759,7 @@ if (gotTheLock) {
               click: () => {
                 const win = BrowserWindow.getFocusedWindow()
                 if (!win) return
-                if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+                if (hasActiveClaudeSessions()) {
                   dialog
                     .showMessageBox(win, {
                       type: "warning",
@@ -809,7 +774,6 @@ if (gotTheLock) {
                     .then(({ response }) => {
                       if (response === 1) {
                         abortAllClaudeSessions()
-                        abortAllCodexStreams()
                         win.webContents.reloadIgnoringCache()
                       }
                     })
@@ -844,7 +808,7 @@ if (gotTheLock) {
               label: "Learn More",
               click: async () => {
                 const { shell } = await import("electron")
-                await shell.openExternal("https://github.com") // TODO: Set 2Code website URL
+                await shell.openExternal("https://21st.dev")
               },
             },
           ],
@@ -895,21 +859,6 @@ if (gotTheLock) {
     authManager = initAuthManager(!!process.env.ELECTRON_RENDERER_URL)
     console.log("[App] Auth manager initialized")
 
-    // Initialize analytics after auth manager so we can identify user
-    initAnalytics()
-
-    // If user already authenticated from previous session, identify them
-    if (authManager.isAuthenticated()) {
-      const user = authManager.getUser()
-      if (user) {
-        identify(user.id, { email: user.email })
-        console.log("[Analytics] User identified from saved session:", user.id)
-      }
-    }
-
-    // Track app opened (now with correct user ID if authenticated)
-    trackAppOpened()
-
     // Set up callback to update cookie when token is refreshed
     authManager.setOnTokenRefresh(async (authData) => {
       console.log("[Auth] Token refreshed, updating cookie...")
@@ -954,25 +903,15 @@ if (gotTheLock) {
       }, 5000)
     }
 
-    // Warm up MCP cache 3 seconds after startup (background, non-blocking)
+    // Warm up MCP cache shortly after startup (background, non-blocking)
     // This populates the cache so all future sessions can use filtered MCP servers
     setTimeout(async () => {
       try {
-        const results = await Promise.allSettled([
-          getAllMcpConfigHandler(),
-          getAllCodexMcpConfigHandler(),
-        ])
-
-        if (results[0].status === "rejected") {
-          console.error("[App] Claude MCP warmup failed:", results[0].reason)
-        }
-        if (results[1].status === "rejected") {
-          console.error("[App] Codex MCP warmup failed:", results[1].reason)
-        }
+        await getAllMcpConfigHandler()
       } catch (error) {
         console.error("[App] MCP warmup failed:", error)
       }
-    }, 3000)
+    }, 500)
 
     // Handle directory argument from CLI (e.g., `2code /path/to/project`)
     parseLaunchDirectory()
@@ -1000,14 +939,21 @@ if (gotTheLock) {
     }
   })
 
-  // Cleanup before quit
-  app.on("before-quit", async () => {
+  // Cleanup before quit — use preventDefault + re-quit to ensure async cleanup completes
+  let isCleaningUp = false
+  app.on("before-quit", async (event) => {
+    if (isCleaningUp) return // Already cleaning up, let the second quit through
+    isCleaningUp = true
+    event.preventDefault()
     console.log("[App] Shutting down...")
-    cancelAllPendingOAuth()
-    await terminalManager.cleanup()
-    await cleanupGitWatchers()
-    await shutdownAnalytics()
-    await closeDatabase()
+    try {
+      cancelAllPendingOAuth()
+      await cleanupGitWatchers()
+      await closeDatabase()
+    } catch (error) {
+      console.error("[App] Cleanup error:", error)
+    }
+    app.quit()
   })
 
   // Handle uncaught exceptions

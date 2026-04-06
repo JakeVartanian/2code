@@ -8,8 +8,7 @@ import {
 } from "../../../../components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../../components/ui/tooltip";
 import { useEffect, useRef, useState } from "react";
-import { HiArrowPath, HiChevronDown } from "react-icons/hi2";
-import { LuGitBranch, LuGitPullRequest } from "react-icons/lu";
+import { ChevronDown, GitBranch, RefreshCw } from "lucide-react";
 import { trpc } from "../../../../lib/trpc";
 import { cn } from "../../../../lib/utils";
 import { usePRStatus } from "../../../../hooks/usePRStatus";
@@ -127,11 +126,11 @@ export function ChangesPanelHeader({
 									isCompact && "h-5 px-1.5 gap-1 text-[10px]",
 								)}
 							>
-								<LuGitBranch className={cn("size-3.5 shrink-0", isCompact && "size-3")} />
+								<GitBranch className={cn("size-3.5 shrink-0", isCompact && "size-3")} />
 								<span className="truncate max-w-[120px]">
 									{currentBranch || "No branch"}
 								</span>
-								<HiChevronDown className={cn("size-3 shrink-0 opacity-50", isCompact && "size-2.5")} />
+								<ChevronDown className={cn("size-3 shrink-0 opacity-50", isCompact && "size-2.5")} />
 							</Button>
 						</DropdownMenuTrigger>
 					</TooltipTrigger>
@@ -147,7 +146,7 @@ export function ChangesPanelHeader({
 								branchInfo.branch === currentBranch && "bg-accent",
 							)}
 						>
-							<LuGitBranch className="mr-2 size-3.5" />
+							<GitBranch className="mr-2 size-3.5" />
 							<span className="truncate">{branchInfo.branch}</span>
 							{branchInfo.branch === branchData?.defaultBranch && (
 								<span className="ml-auto text-[10px] text-muted-foreground">
@@ -163,7 +162,7 @@ export function ChangesPanelHeader({
 						}}
 						className="text-xs"
 					>
-						<LuGitBranch className="mr-2 size-3.5" />
+						<GitBranch className="mr-2 size-3.5" />
 						Create new branch...
 					</DropdownMenuItem>
 				</DropdownMenuContent>
@@ -211,7 +210,7 @@ export function ChangesPanelHeader({
 								isCompact && "h-5 px-1.5 gap-1",
 							)}
 						>
-							<HiArrowPath
+							<RefreshCw
 								className={cn(
 									"size-3.5",
 									(isRefreshing || fetchMutation.isPending) && "animate-spin",

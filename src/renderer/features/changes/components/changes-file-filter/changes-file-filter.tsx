@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo } from "react";
 import { Input } from "../../../../components/ui/input";
 import { Button } from "../../../../components/ui/button";
 import { cn } from "../../../../lib/utils";
-import { LuSearch, LuX } from "react-icons/lu";
+import { Search, X } from "lucide-react";
 import { SearchCombobox } from "../../../../components/ui/search-combobox";
 import { PopoverTrigger } from "../../../../components/ui/popover";
 import {
@@ -87,7 +87,7 @@ export function ChangesFileFilter({
 			<div className="flex items-center gap-1">
 				{/* Search input */}
 				<div className="relative flex-1">
-					<LuSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+					<Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
 					<Input
 						type="search"
 						value={value}
@@ -101,7 +101,7 @@ export function ChangesFileFilter({
 							onClick={() => onChange("")}
 							className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-muted-foreground/20 transition-colors"
 						>
-							<LuX className="size-3 text-muted-foreground" />
+							<X className="size-3 text-muted-foreground" />
 						</button>
 					)}
 				</div>
@@ -171,7 +171,7 @@ export function ChangesFileFilter({
 						onClick={handleClearSubChatFilter}
 						className="p-0.5 rounded hover:bg-foreground/10 transition-colors flex-shrink-0"
 					>
-						<LuX className="w-3.5 h-3.5 text-muted-foreground" />
+						<X className="w-3.5 h-3.5 text-muted-foreground" />
 					</button>
 				</div>
 			)}

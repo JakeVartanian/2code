@@ -1,7 +1,8 @@
 "use client"
 
 import React from "react"
-import { useState, useRef, useMemo, useEffect, useCallback, memo, forwardRef } from "react"
+import { useState, useRef, useMemo, useEffect, useCallback, memo, forwardRef, type RefObject } from "react"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { createPortal } from "react-dom"
 import { motion, AnimatePresence } from "motion/react"
 import { Button as ButtonCustom } from "../../components/ui/button"
@@ -12,7 +13,6 @@ import {
   createTeamDialogOpenAtom,
   agentsSettingsDialogActiveTabAtom,
   agentsSidebarOpenAtom,
-  agentsHelpPopoverOpenAtom,
   selectedAgentChatIdsAtom,
   isAgentMultiSelectModeAtom,
   toggleAgentChatSelectionAtom,
@@ -26,8 +26,6 @@ import {
   selectedTeamIdAtom,
   type ChatSourceMode,
   showWorkspaceIconAtom,
-  betaKanbanEnabledAtom,
-  betaAutomationsEnabledAtom,
 } from "../../lib/atoms"
 import {
   useRemoteChats,
@@ -40,17 +38,14 @@ import {
 } from "../../lib/hooks/use-remote-chats"
 import { usePrefetchLocalChat } from "../../lib/hooks/use-prefetch-local-chat"
 import { ArchivePopover } from "../agents/ui/archive-popover"
-import { ChevronDown, MoreHorizontal, Columns3, ArrowUpRight } from "lucide-react"
+import { ChevronDown, MoreHorizontal, BarChart2, RefreshCw } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
-import { remoteTrpc } from "../../lib/remote-trpc"
 // import { useRouter } from "next/navigation" // Desktop doesn't use next/navigation
 // import { useCombinedAuth } from "@/lib/hooks/use-combined-auth"
 const useCombinedAuth = () => ({ userId: null })
 // import { AuthDialog } from "@/components/auth/auth-dialog"
 const AuthDialog = () => null
 // Desktop: archive is handled inline, not via hook
-// import { DiscordIcon } from "@/components/icons"
-import { DiscordIcon } from "../../icons"
 import { AgentsRenameSubChatDialog } from "../agents/components/agents-rename-subchat-dialog"
 import { OpenLocallyDialog } from "../agents/components/open-locally-dialog"
 import { useAutoImport } from "../agents/hooks/use-auto-import"
@@ -62,9 +57,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuSeparator,
 } from "../../components/ui/dropdown-menu"
 import {
@@ -94,14 +86,11 @@ import {
   LoadingDot,
   ArchiveIcon,
   TrashIcon,
-  QuestionCircleIcon,
   QuestionIcon,
-  KeyboardIcon,
   TicketIcon,
   CloudIcon,
 } from "../../components/ui/icons"
 import { Logo } from "../../components/ui/logo"
-import { Input } from "../../components/ui/input"
 import { Button } from "../../components/ui/button"
 import {
   selectedAgentChatIdAtom,
@@ -123,7 +112,6 @@ import {
 import { NetworkStatus } from "../../components/ui/network-status"
 import { useAgentSubChatStore, OPEN_SUB_CHATS_CHANGE_EVENT } from "../agents/stores/sub-chat-store"
 import { getWindowId } from "../../contexts/WindowContext"
-import { AgentsHelpPopover } from "../agents/components/agents-help-popover"
 import { getShortcutKey, isDesktopApp } from "../../lib/utils/platform"
 import { useResolvedHotkeyDisplay, useResolvedHotkeyDisplayWithAlt } from "../../lib/hotkeys"
 import { pluralize } from "../agents/utils/pluralize"
@@ -138,9 +126,6 @@ import { useHaptic } from "./hooks/use-haptic"
 import { TypewriterText } from "../../components/ui/typewriter-text"
 import { exportChat, copyChat, type ExportFormat } from "../agents/lib/export-chat"
 
-// Feedback URL: uses env variable for hosted version, falls back to public Discord for open source
-const FEEDBACK_URL =
-  import.meta.env.VITE_FEEDBACK_URL || "https://discord.gg/8ektTZGnj4"
 
 // GitHub avatar with loading placeholder
 const GitHubAvatar = React.memo(function GitHubAvatar({
@@ -852,6 +837,7 @@ interface ChatListSectionProps {
     meta?: { repository?: string; branch?: string | null } | null
     remoteStats?: { fileCount: number; additions: number; deletions: number } | null
   }>
+  scrollContainerRef?: RefObject<HTMLDivElement | null>
   selectedChatId: string | null
   selectedChatIsRemote: boolean
   focusedChatIndex: number
@@ -891,10 +877,14 @@ interface ChatListSectionProps {
   justCreatedIds: Set<string>
 }
 
+// Virtualization threshold - only virtualize when there are many items
+const VIRTUALIZE_THRESHOLD = 50
+
 // Memoized Chat List Section component
 const ChatListSection = React.memo(function ChatListSection({
   title,
   chats,
+  scrollContainerRef,
   selectedChatId,
   selectedChatIsRemote,
   focusedChatIndex,
@@ -942,6 +932,110 @@ const ChatListSection = React.memo(function ChatListSection({
     return map
   }, [filteredChats])
 
+  const shouldVirtualize = chats.length >= VIRTUALIZE_THRESHOLD && !!scrollContainerRef
+
+  const virtualizer = useVirtualizer({
+    count: shouldVirtualize ? chats.length : 0,
+    getScrollElement: () => scrollContainerRef?.current ?? null,
+    estimateSize: () => 56, // ~56px per chat item (py-1.5 + content)
+    overscan: 10,
+    enabled: shouldVirtualize,
+  })
+
+  const renderChatItem = useCallback((chat: (typeof chats)[number], index: number) => {
+    const isLoading = loadingChatIds.has(chat.id)
+    const chatOriginalId = chat.isRemote ? chat.id.replace(/^remote_/, '') : chat.id
+    const isSelected = selectedChatId === chatOriginalId && selectedChatIsRemote === chat.isRemote
+    const isPinned = pinnedChatIds.has(chat.id)
+    const globalIndex = globalIndexMap.get(chat.id) ?? -1
+    const isFocused = focusedChatIndex === globalIndex && focusedChatIndex >= 0
+
+    const project = chat.projectId ? projectsMap.get(chat.projectId) : null
+    const repoName = chat.isRemote
+      ? chat.meta?.repository
+      : (project?.gitRepo || project?.name)
+    const displayText = chat.branch
+      ? repoName
+        ? `${repoName} • ${chat.branch}`
+        : chat.branch
+      : repoName || (chat.isRemote ? "Remote project" : "Local project")
+
+    const isChecked = selectedChatIds.has(chat.id)
+    const stats = chat.isRemote ? null : workspaceFileStats.get(chat.id)
+    const hasPendingPlan = workspacePendingPlans.has(chat.id)
+    const hasPendingQuestion = workspacePendingQuestions.has(chat.id)
+    const isLastInFilteredChats = globalIndex === filteredChats.length - 1
+    const isJustCreated = justCreatedIds.has(chat.id)
+
+    const gitOwner = chat.isRemote
+      ? chat.meta?.repository?.split('/')[0]
+      : project?.gitOwner
+    const gitProvider = chat.isRemote ? 'github' : project?.gitProvider
+
+    return (
+      <AgentChatItem
+        key={chat.id}
+        chatId={chat.id}
+        chatName={chat.name}
+        chatBranch={chat.branch}
+        chatUpdatedAt={chat.updatedAt}
+        chatProjectId={chat.projectId ?? ""}
+        globalIndex={globalIndex}
+        isSelected={isSelected}
+        isLoading={isLoading}
+        hasUnseenChanges={unseenChanges.has(chat.id)}
+        hasPendingPlan={hasPendingPlan}
+        hasPendingQuestion={hasPendingQuestion}
+        isMultiSelectMode={isMultiSelectMode}
+        isChecked={isChecked}
+        isFocused={isFocused}
+        isMobileFullscreen={isMobileFullscreen}
+        isDesktop={isDesktop}
+        isPinned={isPinned}
+        displayText={displayText}
+        gitOwner={gitOwner}
+        gitProvider={gitProvider}
+        stats={stats ?? undefined}
+        selectedChatIdsSize={selectedChatIds.size}
+        canShowPinOption={canShowPinOption}
+        areAllSelectedPinned={areAllSelectedPinned}
+        filteredChatsLength={filteredChats.length}
+        isLastInFilteredChats={isLastInFilteredChats}
+        showIcon={showIcon}
+        onChatClick={onChatClick}
+        onCheckboxClick={onCheckboxClick}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+        onArchive={onArchive}
+        onTogglePin={onTogglePin}
+        onRenameClick={onRenameClick}
+        onCopyBranch={onCopyBranch}
+        onArchiveAllBelow={onArchiveAllBelow}
+        onArchiveOthers={onArchiveOthers}
+        onOpenLocally={onOpenLocally}
+        onBulkPin={onBulkPin}
+        onBulkUnpin={onBulkUnpin}
+        onBulkArchive={onBulkArchive}
+        archivePending={archivePending}
+        archiveBatchPending={archiveBatchPending}
+        isRemote={chat.isRemote}
+        nameRefCallback={nameRefCallback}
+        formatTime={formatTime}
+        isJustCreated={isJustCreated}
+      />
+    )
+  }, [
+    loadingChatIds, selectedChatId, selectedChatIsRemote, pinnedChatIds,
+    globalIndexMap, focusedChatIndex, projectsMap, selectedChatIds,
+    workspaceFileStats, workspacePendingPlans, workspacePendingQuestions,
+    filteredChats, justCreatedIds, unseenChanges, isMultiSelectMode,
+    isMobileFullscreen, isDesktop, canShowPinOption, areAllSelectedPinned,
+    showIcon, onChatClick, onCheckboxClick, onMouseEnter, onMouseLeave,
+    onArchive, onTogglePin, onRenameClick, onCopyBranch, onArchiveAllBelow,
+    onArchiveOthers, onOpenLocally, onBulkPin, onBulkUnpin, onBulkArchive,
+    archivePending, archiveBatchPending, nameRefCallback, formatTime,
+  ])
+
   return (
     <>
       <div
@@ -954,97 +1048,36 @@ const ChatListSection = React.memo(function ChatListSection({
           {title}
         </h3>
       </div>
-      <div className="list-none p-0 m-0 mb-3">
-        {chats.map((chat) => {
-          const isLoading = loadingChatIds.has(chat.id)
-          // For remote chats, compare without prefix; for local, compare directly
-          // Remote chat IDs in list have "remote_" prefix, but selectedChatId is the original ID
-          const chatOriginalId = chat.isRemote ? chat.id.replace(/^remote_/, '') : chat.id
-          const isSelected = selectedChatId === chatOriginalId && selectedChatIsRemote === chat.isRemote
-          const isPinned = pinnedChatIds.has(chat.id)
-          const globalIndex = globalIndexMap.get(chat.id) ?? -1
-          const isFocused = focusedChatIndex === globalIndex && focusedChatIndex >= 0
-
-          // For remote chats, get repo info from meta; for local, from projectsMap
-          const project = chat.projectId ? projectsMap.get(chat.projectId) : null
-          const repoName = chat.isRemote
-            ? chat.meta?.repository
-            : (project?.gitRepo || project?.name)
-          const displayText = chat.branch
-            ? repoName
-              ? `${repoName} • ${chat.branch}`
-              : chat.branch
-            : repoName || (chat.isRemote ? "Remote project" : "Local project")
-
-          const isChecked = selectedChatIds.has(chat.id)
-          // TODO: remote stats disabled — backend no longer computes them (was causing 50s+ loads)
-          // Will re-enable once stats are precomputed at write time
-          const stats = chat.isRemote ? null : workspaceFileStats.get(chat.id)
-          const hasPendingPlan = workspacePendingPlans.has(chat.id)
-          const hasPendingQuestion = workspacePendingQuestions.has(chat.id)
-          const isLastInFilteredChats = globalIndex === filteredChats.length - 1
-          const isJustCreated = justCreatedIds.has(chat.id)
-
-          // For remote chats, extract gitOwner from meta.repository (e.g. "owner/repo" -> "owner")
-          const gitOwner = chat.isRemote
-            ? chat.meta?.repository?.split('/')[0]
-            : project?.gitOwner
-          const gitProvider = chat.isRemote ? 'github' : project?.gitProvider
-
-          return (
-            <AgentChatItem
-              key={chat.id}
-              chatId={chat.id}
-              chatName={chat.name}
-              chatBranch={chat.branch}
-              chatUpdatedAt={chat.updatedAt}
-              chatProjectId={chat.projectId ?? ""}
-              globalIndex={globalIndex}
-              isSelected={isSelected}
-              isLoading={isLoading}
-              hasUnseenChanges={unseenChanges.has(chat.id)}
-              hasPendingPlan={hasPendingPlan}
-              hasPendingQuestion={hasPendingQuestion}
-              isMultiSelectMode={isMultiSelectMode}
-              isChecked={isChecked}
-              isFocused={isFocused}
-              isMobileFullscreen={isMobileFullscreen}
-              isDesktop={isDesktop}
-              isPinned={isPinned}
-              displayText={displayText}
-              gitOwner={gitOwner}
-              gitProvider={gitProvider}
-              stats={stats ?? undefined}
-              selectedChatIdsSize={selectedChatIds.size}
-              canShowPinOption={canShowPinOption}
-              areAllSelectedPinned={areAllSelectedPinned}
-              filteredChatsLength={filteredChats.length}
-              isLastInFilteredChats={isLastInFilteredChats}
-              showIcon={showIcon}
-              onChatClick={onChatClick}
-              onCheckboxClick={onCheckboxClick}
-              onMouseEnter={onMouseEnter}
-              onMouseLeave={onMouseLeave}
-              onArchive={onArchive}
-              onTogglePin={onTogglePin}
-              onRenameClick={onRenameClick}
-              onCopyBranch={onCopyBranch}
-              onArchiveAllBelow={onArchiveAllBelow}
-              onArchiveOthers={onArchiveOthers}
-              onOpenLocally={onOpenLocally}
-              onBulkPin={onBulkPin}
-              onBulkUnpin={onBulkUnpin}
-              onBulkArchive={onBulkArchive}
-              archivePending={archivePending}
-              archiveBatchPending={archiveBatchPending}
-              isRemote={chat.isRemote}
-              nameRefCallback={nameRefCallback}
-              formatTime={formatTime}
-              isJustCreated={isJustCreated}
-            />
-          )
-        })}
-      </div>
+      {shouldVirtualize ? (
+        <div
+          className="list-none p-0 m-0 mb-3 relative"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {virtualizer.getVirtualItems().map((virtualItem) => {
+            const chat = chats[virtualItem.index]!
+            return (
+              <div
+                key={chat.id}
+                data-index={virtualItem.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${virtualItem.start}px)`,
+                }}
+              >
+                {renderChatItem(chat, virtualItem.index)}
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="list-none p-0 m-0 mb-3">
+          {chats.map((chat, index) => renderChatItem(chat, index))}
+        </div>
+      )}
     </>
   )
 }, chatListSectionPropsAreEqual)
@@ -1075,156 +1108,157 @@ const ArchiveButton = memo(forwardRef<HTMLButtonElement, React.ButtonHTMLAttribu
   }
 ))
 
-// Isolated Kanban Button - clears selection to show Kanban view
-const KanbanButton = memo(function KanbanButton() {
-  const kanbanEnabled = useAtomValue(betaKanbanEnabledAtom)
-  const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
-  const setSelectedDraftId = useSetAtom(selectedDraftIdAtom)
-  const setShowNewChatForm = useSetAtom(showNewChatFormAtom)
-  const setDesktopView = useSetAtom(desktopViewAtom)
+// Usage Button - shows Claude subscription usage popover
+const UsageButton = memo(function UsageButton() {
+  const [open, setOpen] = useState(false)
+  const [blockTooltip, setBlockTooltip] = useState(false)
+  const prevOpen = useRef(false)
 
-  // Resolved hotkey for tooltip (respects custom bindings)
-  const openKanbanHotkey = useResolvedHotkeyDisplay("open-kanban")
+  const { data, isFetching, refetch } = trpc.claude.getUsage.useQuery(undefined, {
+    enabled: open,
+    staleTime: 60_000,
+    retry: false,
+  })
 
-  const handleClick = useCallback(() => {
-    // Clear selected chat, draft, and new form state to show Kanban view
-    setSelectedChatId(null)
-    setSelectedDraftId(null)
-    setShowNewChatForm(false)
-    setDesktopView(null) // Clear automations/inbox view
-  }, [setSelectedChatId, setSelectedDraftId, setShowNewChatForm, setDesktopView])
+  useEffect(() => {
+    if (prevOpen.current && !open) {
+      setBlockTooltip(true)
+      const timer = setTimeout(() => setBlockTooltip(false), 300)
+      prevOpen.current = false
+      return () => clearTimeout(timer)
+    }
+    prevOpen.current = open
+  }, [open])
 
-  // Hide button if feature is disabled
-  if (!kanbanEnabled) return null
+  const formatResetTime = (resetsAt: string) => {
+    const date = new Date(resetsAt)
+    const now = new Date()
+    const diffMs = date.getTime() - now.getTime()
+    if (diffMs <= 0) return "soon"
+    const diffH = Math.floor(diffMs / (1000 * 60 * 60))
+    const diffM = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
+    if (diffH > 0) return `${diffH}h ${diffM}m`
+    return `${diffM}m`
+  }
+
+  const hasUsageData = data && !("error" in data)
 
   return (
-    <Tooltip delayDuration={500}>
+    <Tooltip delayDuration={500} open={open || blockTooltip ? false : undefined}>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={handleClick}
-          className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
-        >
-          <Columns3 className="h-4 w-4" />
-        </button>
+        <div>
+          <DropdownMenu open={open} onOpenChange={setOpen}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
+              >
+                <BarChart2 className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+
+            <DropdownMenuContent side="top" align="start" className="w-64 p-3" onCloseAutoFocus={(e) => e.preventDefault()}>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium text-foreground">Claude Usage</span>
+                <button
+                  type="button"
+                  onClick={() => refetch()}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  disabled={isFetching}
+                >
+                  <RefreshCw className={cn("h-3 w-3", isFetching && "animate-spin")} />
+                </button>
+              </div>
+
+              {isFetching && !hasUsageData && (
+                <div className="flex items-center justify-center py-4">
+                  <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+
+              {data && "error" in data && (
+                <div className="text-xs text-muted-foreground py-2 text-center">
+                  {data.error === "not_authenticated"
+                    ? "Not signed in to Claude"
+                    : data.error === "rate_limited"
+                      ? "Rate limited — try again in a moment"
+                      : "Could not load usage data"}
+                </div>
+              )}
+
+              {hasUsageData && (
+                <div className="flex flex-col gap-3">
+                  {data.fiveHour !== null && (
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">5-hour window</span>
+                        <span className="text-xs font-medium tabular-nums">
+                          {Math.round(data.fiveHour.utilization)}%
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all duration-500",
+                            data.fiveHour.utilization >= 90
+                              ? "bg-destructive"
+                              : data.fiveHour.utilization >= 70
+                                ? "bg-amber-500"
+                                : "bg-primary",
+                          )}
+                          style={{ width: `${Math.min(100, data.fiveHour.utilization)}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] text-muted-foreground/70">
+                        Resets in {formatResetTime(data.fiveHour.resetsAt)}
+                      </span>
+                    </div>
+                  )}
+
+                  {data.sevenDay !== null && (
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">7-day window</span>
+                        <span className="text-xs font-medium tabular-nums">
+                          {Math.round(data.sevenDay.utilization)}%
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all duration-500",
+                            data.sevenDay.utilization >= 90
+                              ? "bg-destructive"
+                              : data.sevenDay.utilization >= 70
+                                ? "bg-amber-500"
+                                : "bg-primary",
+                          )}
+                          style={{ width: `${Math.min(100, data.sevenDay.utilization)}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] text-muted-foreground/70">
+                        Resets in {formatResetTime(data.sevenDay.resetsAt)}
+                      </span>
+                    </div>
+                  )}
+
+                  {data.fiveHour === null && data.sevenDay === null && (
+                    <div className="text-xs text-muted-foreground py-2 text-center">
+                      No usage data available
+                    </div>
+                  )}
+                </div>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </TooltipTrigger>
-      <TooltipContent>
-        Kanban View
-        {openKanbanHotkey && <Kbd>{openKanbanHotkey}</Kbd>}
-      </TooltipContent>
+      <TooltipContent>Usage</TooltipContent>
     </Tooltip>
   )
 })
 
 // Custom SVG icons matching web's icons.tsx
-function SidebarInboxIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...props}>
-      <path
-        d="M3 12H7.5C8.12951 12 8.72229 12.2964 9.1 12.8L9.4 13.2C9.77771 13.7036 10.3705 14 11 14H13C13.6295 14 14.2223 13.7036 14.6 13.2L14.9 12.8C15.2777 12.2964 15.8705 12 16.5 12H21M21.7365 11.5389L18.5758 6.00772C18.2198 5.38457 17.5571 5 16.8394 5H7.16065C6.44293 5 5.78024 5.38457 5.42416 6.00772L2.26351 11.5389C2.09083 11.841 2 12.1831 2 12.5311V17C2 18.1046 2.89543 19 4 19H20C21.1046 19 22 18.1046 22 17V12.5311C22 12.1831 21.9092 11.841 21.7365 11.5389Z"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
-function SidebarAutomationsIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...props}>
-      <path
-        d="M9.50006 5.39844C7.09268 6.1897 5.1897 8.09268 4.39844 10.5001M19.8597 14.5001C19.9518 14.0142 20.0001 13.5128 20.0001 13.0001C20.0001 10.9895 19.2584 9.1522 18.0337 7.74679M6.70841 19.0001C8.11868 20.2448 9.97117 21.0001 12.0001 21.0001C12.5127 21.0001 13.0141 20.9518 13.5 20.8597"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx="12" cy="5" r="2.5" stroke="currentColor" strokeWidth="2" />
-      <circle cx="20" cy="17" r="2.5" stroke="currentColor" strokeWidth="2" />
-      <circle cx="4" cy="17" r="2.5" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  )
-}
-
-// Isolated Inbox Button - full-width navigation link matching web layout
-const InboxButton = memo(function InboxButton() {
-  const automationsEnabled = useAtomValue(betaAutomationsEnabledAtom)
-  const desktopView = useAtomValue(desktopViewAtom)
-  const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
-  const setSelectedDraftId = useSetAtom(selectedDraftIdAtom)
-  const setShowNewChatForm = useSetAtom(showNewChatFormAtom)
-  const setDesktopView = useSetAtom(desktopViewAtom)
-  const teamId = useAtomValue(selectedTeamIdAtom)
-
-  const { data: unreadData } = useQuery({
-    queryKey: ["automations", "inboxUnreadCount", teamId],
-    queryFn: () => remoteTrpc.automations.getInboxUnreadCount.query({ teamId: teamId! }),
-    enabled: !!teamId && automationsEnabled,
-    refetchInterval: 30_000,
-  })
-  const inboxUnreadCount = unreadData?.count ?? 0
-
-  const handleClick = useCallback(() => {
-    setSelectedChatId(null)
-    setSelectedDraftId(null)
-    setShowNewChatForm(false)
-    setDesktopView("inbox")
-  }, [setSelectedChatId, setSelectedDraftId, setShowNewChatForm, setDesktopView])
-
-  if (!automationsEnabled) return null
-
-  const isActive = desktopView === "inbox"
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      className={cn(
-        "flex items-center gap-2.5 w-full pl-2 pr-2 py-1.5 rounded-md text-sm transition-colors duration-150",
-        isActive
-          ? "bg-foreground/5 text-foreground"
-          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-      )}
-    >
-      <SidebarInboxIcon className="h-4 w-4" />
-      <span className="flex-1 text-left">Inbox</span>
-      {inboxUnreadCount > 0 && (
-        <span className="bg-muted text-muted-foreground text-xs font-medium px-1.5 py-0.5 rounded-md min-w-[20px] text-center">
-          {inboxUnreadCount > 99 ? "99+" : inboxUnreadCount}
-        </span>
-      )}
-    </button>
-  )
-})
-
-// Isolated Automations Button - full-width navigation link matching web layout
-const AutomationsButton = memo(function AutomationsButton() {
-  const automationsEnabled = useAtomValue(betaAutomationsEnabledAtom)
-
-  const handleClick = useCallback(() => {
-    window.desktopApi.openExternal("https://github.com") // TODO: Set 2Code automations URL
-  }, [])
-
-  if (!automationsEnabled) return null
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      className={cn(
-        "group flex items-center gap-2.5 w-full pl-2 pr-2 py-1.5 rounded-md text-sm transition-colors duration-150",
-        "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-      )}
-    >
-      <SidebarAutomationsIcon className="h-4 w-4" />
-      <span className="flex-1 text-left">Automations</span>
-      <ArrowUpRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
-    </button>
-  )
-})
-
 // Isolated Archive Section - subscribes to archivePopoverOpenAtom internally
 // to prevent sidebar re-renders when popover opens/closes
 interface ArchiveSectionProps {
@@ -1447,46 +1481,6 @@ const SidebarHeader = memo(function SidebarHeader({
                       Settings
                     </DropdownMenuItem>
 
-                    {/* Help Submenu */}
-                    <DropdownMenuSub>
-                      <DropdownMenuSubTrigger className="gap-2">
-                        <QuestionCircleIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                        <span className="flex-1">Help</span>
-                      </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent
-                        className="w-36"
-                        sideOffset={6}
-                        alignOffset={-4}
-                      >
-                        <DropdownMenuItem
-                          onSelect={() => {
-                            window.open(
-                              "https://discord.gg/8ektTZGnj4",
-                              "_blank",
-                            )
-                            setIsDropdownOpen(false)
-                          }}
-                          className="gap-2"
-                        >
-                          <DiscordIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span className="flex-1">Discord</span>
-                        </DropdownMenuItem>
-                        {!isMobileFullscreen && (
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              setIsDropdownOpen(false)
-                              setSettingsActiveTab("keyboard")
-                              setSettingsDialogOpen(true)
-                            }}
-                            className="gap-2"
-                          >
-                            <KeyboardIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                            <span className="flex-1">Shortcuts</span>
-                          </DropdownMenuItem>
-                        )}
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-
                     <DropdownMenuSeparator />
 
                     {/* Log out */}
@@ -1546,47 +1540,6 @@ const SidebarHeader = memo(function SidebarHeader({
                       </DropdownMenuItem>
                     </div>
 
-                    <DropdownMenuSeparator />
-
-                    {/* Help Submenu */}
-                    <DropdownMenuSub>
-                      <DropdownMenuSubTrigger className="gap-2">
-                        <QuestionCircleIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                        <span className="flex-1">Help</span>
-                      </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent
-                        className="w-36"
-                        sideOffset={6}
-                        alignOffset={-4}
-                      >
-                        <DropdownMenuItem
-                          onSelect={() => {
-                            window.open(
-                              "https://discord.gg/8ektTZGnj4",
-                              "_blank",
-                            )
-                            setIsDropdownOpen(false)
-                          }}
-                          className="gap-2"
-                        >
-                          <DiscordIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span className="flex-1">Discord</span>
-                        </DropdownMenuItem>
-                        {!isMobileFullscreen && (
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              setIsDropdownOpen(false)
-                              setSettingsActiveTab("keyboard")
-                              setSettingsDialogOpen(true)
-                            }}
-                            className="gap-2"
-                          >
-                            <KeyboardIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                            <span className="flex-1">Shortcuts</span>
-                          </DropdownMenuItem>
-                        )}
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
                   </>
                 )}
               </DropdownMenuContent>
@@ -1595,58 +1548,6 @@ const SidebarHeader = memo(function SidebarHeader({
         </div>
       </div>
     </div>
-  )
-})
-
-// Isolated Help Section - subscribes to agentsHelpPopoverOpenAtom internally
-// to prevent sidebar re-renders when popover opens/closes
-interface HelpSectionProps {
-  isMobile: boolean
-}
-
-const HelpSection = memo(function HelpSection({ isMobile }: HelpSectionProps) {
-  const [helpPopoverOpen, setHelpPopoverOpen] = useAtom(agentsHelpPopoverOpenAtom)
-  const [blockHelpTooltip, setBlockHelpTooltip] = useState(false)
-  const prevHelpPopoverOpen = useRef(false)
-  const helpButtonRef = useRef<HTMLButtonElement>(null)
-
-  // Handle tooltip blocking when popover closes
-  useEffect(() => {
-    if (prevHelpPopoverOpen.current && !helpPopoverOpen) {
-      helpButtonRef.current?.blur()
-      setBlockHelpTooltip(true)
-      const timer = setTimeout(() => setBlockHelpTooltip(false), 300)
-      prevHelpPopoverOpen.current = helpPopoverOpen
-      return () => clearTimeout(timer)
-    }
-    prevHelpPopoverOpen.current = helpPopoverOpen
-  }, [helpPopoverOpen])
-
-  return (
-    <Tooltip
-      delayDuration={500}
-      open={helpPopoverOpen || blockHelpTooltip ? false : undefined}
-    >
-      <TooltipTrigger asChild>
-        <div>
-          <AgentsHelpPopover
-            open={helpPopoverOpen}
-            onOpenChange={setHelpPopoverOpen}
-            isMobile={isMobile}
-          >
-            <button
-              ref={helpButtonRef}
-              type="button"
-              className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
-              suppressHydrationWarning
-            >
-              <QuestionCircleIcon className="h-4 w-4" />
-            </button>
-          </AgentsHelpPopover>
-        </div>
-      </TooltipTrigger>
-      <TooltipContent>Help</TooltipContent>
-    </Tooltip>
   )
 })
 
@@ -3132,66 +3033,9 @@ export function AgentsSidebar({
         closeButtonRef={closeButtonRef}
       />
 
-      {/* Search and New Workspace */}
+      {/* New Workspace Button */}
       <div className="px-2 pb-3 flex-shrink-0">
         <div className="space-y-2">
-          {/* Search Input */}
-          <div className="relative">
-            <Input
-              ref={searchInputRef}
-              placeholder="Search workspaces..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault()
-                  searchInputRef.current?.blur()
-                  setFocusedChatIndex(-1) // Reset focus
-                  return
-                }
-
-                if (e.key === "ArrowDown") {
-                  e.preventDefault()
-                  setFocusedChatIndex((prev) => {
-                    // If no focus yet, start from first item
-                    if (prev === -1) return 0
-                    // Otherwise move down
-                    return prev < filteredChats.length - 1 ? prev + 1 : prev
-                  })
-                  return
-                }
-
-                if (e.key === "ArrowUp") {
-                  e.preventDefault()
-                  setFocusedChatIndex((prev) => {
-                    // If no focus yet, start from last item
-                    if (prev === -1) return filteredChats.length - 1
-                    // Otherwise move up
-                    return prev > 0 ? prev - 1 : prev
-                  })
-                  return
-                }
-
-                if (e.key === "Enter") {
-                  e.preventDefault()
-                  // Only open if something is focused (not -1)
-                  if (focusedChatIndex >= 0) {
-                    const focusedChat = filteredChats[focusedChatIndex]
-                    if (focusedChat) {
-                      handleChatClick(focusedChat.id)
-                      searchInputRef.current?.blur()
-                      setFocusedChatIndex(-1) // Reset focus after selection
-                    }
-                  }
-                  return
-                }
-              }}
-              className={cn(
-                "w-full rounded-lg text-sm bg-muted border border-input placeholder:text-muted-foreground/40",
-                isMobileFullscreen ? "h-10" : "h-7",
-              )}
-            />
-          </div>
           {/* New Workspace Button */}
           <Tooltip delayDuration={500}>
             <TooltipTrigger asChild>
@@ -3218,12 +3062,6 @@ export function AgentsSidebar({
             </TooltipContent>
           </Tooltip>
         </div>
-      </div>
-
-      {/* Navigation Links - Inbox & Automations */}
-      <div className="px-2 pb-3 flex-shrink-0 space-y-0.5 -mx-1">
-        <InboxButton />
-        <AutomationsButton />
       </div>
 
       {/* Scrollable Agents List */}
@@ -3319,10 +3157,11 @@ export function AgentsSidebar({
                 justCreatedIds={justCreatedIds}
               />
 
-              {/* Unpinned section */}
+              {/* Unpinned section - virtualized when 50+ items */}
               <ChatListSection
                 title={pinnedAgents.length > 0 ? "Recent workspaces" : "Workspaces"}
                 chats={unpinnedAgents}
+                scrollContainerRef={scrollContainerRef}
                 selectedChatId={selectedChatId}
                 selectedChatIsRemote={selectedChatIsRemote}
                 focusedChatIndex={focusedChatIndex}
@@ -3453,11 +3292,8 @@ export function AgentsSidebar({
                   <TooltipContent>Settings{settingsHotkey && <> <Kbd>{settingsHotkey}</Kbd></>}</TooltipContent>
                 </Tooltip>
 
-                {/* Help Button - isolated component to prevent sidebar re-renders */}
-                <HelpSection isMobile={isMobileFullscreen} />
-
-                {/* Kanban View Button - isolated component */}
-                <KanbanButton />
+                {/* Usage Button - shows Claude subscription usage */}
+                <UsageButton />
 
                 {/* Archive Button - isolated component to prevent sidebar re-renders */}
                 <ArchiveSection archivedChatsCount={archivedChatsCount} />
@@ -3466,18 +3302,6 @@ export function AgentsSidebar({
               <div className="flex-1" />
             </div>
 
-            {/* Feedback Button */}
-            <ButtonCustom
-              onClick={() => window.open(FEEDBACK_URL, "_blank")}
-              variant="outline"
-              size="sm"
-              className={cn(
-                "px-2 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg gap-1.5",
-                isMobileFullscreen ? "h-10" : "h-7",
-              )}
-            >
-              <span className="text-sm font-medium">Feedback</span>
-            </ButtonCustom>
           </motion.div>
         )}
       </AnimatePresence>
