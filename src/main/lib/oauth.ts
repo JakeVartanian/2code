@@ -47,8 +47,8 @@ export interface OAuthCallbacks {
 const CALLBACK_PORT = 8914;
 const CALLBACK_PATH = '/callback';
 // Client names for OAuth registration
-// Some MCP servers (like Figma) have an allowlist - try '1code' first, fall back to 'Codex'
-const CLIENT_NAME = '1code';
+// Some MCP servers (like Figma) have an allowlist - try '2code' first, fall back to 'Codex'
+const CLIENT_NAME = '2code';
 const FALLBACK_CLIENT_NAME = 'Codex';
 
 /**
@@ -798,7 +798,7 @@ export class CraftOAuth {
       }
     } else {
       // No registration endpoint - use default client ID
-      clientId = '1code';
+      clientId = '2code';
     }
 
     const pkce = generatePKCE();

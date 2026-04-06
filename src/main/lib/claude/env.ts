@@ -24,6 +24,10 @@ const STRIPPED_ENV_KEYS_BASE = [
   "OPENAI_API_KEY",
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
+  // Strip CLAUDECODE so the child Claude process doesn't detect a nested session
+  // and refuse to start. The parent Electron process may have this set if launched
+  // from within a Claude Code session (e.g. during development).
+  "CLAUDECODE",
 ]
 
 // In dev mode, also strip ANTHROPIC_API_KEY so OAuth token is used instead

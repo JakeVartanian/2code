@@ -1,8 +1,8 @@
 {
-  "name": "21st-desktop",
+  "name": "2code",
   "version": "0.0.72",
   "private": true,
-  "description": "1Code - UI for parallel work with AI agents",
+  "description": "2Code - UI for parallel work with AI agents",
   "homepage": "https://21st.dev",
   "author": {
     "name": "21st.dev",
@@ -141,13 +141,13 @@
   },
   "build": {
     "appId": "dev.21st.agents",
-    "productName": "1Code",
+    "productName": "2Code",
     "npmRebuild": true,
     "protocols": [
       {
-        "name": "1Code",
+        "name": "2Code",
         "schemes": [
-          "twentyfirst-agents"
+          "2code"
         ]
       }
     ],
@@ -207,7 +207,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "1Code needs microphone access for voice dictation"
+        "NSMicrophoneUsageDescription": "2Code needs microphone access for voice dictation"
       }
     },
     "dmg": {

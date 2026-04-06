@@ -98,12 +98,12 @@ export function AgentsHelpPopover({
   }
 
   const handleChangelogClick = () => {
-    window.desktopApi.openExternal("https://1code.dev/agents/changelog")
+    window.desktopApi.openExternal("https://2code.dev/agents/changelog")
   }
 
   const handleReleaseClick = (version: string) => {
     window.desktopApi.openExternal(
-      `https://1code.dev/agents/changelog#${version}`,
+      `https://2code.dev/agents/changelog#${version}`,
     )
   }
 
