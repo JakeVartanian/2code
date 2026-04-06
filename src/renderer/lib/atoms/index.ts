@@ -270,6 +270,22 @@ export const openaiApiKeyAtom = atomWithStorage<string>(
   { getOnInit: true },
 )
 
+// OpenRouter API key for fetching and using OpenRouter models
+export const openRouterApiKeyAtom = atomWithStorage<string>(
+  "agents:openrouter-api-key",
+  "",
+  undefined,
+  { getOnInit: true },
+)
+
+// Whether to show only free OpenRouter models
+export const openRouterFreeOnlyAtom = atomWithStorage<boolean>(
+  "agents:openrouter-free-only",
+  false,
+  undefined,
+  { getOnInit: true },
+)
+
 // New: Model profiles storage
 export const modelProfilesAtom = atomWithStorage<ModelProfile[]>(
   "agents:model-profiles",
@@ -752,6 +768,7 @@ export type BillingMethod =
   | "claude-subscription"
   | "api-key"
   | "custom-model"
+  | "openrouter"
   | "codex-subscription"
   | "codex-api-key"
   | null
@@ -764,7 +781,7 @@ export const billingMethodAtom = atomWithStorage<BillingMethod>(
 )
 
 // Whether user has completed Anthropic OAuth during onboarding
-// This is used to show the onboarding screen after 21st.dev sign-in
+// This is used to show the onboarding screen after sign-in
 // Reset on logout
 export const anthropicOnboardingCompletedAtom = atomWithStorage<boolean>(
   "onboarding:anthropic-completed",

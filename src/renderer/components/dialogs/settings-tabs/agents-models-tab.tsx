@@ -1,19 +1,17 @@
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { ChevronDown, MoreHorizontal, Plus, Trash2 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import {
   agentsLoginModalOpenAtom,
   claudeLoginModalConfigAtom,
-  codexApiKeyAtom,
   codexLoginModalOpenAtom,
   codexOnboardingAuthMethodAtom,
   codexOnboardingCompletedAtom,
-  customClaudeConfigAtom,
   hiddenModelsAtom,
-  normalizeCodexApiKey,
   openaiApiKeyAtom,
-  type CustomClaudeConfig,
+  openRouterApiKeyAtom,
+  openRouterFreeOnlyAtom,
 } from "../../../lib/atoms"
 import { ClaudeCodeIcon, CodexIcon, SearchIcon } from "../../ui/icons"
 import { CLAUDE_MODELS, CODEX_MODELS } from "../../../features/agents/lib/models"
@@ -50,12 +48,6 @@ function useIsNarrowScreen(): boolean {
   }, [])
 
   return isNarrow
-}
-
-const EMPTY_CONFIG: CustomClaudeConfig = {
-  model: "",
-  token: "",
-  baseUrl: "",
 }
 
 // Account row component
@@ -261,10 +253,6 @@ function AnthropicAccountsSection() {
 }
 
 export function AgentsModelsTab() {
-  const [storedConfig, setStoredConfig] = useAtom(customClaudeConfigAtom)
-  const [model, setModel] = useState(storedConfig.model)
-  const [baseUrl, setBaseUrl] = useState(storedConfig.baseUrl)
-  const [token, setToken] = useState(storedConfig.token)
   const setClaudeLoginModalConfig = useSetAtom(claudeLoginModalConfigAtom)
   const setClaudeLoginModalOpen = useSetAtom(agentsLoginModalOpenAtom)
   const setCodexLoginModalOpen = useSetAtom(codexLoginModalOpenAtom)
@@ -275,10 +263,6 @@ export function AgentsModelsTab() {
   const { data: codexIntegration, isLoading: isCodexLoading } =
     trpc.codex.getIntegration.useQuery()
 
-  // OpenAI API key state
-  const [storedCodexApiKey, setStoredCodexApiKey] = useAtom(codexApiKeyAtom)
-  const [codexApiKey, setCodexApiKey] = useState(storedCodexApiKey)
-  const [isSavingCodexApiKey, setIsSavingCodexApiKey] = useState(false)
   const codexOnboardingCompleted = useAtomValue(codexOnboardingCompletedAtom)
   const codexOnboardingAuthMethod = useAtomValue(codexOnboardingAuthMethodAtom)
   const [storedOpenAIKey, setStoredOpenAIKey] = useAtom(openaiApiKeyAtom)
@@ -288,60 +272,8 @@ export function AgentsModelsTab() {
   const trpcUtils = trpc.useUtils()
 
   useEffect(() => {
-    setModel(storedConfig.model)
-    setBaseUrl(storedConfig.baseUrl)
-    setToken(storedConfig.token)
-  }, [storedConfig.model, storedConfig.baseUrl, storedConfig.token])
-
-  useEffect(() => {
     setOpenaiKey(storedOpenAIKey)
   }, [storedOpenAIKey])
-
-  useEffect(() => {
-    setCodexApiKey(storedCodexApiKey)
-  }, [storedCodexApiKey])
-
-  const savedConfigRef = useRef(storedConfig)
-
-  const handleBlurSave = useCallback(() => {
-    const trimmedModel = model.trim()
-    const trimmedBaseUrl = baseUrl.trim()
-    const trimmedToken = token.trim()
-
-    // Only save if all fields are filled
-    if (trimmedModel && trimmedBaseUrl && trimmedToken) {
-      const next: CustomClaudeConfig = {
-        model: trimmedModel,
-        token: trimmedToken,
-        baseUrl: trimmedBaseUrl,
-      }
-      if (
-        next.model !== savedConfigRef.current.model ||
-        next.token !== savedConfigRef.current.token ||
-        next.baseUrl !== savedConfigRef.current.baseUrl
-      ) {
-        setStoredConfig(next)
-        savedConfigRef.current = next
-      }
-    } else if (!trimmedModel && !trimmedBaseUrl && !trimmedToken) {
-      // All cleared — reset
-      if (savedConfigRef.current.model || savedConfigRef.current.token || savedConfigRef.current.baseUrl) {
-        setStoredConfig(EMPTY_CONFIG)
-        savedConfigRef.current = EMPTY_CONFIG
-      }
-    }
-  }, [model, baseUrl, token, setStoredConfig])
-
-  const handleReset = () => {
-    setStoredConfig(EMPTY_CONFIG)
-    savedConfigRef.current = EMPTY_CONFIG
-    setModel("")
-    setBaseUrl("")
-    setToken("")
-    toast.success("Model settings reset")
-  }
-
-  const canReset = Boolean(model.trim() || baseUrl.trim() || token.trim())
 
   const handleClaudeCodeSetup = () => {
     setClaudeLoginModalConfig({
@@ -372,15 +304,12 @@ export function AgentsModelsTab() {
     }
   }
 
-  const normalizedStoredCodexApiKey = normalizeCodexApiKey(storedCodexApiKey)
-  const hasAppCodexApiKey = Boolean(normalizedStoredCodexApiKey)
   const hasLocalCodexSubscription =
     codexOnboardingCompleted && codexOnboardingAuthMethod === "chatgpt"
   const isCodexSubscriptionConnected =
     codexIntegration?.state === "connected_chatgpt" ||
     (!codexIntegration && hasLocalCodexSubscription)
-  const isCodexSubscriptionActive =
-    isCodexSubscriptionConnected && !hasAppCodexApiKey
+  const isCodexSubscriptionActive = isCodexSubscriptionConnected
   const [hiddenModels, setHiddenModels] = useAtom(hiddenModelsAtom)
 
   const toggleModelVisibility = useCallback((modelId: string) => {
@@ -400,58 +329,11 @@ export function AgentsModelsTab() {
         ? "Not connected"
         : "Status unavailable"
   const showCodexLoading =
-    isCodexLoading && !hasAppCodexApiKey && !hasLocalCodexSubscription
+    isCodexLoading && !hasLocalCodexSubscription
 
   // OpenAI key handlers
   const trimmedOpenAIKey = openaiKey.trim()
   const canResetOpenAI = !!trimmedOpenAIKey
-
-  const handleCodexApiKeyBlur = async () => {
-    const trimmedKey = codexApiKey.trim()
-
-    if (trimmedKey === storedCodexApiKey) return
-    if (!trimmedKey) return
-
-    const normalized = normalizeCodexApiKey(trimmedKey)
-    if (!normalized) {
-      toast.error("Invalid Codex API key format. Key should start with 'sk-'")
-      setCodexApiKey(storedCodexApiKey)
-      return
-    }
-
-    setIsSavingCodexApiKey(true)
-    try {
-      setStoredCodexApiKey(normalized)
-      setCodexApiKey(normalized)
-      await trpcUtils.codex.getIntegration.invalidate()
-      toast.success("Codex API key saved")
-    } catch {
-      toast.error("Failed to save Codex API key")
-    } finally {
-      setIsSavingCodexApiKey(false)
-    }
-  }
-
-  const handleRemoveCodexApiKey = async () => {
-    setIsSavingCodexApiKey(true)
-    try {
-      setStoredCodexApiKey("")
-      setCodexApiKey("")
-
-      if (codexIntegration?.state === "connected_api_key") {
-        await codexLogoutMutation.mutateAsync().catch(() => {
-          toast.error("Codex API key removed, but failed to log out Codex CLI")
-        })
-      }
-
-      await trpcUtils.codex.getIntegration.invalidate()
-      toast.success("Codex API key removed")
-    } catch {
-      toast.error("Failed to remove Codex API key")
-    } finally {
-      setIsSavingCodexApiKey(false)
-    }
-  }
 
   const handleSaveOpenAI = async () => {
     if (trimmedOpenAIKey === storedOpenAIKey) return // No change
@@ -501,6 +383,69 @@ export function AgentsModelsTab() {
     const q = modelSearch.toLowerCase().trim()
     return allModels.filter((m) => m.name.toLowerCase().includes(q))
   }, [allModels, modelSearch])
+
+  // OpenRouter state
+  const [storedOpenRouterKey, setStoredOpenRouterKey] = useAtom(openRouterApiKeyAtom)
+  const [openRouterFreeOnly, setOpenRouterFreeOnly] = useAtom(openRouterFreeOnlyAtom)
+  const [openRouterKey, setOpenRouterKey] = useState(storedOpenRouterKey)
+  const [isFetchingOpenRouterModels, setIsFetchingOpenRouterModels] = useState(false)
+  const [openRouterModels, setOpenRouterModels] = useState<{ id: string; name: string; isFree: boolean }[]>([])
+
+  useEffect(() => {
+    setOpenRouterKey(storedOpenRouterKey)
+  }, [storedOpenRouterKey])
+
+  const fetchOpenRouterModels = useCallback(async (apiKey: string) => {
+    if (!apiKey.trim()) return
+    setIsFetchingOpenRouterModels(true)
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey.trim()}` },
+      })
+      if (!res.ok) throw new Error(`OpenRouter API error: ${res.status}`)
+      const data = await res.json() as { data: { id: string; name: string; pricing?: { prompt: string } }[] }
+      const models = data.data.map((m) => ({
+        id: m.id,
+        name: m.name,
+        isFree: m.pricing?.prompt === "0" || m.id.endsWith(":free"),
+      }))
+      setOpenRouterModels(models)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to fetch OpenRouter models")
+    } finally {
+      setIsFetchingOpenRouterModels(false)
+    }
+  }, [])
+
+  const handleOpenRouterKeyBlur = useCallback(async () => {
+    const trimmed = openRouterKey.trim()
+    if (trimmed === storedOpenRouterKey) return
+    setStoredOpenRouterKey(trimmed)
+    if (trimmed) {
+      toast.success("OpenRouter API key saved")
+      await fetchOpenRouterModels(trimmed)
+    }
+  }, [openRouterKey, storedOpenRouterKey, setStoredOpenRouterKey, fetchOpenRouterModels])
+
+  const handleRemoveOpenRouterKey = () => {
+    setStoredOpenRouterKey("")
+    setOpenRouterKey("")
+    setOpenRouterModels([])
+    toast.success("OpenRouter API key removed")
+  }
+
+  // Load OpenRouter models on mount if key is set
+  useEffect(() => {
+    if (storedOpenRouterKey) {
+      void fetchOpenRouterModels(storedOpenRouterKey)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const filteredOpenRouterModels = useMemo(() => {
+    if (!openRouterFreeOnly) return openRouterModels
+    return openRouterModels.filter((m) => m.isFree)
+  }, [openRouterModels, openRouterFreeOnly])
 
   const [isApiKeysOpen, setIsApiKeysOpen] = useState(false)
 
@@ -637,8 +582,7 @@ export function AgentsModelsTab() {
                       onClick={() => void handleCodexSetup()}
                       disabled={
                         isCodexLoading ||
-                        codexLogoutMutation.isPending ||
-                        isSavingCodexApiKey
+                        codexLogoutMutation.isPending
                       }
                     >
                       Connect
@@ -658,47 +602,6 @@ export function AgentsModelsTab() {
           API Keys
         </CollapsibleTrigger>
         <CollapsibleContent className="space-y-4 pt-3">
-          {/* Codex API Key */}
-          <div className="bg-background rounded-lg border border-border overflow-hidden">
-            <div className="flex items-center justify-between gap-6 p-4">
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <Label className="text-sm font-medium">Codex API Key</Label>
-                  {hasAppCodexApiKey && (
-                    <Badge variant="secondary" className="text-xs">
-                      Active
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Takes priority over subscription
-                </p>
-              </div>
-              <div className="flex-shrink-0 w-80 flex items-center gap-2">
-                <Input
-                  type="password"
-                  value={codexApiKey}
-                  onChange={(e) => setCodexApiKey(e.target.value)}
-                  onBlur={handleCodexApiKeyBlur}
-                  className="w-full font-mono"
-                  placeholder="sk-..."
-                />
-                {hasAppCodexApiKey && (
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => void handleRemoveCodexApiKey()}
-                    disabled={isSavingCodexApiKey}
-                    aria-label="Remove Codex API key"
-                    className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-            </div>
-          </div>
-
           {/* OpenAI API Key for Voice Input */}
           <div className="bg-background rounded-lg border border-border overflow-hidden">
             <div className="flex items-center justify-between gap-6 p-4">
@@ -734,74 +637,105 @@ export function AgentsModelsTab() {
             </div>
           </div>
 
-          {/* Override Model */}
+          {/* OpenRouter API Key */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-medium text-foreground">
-                Override Model
-              </h4>
-              {canReset && (
-                <Button variant="ghost" size="sm" onClick={handleReset} className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10">
-                  Reset
-                </Button>
-              )}
-            </div>
             <div className="bg-background rounded-lg border border-border overflow-hidden">
-              <div className="flex items-center justify-between p-4">
+              <div className="flex items-center justify-between gap-6 p-4">
                 <div className="flex-1">
-                  <Label className="text-sm font-medium">Model name</Label>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm font-medium">OpenRouter API Key</Label>
+                    {storedOpenRouterKey && (
+                      <Badge variant="secondary" className="text-xs">
+                        Active
+                      </Badge>
+                    )}
+                  </div>
                   <p className="text-xs text-muted-foreground">
-                    Model identifier to use for requests
+                    Access all OpenRouter models (free &amp; paid)
                   </p>
                 </div>
-                <div className="flex-shrink-0 w-80">
-                  <Input
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    onBlur={handleBlurSave}
-                    className="w-full"
-                    placeholder="claude-3-7-sonnet-20250219"
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between p-4 border-t border-border">
-                <div className="flex-1">
-                  <Label className="text-sm font-medium">API token</Label>
-                  <p className="text-xs text-muted-foreground">
-                    ANTHROPIC_AUTH_TOKEN env
-                  </p>
-                </div>
-                <div className="flex-shrink-0 w-80">
+                <div className="flex-shrink-0 w-80 flex items-center gap-2">
                   <Input
                     type="password"
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    onBlur={handleBlurSave}
-                    className="w-full"
-                    placeholder="sk-ant-..."
+                    value={openRouterKey}
+                    onChange={(e) => setOpenRouterKey(e.target.value)}
+                    onBlur={() => void handleOpenRouterKeyBlur()}
+                    className="w-full font-mono"
+                    placeholder="sk-or-..."
                   />
+                  {storedOpenRouterKey && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={handleRemoveOpenRouterKey}
+                      aria-label="Remove OpenRouter API key"
+                      className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
-              <div className="flex items-center justify-between p-4 border-t border-border">
-                <div className="flex-1">
-                  <Label className="text-sm font-medium">Base URL</Label>
-                  <p className="text-xs text-muted-foreground">
-                    ANTHROPIC_BASE_URL env
-                  </p>
-                </div>
-                <div className="flex-shrink-0 w-80">
-                  <Input
-                    value={baseUrl}
-                    onChange={(e) => setBaseUrl(e.target.value)}
-                    onBlur={handleBlurSave}
-                    className="w-full"
-                    placeholder="https://api.anthropic.com"
+              {/* Free/Paid toggle */}
+              {storedOpenRouterKey && (
+                <div className="flex items-center justify-between px-4 py-3 border-t border-border">
+                  <div className="flex-1">
+                    <Label className="text-sm font-medium">Free models only</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Show only models with no cost
+                    </p>
+                  </div>
+                  <Switch
+                    checked={openRouterFreeOnly}
+                    onCheckedChange={setOpenRouterFreeOnly}
                   />
                 </div>
-              </div>
+              )}
             </div>
+
+            {/* OpenRouter models list */}
+            {storedOpenRouterKey && (
+              <div className="bg-background rounded-lg border border-border overflow-hidden">
+                <div className="px-4 py-2.5 border-b border-border flex items-center justify-between">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    OpenRouter Models
+                  </span>
+                  {isFetchingOpenRouterModels ? (
+                    <span className="text-xs text-muted-foreground">Loading…</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      {filteredOpenRouterModels.length} model{filteredOpenRouterModels.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+                <div className="divide-y divide-border max-h-64 overflow-y-auto">
+                  {filteredOpenRouterModels.length === 0 && !isFetchingOpenRouterModels ? (
+                    <div className="px-4 py-3 text-xs text-muted-foreground">
+                      {openRouterModels.length === 0 ? "No models loaded." : "No free models available."}
+                    </div>
+                  ) : (
+                    filteredOpenRouterModels.map((m) => {
+                      const isEnabled = !hiddenModels.includes(m.id)
+                      return (
+                        <div key={m.id} className="flex items-center justify-between px-4 py-2.5">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-sm truncate">{m.name}</span>
+                            {m.isFree && (
+                              <Badge variant="secondary" className="text-xs shrink-0">Free</Badge>
+                            )}
+                          </div>
+                          <Switch
+                            checked={isEnabled}
+                            onCheckedChange={() => toggleModelVisibility(m.id)}
+                          />
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </CollapsibleContent>
       </Collapsible>
