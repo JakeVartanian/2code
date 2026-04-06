@@ -46,7 +46,7 @@ import {
   getApprovedPluginMcpServers,
   getEnabledPlugins,
 } from "./claude-settings"
-import { getExistingClaudeCredentials } from "../../claude-token"
+import { getExistingClaudeCredentials, refreshClaudeToken, isTokenExpired } from "../../claude-token"
 
 /**
  * Parse @[agent:name], @[skill:name], and @[tool:servername] mentions from prompt text
@@ -788,6 +788,79 @@ export async function getAllMcpConfigHandler() {
   } catch (error) {
     console.error("[getAllMcpConfig] Error:", error)
     return { groups: [], error: String(error) }
+  }
+}
+
+// ============ USAGE API HELPERS ============
+
+const USAGE_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+const usageCache: { data: unknown; fetchedAt: number } = { data: null, fetchedAt: 0 }
+
+type UsageSuccess = {
+  fiveHour: { utilization: number; resetsAt: string } | null
+  sevenDay: { utilization: number; resetsAt: string } | null
+}
+type UsageError = { error: "not_authenticated" | "rate_limited" | "fetch_failed" }
+type UsageResult = UsageSuccess | UsageError
+
+async function callUsageApi(token: string): Promise<{ status: number; data?: unknown }> {
+  const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "anthropic-beta": "oauth-2025-04-20",
+      Accept: "application/json",
+    },
+  })
+  if (!response.ok) {
+    console.log(`[usage] API returned ${response.status}`)
+    return { status: response.status }
+  }
+  return { status: response.status, data: await response.json() }
+}
+
+function parseUsageResponse(data: unknown): UsageSuccess {
+  const d = data as {
+    five_hour?: { utilization: number; resets_at: string }
+    seven_day?: { utilization: number; resets_at: string }
+  }
+  return {
+    fiveHour: d.five_hour
+      ? { utilization: d.five_hour.utilization, resetsAt: d.five_hour.resets_at }
+      : null,
+    sevenDay: d.seven_day
+      ? { utilization: d.seven_day.utilization, resetsAt: d.seven_day.resets_at }
+      : null,
+  }
+}
+
+async function fetchUsageWithRetry(
+  accessToken: string,
+  refreshToken?: string,
+): Promise<UsageResult> {
+  try {
+    const first = await callUsageApi(accessToken)
+
+    if (first.data) return parseUsageResponse(first.data)
+
+    // On 401 or 429, try refreshing (rate limits are per-access-token)
+    if ((first.status === 401 || first.status === 429) && refreshToken) {
+      try {
+        console.log("[usage] Attempting token refresh after", first.status)
+        const refreshed = await refreshClaudeToken(refreshToken)
+        const retry = await callUsageApi(refreshed.accessToken)
+        if (retry.data) return parseUsageResponse(retry.data)
+        if (retry.status === 429) return { error: "rate_limited" }
+      } catch (e) {
+        console.log("[usage] Token refresh failed:", e)
+      }
+    }
+
+    if (first.status === 429) return { error: "rate_limited" }
+    return { error: "fetch_failed" }
+  } catch (e) {
+    console.log("[usage] Fetch error:", e)
+    return { error: "fetch_failed" }
   }
 }
 
@@ -3233,46 +3306,41 @@ ${prompt}
   /**
    * Fetch Claude subscription usage from Anthropic API
    * Returns utilization percentages for 5-hour and 7-day windows
+   *
+   * Uses server-side cache (5 min) to avoid aggressive rate limiting on the
+   * /api/oauth/usage endpoint. On 401/429, attempts token refresh (keychain
+   * creds have refresh tokens) since rate limits are per-access-token.
    */
   getUsage: publicProcedure.query(async () => {
-    const creds = getExistingClaudeCredentials()
-    if (!creds?.accessToken) {
+    // Return cached response if fresh (5 min TTL)
+    if (usageCache.data && Date.now() - usageCache.fetchedAt < USAGE_CACHE_TTL_MS) {
+      return usageCache.data
+    }
+
+    // Resolve token: keychain first (has refresh token), then app DB
+    const keychainCreds = getExistingClaudeCredentials()
+    const appToken = getClaudeCodeToken()
+    let accessToken = keychainCreds?.accessToken ?? appToken
+    if (!accessToken) {
       return { error: "not_authenticated" as const }
     }
 
-    try {
-      const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${creds.accessToken}`,
-          "anthropic-beta": "oauth-2025-04-20",
-          Accept: "application/json",
-        },
-      })
-
-      if (response.status === 429) {
-        return { error: "rate_limited" as const }
+    // If keychain token looks expired, proactively refresh before calling
+    if (keychainCreds && isTokenExpired(keychainCreds.expiresAt) && keychainCreds.refreshToken) {
+      try {
+        const refreshed = await refreshClaudeToken(keychainCreds.refreshToken)
+        accessToken = refreshed.accessToken
+        console.log("[usage] Proactively refreshed expired token")
+      } catch {
+        // Continue with current token — it might still work
       }
-
-      if (!response.ok) {
-        return { error: "fetch_failed" as const }
-      }
-
-      const data = await response.json() as {
-        five_hour?: { utilization: number; resets_at: string }
-        seven_day?: { utilization: number; resets_at: string }
-      }
-
-      return {
-        fiveHour: data.five_hour
-          ? { utilization: data.five_hour.utilization, resetsAt: data.five_hour.resets_at }
-          : null,
-        sevenDay: data.seven_day
-          ? { utilization: data.seven_day.utilization, resetsAt: data.seven_day.resets_at }
-          : null,
-      }
-    } catch {
-      return { error: "fetch_failed" as const }
     }
+
+    const result = await fetchUsageWithRetry(accessToken, keychainCreds?.refreshToken)
+    if (!("error" in result)) {
+      usageCache.data = result
+      usageCache.fetchedAt = Date.now()
+    }
+    return result
   }),
 })

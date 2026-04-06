@@ -384,11 +384,12 @@ export function AgentsModelsTab() {
     toast.success("OpenRouter API key removed")
   }
 
-  // Load OpenRouter models on mount if key is set
+  // Always fetch OpenRouter models when key is present (on mount and key change)
   useEffect(() => {
-    if (storedOpenRouterKey && openRouterModels.length === 0) {
+    if (storedOpenRouterKey) {
       void fetchOpenRouterModels(storedOpenRouterKey)
     }
+  // Only re-run when the key itself changes, not on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedOpenRouterKey])
 
