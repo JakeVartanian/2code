@@ -848,6 +848,10 @@ export const apiKeyOnboardingCompletedAtom = atomWithStorage<boolean>(
   { getOnInit: true },
 )
 
+// Session-only flag: true once the user has clicked Continue on BillingMethodPage this session.
+// Prevents cold-start with stale billingMethod skipping BillingMethodPage.
+export const billingMethodConfirmedAtom = atom(false)
+
 // ============================================
 // MODEL VISIBILITY (hide specific models from selector)
 // ============================================

@@ -19,6 +19,7 @@ import {
   anthropicOnboardingCompletedAtom,
   apiKeyOnboardingCompletedAtom,
   billingMethodAtom,
+  billingMethodConfirmedAtom,
 } from "./lib/atoms"
 import { Logo } from "./components/ui/logo"
 import { appStore } from "./lib/jotai-store"
@@ -144,6 +145,7 @@ function AppContent() {
 
   const billingMethod = useAtomValue(billingMethodAtom)
   const setBillingMethod = useSetAtom(billingMethodAtom)
+  const billingMethodConfirmed = useAtomValue(billingMethodConfirmedAtom)
   const anthropicOnboardingCompleted = useAtomValue(
     anthropicOnboardingCompletedAtom
   )
@@ -226,11 +228,13 @@ function AppContent() {
 
   // Determine which page to show:
   // 1. No billing method selected -> BillingMethodPage
+  // 1b. Billing method is claude-subscription but onboarding not complete AND user hasn't
+  //     confirmed billing this session -> BillingMethodPage (handles stale localStorage on cold start)
   // 2. Claude subscription selected but not completed -> AnthropicOnboardingPage
   // 3. API key or custom model selected but not completed -> ApiKeyOnboardingPage
   // 4. No valid project selected -> SelectRepoPage
   // 5. Otherwise -> AgentsLayout
-  if (!billingMethod) {
+  if (!billingMethod || (billingMethod === "claude-subscription" && !anthropicOnboardingCompleted && !billingMethodConfirmed)) {
     return <BillingMethodPage />
   }
 

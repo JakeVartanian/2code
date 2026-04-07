@@ -12,6 +12,7 @@ import {
 } from "../../components/ui/icons"
 import {
   billingMethodAtom,
+  billingMethodConfirmedAtom,
   type BillingMethod,
 } from "../../lib/atoms"
 import { cn } from "../../lib/utils"
@@ -60,6 +61,7 @@ const billingOptions: BillingOption[] = [
 
 export function BillingMethodPage() {
   const setBillingMethod = useSetAtom(billingMethodAtom)
+  const setBillingMethodConfirmed = useSetAtom(billingMethodConfirmedAtom)
   const [selectedOptionId, setSelectedOptionId] =
     useState<string>("claude-subscription")
 
@@ -70,6 +72,7 @@ export function BillingMethodPage() {
 
   const handleContinue = () => {
     setBillingMethod(selectedOption.method)
+    setBillingMethodConfirmed(true)
   }
 
   return (
