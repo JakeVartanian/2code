@@ -71,7 +71,7 @@ function buildAuthUrl(params: {
   url.searchParams.append("redirect_uri", params.redirectUri)
   // Scopes matching the claude login flow (tR9 from CLI binary)
   // Note: org:create_api_key is included for non-claude.ai console users but may be ignored by claude.ai
-  url.searchParams.append("scope", "user:profile user:inference user:sessions:claude_code user:mcp_servers")
+  url.searchParams.append("scope", "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers")
   url.searchParams.append("code_challenge", params.codeChallenge)
   url.searchParams.append("code_challenge_method", "S256")
   url.searchParams.append("state", params.state)
@@ -99,6 +99,14 @@ export async function handleClaudeCodeOAuthCallback(code: string, state: string)
   }
 
   console.log("[ClaudeCode] Callback received on auth server, exchanging token...")
+  console.log("[ClaudeCode] Token exchange body:", JSON.stringify({
+    grant_type: "authorization_code",
+    code: code.slice(0, 8) + "...",
+    redirect_uri: matchedSession.redirectUri,
+    client_id: CLAUDE_CLIENT_ID,
+    code_verifier: matchedSession.codeVerifier.slice(0, 8) + "...",
+    state: matchedSession.state.slice(0, 8) + "...",
+  }))
 
   try {
     const tokenRes = await fetch(ANTHROPIC_TOKEN_ENDPOINT, {
