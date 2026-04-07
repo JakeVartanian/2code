@@ -646,7 +646,7 @@ export const selectedFullThemeIdAtom = atomWithStorage<string | null>(
  */
 export const systemLightThemeIdAtom = atomWithStorage<string>(
   "preferences:system-light-theme-id",
-  "21st-light", // Default light theme
+  "2code-light", // Default light theme
   undefined,
   { getOnInit: true },
 )
@@ -656,7 +656,7 @@ export const systemLightThemeIdAtom = atomWithStorage<string>(
  */
 export const systemDarkThemeIdAtom = atomWithStorage<string>(
   "preferences:system-dark-theme-id",
-  "21st-dark", // Default dark theme
+  "2code-dark", // Default dark theme
   undefined,
   { getOnInit: true },
 )
@@ -897,7 +897,7 @@ export type SessionInfo = {
 // Persisted to localStorage so MCP tools are visible after page refresh
 // Updated when a new chat session starts
 export const sessionInfoAtom = atomWithStorage<SessionInfo | null>(
-  "21st-session-info",
+  "2code-session-info",
   null,
   undefined,
   { getOnInit: true },

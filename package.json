@@ -4,10 +4,10 @@
   "private": true,
   "description": "2Code - UI for parallel work with AI agents",
   "sideEffects": false,
-  "homepage": "https://21st.dev",
+  "homepage": "https://github.com/JakeVartanian/2code",
   "author": {
-    "name": "21st.dev",
-    "email": "support@21st.dev"
+    "name": "jakev",
+    "email": ""
   },
   "main": "out/main/index.js",
   "scripts": {
@@ -132,7 +132,7 @@
     "vite": "^6.3.4"
   },
   "build": {
-    "appId": "dev.21st.agents",
+    "appId": "dev.jakev.2code",
     "productName": "2Code",
     "npmRebuild": true,
     "protocols": [
@@ -243,7 +243,7 @@
     },
     "publish": {
       "provider": "generic",
-      "url": "https://cdn.21st.dev/releases/desktop"
+      "url": "https://cdn.2code.dev/releases/desktop"
     }
   },
   "pnpm": {

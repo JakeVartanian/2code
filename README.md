@@ -4,7 +4,7 @@
 
 Open-source coding agent client. Run Claude Code, Codex, and more - locally or in the cloud.
 
-By [21st.dev](https://21st.dev) team
+By jakev
 
 ## Highlights
 

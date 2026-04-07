@@ -312,7 +312,7 @@ export function ChangesView({
 
 	const { pr, refetch: refetchPRStatus } = usePRStatus({
 		worktreePath,
-		refetchInterval: 10000,
+		refetchInterval: 30000,
 	});
 
 	const handleRefresh = () => {

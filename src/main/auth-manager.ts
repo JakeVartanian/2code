@@ -79,7 +79,7 @@ export class AuthManager {
     const platform = process.platform
     const arch = process.arch
     const version = app.getVersion()
-    return `21st Desktop ${version} (${platform} ${arch})`
+    return `2Code ${version} (${platform} ${arch})`
   }
 
   /**

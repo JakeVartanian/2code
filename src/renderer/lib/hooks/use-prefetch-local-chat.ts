@@ -6,7 +6,7 @@ export function usePrefetchLocalChat() {
 
   return useCallback(
     (chatId: string) => {
-      utils.chats.get.prefetch({ id: chatId }, { staleTime: 5000 })
+      utils.chats.get.prefetch({ id: chatId }, { staleTime: 10_000 })
     },
     [utils]
   )

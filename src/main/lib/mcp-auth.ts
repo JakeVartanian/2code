@@ -47,9 +47,15 @@ export async function fetchMcpTools(
       requestInit,
     });
 
-    await client.connect(transport);
+    await Promise.race([
+      client.connect(transport),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('[MCP] Connection timeout after 30s')), 30_000)),
+    ]);
 
-    const result = await client.listTools();
+    const result = await Promise.race([
+      client.listTools(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('[MCP] listTools timeout after 30s')), 30_000)),
+    ]);
     const tools = result.tools || [];
 
     console.log(`[MCP] Fetched ${tools.length} tools via SDK`);
@@ -119,8 +125,15 @@ export async function fetchMcpToolsStdio(config: {
       env: { ...safeEnv, ...config.env },
     });
 
-    await client.connect(transport);
-    const result = await client.listTools();
+    await Promise.race([
+      client.connect(transport),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('[MCP] stdio connection timeout after 30s')), 30_000)),
+    ]);
+
+    const result = await Promise.race([
+      client.listTools(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('[MCP] stdio listTools timeout after 30s')), 30_000)),
+    ]);
     const tools = result.tools || [];
 
     console.log(`[MCP] Fetched ${tools.length} tools via stdio`);
@@ -282,6 +295,7 @@ export async function handleMcpOAuthCallback(code: string, state: string): Promi
 
     // 4. Notify renderer (tools will be fetched on demand via tRPC)
     BrowserWindow.getAllWindows().forEach((win) => {
+      if (win.isDestroyed()) return
       win.webContents.send('mcp-auth-completed', {
         serverName: pending.serverName,
         projectPath: pending.projectPath,

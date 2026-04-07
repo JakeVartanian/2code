@@ -803,8 +803,8 @@ const previousMessageState = new Map<string, {
   partsLength: number
   lastPartText: string | undefined
   lastPartState: string | undefined
-  lastPartInputJson: string | undefined
-  metadataJson: string | undefined
+  lastPartInput: unknown
+  metadata: unknown
 }>()
 
 function hasMessageChanged(subChatId: string, msgId: string, msg: Message): boolean {
@@ -817,10 +817,9 @@ function hasMessageChanged(subChatId: string, msgId: string, msg: Message): bool
     partsLength: parts.length,
     lastPartText: lastPart?.text,
     lastPartState: lastPart?.state,
-    lastPartInputJson: lastPart?.input ? JSON.stringify(lastPart.input) : undefined,
-    // Include metadata in change detection to ensure token usage, costs, etc.
-    // appear after stream completion (fixes race condition on fast streams)
-    metadataJson: msg.metadata ? JSON.stringify(msg.metadata) : undefined,
+    // Use reference equality instead of JSON.stringify for perf (~20x/sec during streaming)
+    lastPartInput: lastPart?.input,
+    metadata: msg.metadata,
   }
 
   if (!prev) {
@@ -832,8 +831,8 @@ function hasMessageChanged(subChatId: string, msgId: string, msg: Message): bool
     prev.partsLength !== current.partsLength ||
     prev.lastPartText !== current.lastPartText ||
     prev.lastPartState !== current.lastPartState ||
-    prev.lastPartInputJson !== current.lastPartInputJson ||
-    prev.metadataJson !== current.metadataJson
+    prev.lastPartInput !== current.lastPartInput ||
+    prev.metadata !== current.metadata
 
   if (changed) {
     previousMessageState.set(cacheKey, current)

@@ -4,6 +4,7 @@ import {
   stripEmojis
 } from "../../../components/chat-markdown-renderer"
 import { Button } from "../../../components/ui/button"
+import { SectionErrorBoundary } from "../../../components/ui/error-boundary"
 import {
   AgentIcon,
   AttachIcon,
@@ -2013,6 +2014,27 @@ const ChatViewInner = memo(function ChatViewInner({
 
   // Track chat container height via CSS custom property (no re-renders)
   const chatContainerObserverRef = useRef<ResizeObserver | null>(null)
+
+  // Stable ref callback for chat container — avoids ResizeObserver disconnect/reconnect on re-render
+  const chatContainerRefCallback = useCallback((el: HTMLDivElement | null) => {
+    if (chatContainerObserverRef.current) {
+      chatContainerObserverRef.current.disconnect()
+      chatContainerObserverRef.current = null
+    }
+    chatContainerRef.current = el
+    if (el) {
+      const parent = el.parentElement
+      const observer = new ResizeObserver((entries) => {
+        const { height, width } = entries[0]?.contentRect ?? { height: 0, width: 0 }
+        el.style.setProperty("--chat-container-height", `${height}px`)
+        el.style.setProperty("--chat-container-width", `${width}px`)
+        parent?.style.setProperty("--chat-container-height", `${height}px`)
+        parent?.style.setProperty("--chat-container-width", `${width}px`)
+      })
+      observer.observe(el)
+      chatContainerObserverRef.current = observer
+    }
+  }, [])
 
   // Ref for the inner content wrapper (for ResizeObserver-based scroll-to-bottom)
   const contentWrapperRef = useRef<HTMLDivElement | null>(null)
@@ -4535,34 +4557,7 @@ const ChatViewInner = memo(function ChatViewInner({
 
       {/* Messages */}
       <div
-        ref={(el) => {
-          // Cleanup previous observer
-          if (chatContainerObserverRef.current) {
-            chatContainerObserverRef.current.disconnect()
-            chatContainerObserverRef.current = null
-          }
-
-          chatContainerRef.current = el
-
-          // Setup ResizeObserver for --chat-container-height/width CSS variables
-          // Variables are set on both the element itself and the parent (relative wrapper)
-          // so siblings like ScrollToBottomButton can also access them
-          if (el) {
-            const parent = el.parentElement
-            const observer = new ResizeObserver((entries) => {
-              const { height, width } = entries[0]?.contentRect ?? {
-                height: 0,
-                width: 0,
-              }
-              el.style.setProperty("--chat-container-height", `${height}px`)
-              el.style.setProperty("--chat-container-width", `${width}px`)
-              parent?.style.setProperty("--chat-container-height", `${height}px`)
-              parent?.style.setProperty("--chat-container-width", `${width}px`)
-            })
-            observer.observe(el)
-            chatContainerObserverRef.current = observer
-          }
-        }}
+        ref={chatContainerRefCallback}
         className="flex-1 overflow-y-auto w-full relative allow-text-selection outline-none"
         tabIndex={-1}
         data-chat-container
@@ -4578,22 +4573,24 @@ const ChatViewInner = memo(function ChatViewInner({
             {/* ISOLATED: Messages rendered via Jotai atom subscription
                 Each component subscribes to specific atoms and only re-renders when those change
                 KEY: Force remount on subChatId change to ensure fresh atom reads after syncMessages */}
-            <IsolatedMessagesSection
-              key={subChatId}
-              subChatId={subChatId}
-              chatId={parentChatId}
-              isMobile={isMobile}
-              sandboxSetupStatus={sandboxSetupStatus}
-              stickyTopClass={stickyTopClass}
-              sandboxSetupError={sandboxSetupError}
-              onRetrySetup={onRetrySetup}
-              UserBubbleComponent={AgentUserMessageBubble}
-              ToolCallComponent={AgentToolCall}
-              MessageGroupWrapper={MessageGroup}
-              toolRegistry={AgentToolRegistry}
-              onRollback={handleRollback}
-              onFork={handleForkFromMessage}
-            />
+            <SectionErrorBoundary name="Messages">
+              <IsolatedMessagesSection
+                key={subChatId}
+                subChatId={subChatId}
+                chatId={parentChatId}
+                isMobile={isMobile}
+                sandboxSetupStatus={sandboxSetupStatus}
+                stickyTopClass={stickyTopClass}
+                sandboxSetupError={sandboxSetupError}
+                onRetrySetup={onRetrySetup}
+                UserBubbleComponent={AgentUserMessageBubble}
+                ToolCallComponent={AgentToolCall}
+                MessageGroupWrapper={MessageGroup}
+                toolRegistry={AgentToolRegistry}
+                onRollback={handleRollback}
+                onFork={handleForkFromMessage}
+              />
+            </SectionErrorBoundary>
           </div>
         </div>
       </div>
@@ -7814,43 +7811,45 @@ Make sure to preserve all functionality from both branches when resolving confli
         {/* Unified Details Sidebar - combines all right sidebars into one (rightmost) */}
         {/* Show for both local (worktreePath) and remote (sandboxId) chats */}
         {isUnifiedSidebarEnabled && !isMobileFullscreen && (worktreePath || sandboxId) && (
-          <DetailsSidebar
-            chatId={chatId}
-            worktreePath={worktreePath}
-            planPath={currentPlanPath}
-            mode={currentMode}
-            onBuildPlan={handleApprovePlanFromSidebar}
-            planRefetchTrigger={planEditRefetchTrigger}
-            activeSubChatId={activeSubChatIdForPlan}
-            isPlanSidebarOpen={isPlanSidebarOpen && !!currentPlanPath}
-            isTerminalSidebarOpen={isTerminalSidebarOpen}
-            isDiffSidebarOpen={isDiffSidebarOpen}
-            diffDisplayMode={diffDisplayMode}
-            canOpenDiff={canOpenDiff}
-            setIsDiffSidebarOpen={setIsDiffSidebarOpen}
-            diffStats={diffStats}
-            parsedFileDiffs={parsedFileDiffs}
-            onCommit={worktreePath ? handleCommitChanges : undefined}
-            onCommitAndPush={worktreePath ? handleCommitAndPush : undefined}
-            isCommitting={isCommittingCombined}
-            gitStatus={gitStatus}
-            isGitStatusLoading={isGitStatusLoading}
-            currentBranch={branchData?.current}
-            onExpandTerminal={() => setIsTerminalSidebarOpen(true)}
-            onExpandPlan={() => setIsPlanSidebarOpen(true)}
-            onExpandDiff={() => setIsDiffSidebarOpen(true)}
-            onFileSelect={(filePath) => {
-              // Set the selected file path
-              setSelectedFilePath(filePath)
-              // Set filtered files to just this file
-              setFilteredDiffFiles([filePath])
-              // Open the diff sidebar
-              setIsDiffSidebarOpen(true)
-            }}
-            onOpenFile={setFileViewerPath}
-            remoteInfo={remoteInfo}
-            isRemoteChat={!!remoteInfo}
-          />
+          <SectionErrorBoundary name="Details Sidebar">
+            <DetailsSidebar
+              chatId={chatId}
+              worktreePath={worktreePath}
+              planPath={currentPlanPath}
+              mode={currentMode}
+              onBuildPlan={handleApprovePlanFromSidebar}
+              planRefetchTrigger={planEditRefetchTrigger}
+              activeSubChatId={activeSubChatIdForPlan}
+              isPlanSidebarOpen={isPlanSidebarOpen && !!currentPlanPath}
+              isTerminalSidebarOpen={isTerminalSidebarOpen}
+              isDiffSidebarOpen={isDiffSidebarOpen}
+              diffDisplayMode={diffDisplayMode}
+              canOpenDiff={canOpenDiff}
+              setIsDiffSidebarOpen={setIsDiffSidebarOpen}
+              diffStats={diffStats}
+              parsedFileDiffs={parsedFileDiffs}
+              onCommit={worktreePath ? handleCommitChanges : undefined}
+              onCommitAndPush={worktreePath ? handleCommitAndPush : undefined}
+              isCommitting={isCommittingCombined}
+              gitStatus={gitStatus}
+              isGitStatusLoading={isGitStatusLoading}
+              currentBranch={branchData?.current}
+              onExpandTerminal={() => setIsTerminalSidebarOpen(true)}
+              onExpandPlan={() => setIsPlanSidebarOpen(true)}
+              onExpandDiff={() => setIsDiffSidebarOpen(true)}
+              onFileSelect={(filePath) => {
+                // Set the selected file path
+                setSelectedFilePath(filePath)
+                // Set filtered files to just this file
+                setFilteredDiffFiles([filePath])
+                // Open the diff sidebar
+                setIsDiffSidebarOpen(true)
+              }}
+              onOpenFile={setFileViewerPath}
+              remoteInfo={remoteInfo}
+              isRemoteChat={!!remoteInfo}
+            />
+          </SectionErrorBoundary>
         )}
       </div>
 

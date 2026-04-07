@@ -14,9 +14,9 @@ ROOT_DIR="$(cd "$DESKTOP_DIR/../.." && pwd)"
 VERSION=$(node -p "require('$DESKTOP_DIR/package.json').version")
 TAG="v$VERSION"
 
-PUBLIC_REPO="git@github.com:21st-dev/1code.git"
-PUBLIC_REPO_HTTPS="https://github.com/21st-dev/1code"
-PRIVATE_REPO="21st-dev/21st"
+PUBLIC_REPO="git@github.com:JakeVartanian/2code.git"
+PUBLIC_REPO_HTTPS="https://github.com/JakeVartanian/2code"
+PRIVATE_REPO="JakeVartanian/2code"
 TEMP_DIR="/tmp/1code-sync-$$"
 
 echo "🔄 Syncing desktop app to public repository..."

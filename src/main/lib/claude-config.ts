@@ -215,8 +215,8 @@ export function removeMcpServerConfig(
 
 /**
  * Resolve original project path from a worktree path.
- * Supports legacy (~/.21st/worktrees/{projectId}/{chatId}/) and
- * new format (~/.21st/worktrees/{projectName}/{worktreeFolder}/).
+ * Supports legacy (~/.2code/worktrees/{projectId}/{chatId}/) and
+ * new format (~/.2code/worktrees/{projectName}/{worktreeFolder}/).
  *
  * @param pathToResolve - Either a worktree path or regular project path
  * @returns The original project path, or the input if not a worktree, or null if resolution fails
@@ -224,7 +224,7 @@ export function removeMcpServerConfig(
 export function resolveProjectPathFromWorktree(
   pathToResolve: string
 ): string | null {
-  const worktreeMarker = path.join(".21st", "worktrees")
+  const worktreeMarker = path.join(".2code", "worktrees")
 
   // Normalize for cross-platform (handle both / and \ separators)
   const normalizedPath = pathToResolve.replace(/\\/g, "/")
@@ -237,8 +237,8 @@ export function resolveProjectPathFromWorktree(
 
   try {
     // Extract segments from path structure
-    // Path format: /Users/.../.21st/worktrees/{projectSlug}/{worktreeFolder}
-    const worktreeBase = path.join(os.homedir(), ".21st", "worktrees")
+    // Path format: /Users/.../.2code/worktrees/{projectSlug}/{worktreeFolder}
+    const worktreeBase = path.join(os.homedir(), ".2code", "worktrees")
     const normalizedBase = worktreeBase.replace(/\\/g, "/")
     const relativePath = normalizedPath
       .replace(normalizedBase, "")

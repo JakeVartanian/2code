@@ -741,7 +741,8 @@ export const chatsRouter = router({
       if (!sourceSubChat) throw new Error("Source sub-chat not found")
 
       // 2. Parse messages and find the cutoff point
-      const allMessages = JSON.parse(sourceSubChat.messages || "[]")
+      let allMessages: any[] = []
+      try { allMessages = JSON.parse(sourceSubChat.messages || "[]") } catch { /* corrupted */ }
       let cutoffIndex = allMessages.findIndex(
         (m: any) => m.id === input.messageId,
       )
@@ -908,7 +909,8 @@ export const chatsRouter = router({
       }
 
       // 2. Parse messages and find the target message by sdkMessageUuid
-      const messages = JSON.parse(subChat.messages || "[]")
+      let messages: any[] = []
+      try { messages = JSON.parse(subChat.messages || "[]") } catch { /* corrupted */ }
       const targetIndex = messages.findIndex(
         (m: any) => m.metadata?.sdkMessageUuid === input.sdkMessageUuid,
       )

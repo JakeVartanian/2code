@@ -9,7 +9,7 @@ import {
   initAutoUpdater,
   setupFocusUpdateCheck,
 } from "./lib/auto-updater"
-import { closeDatabase, initDatabase } from "./lib/db"
+import { closeDatabase, initDatabase, cleanupOrphanedSessionDirs } from "./lib/db"
 import {
   getLaunchDirectory,
   isCliInstalled,
@@ -39,7 +39,7 @@ const PROTOCOL = IS_DEV ? "2code-dev" : "2code"
 // This ensures dev and prod have separate instance locks
 if (IS_DEV) {
   const { join } = require("path")
-  const devUserData = join(app.getPath("userData"), "..", "Agents Dev")
+  const devUserData = join(app.getPath("userData"), "..", "2Code Dev")
   app.setPath("userData", devUserData)
   console.log("[Dev] Using separate userData path:", devUserData)
 }
@@ -54,13 +54,13 @@ app.commandLine.appendSwitch("js-flags", "--max-old-space-size=8192")
 // In dev mode, allow override via MAIN_VITE_API_URL env variable
 export function getBaseUrl(): string {
   if (app.isPackaged) {
-    return "https://21st.dev"
+    return "https://github.com/JakeVartanian/2code"
   }
-  return import.meta.env.MAIN_VITE_API_URL || "https://21st.dev"
+  return import.meta.env.MAIN_VITE_API_URL || "https://github.com/JakeVartanian/2code"
 }
 
 export function getAppUrl(): string {
-  return process.env.ELECTRON_RENDERER_URL || "https://21st.dev/agents"
+  return process.env.ELECTRON_RENDERER_URL || "https://github.com/JakeVartanian/2code"
 }
 
 // Auth manager singleton (use the one from auth-manager module)
@@ -538,7 +538,7 @@ if (gotTheLock) {
 
     // Set app user model ID for Windows (different in dev to avoid taskbar conflicts)
     if (process.platform === "win32") {
-      app.setAppUserModelId(IS_DEV ? "dev.21st.2code.dev" : "dev.21st.2code")
+      app.setAppUserModelId(IS_DEV ? "dev.jakev.2code.dev" : "dev.jakev.2code")
     }
 
     console.log(`[App] Starting 2Code${IS_DEV ? " (DEV)" : ""}...`)
@@ -568,7 +568,7 @@ if (gotTheLock) {
       applicationName: "2Code",
       applicationVersion: app.getVersion(),
       version: `Claude Code ${claudeCodeVersion}`,
-      copyright: "Copyright © 2026 21st.dev",
+      copyright: "Copyright © 2026 jakev",
     })
 
     // Track update availability for menu
@@ -808,7 +808,7 @@ if (gotTheLock) {
               label: "Learn More",
               click: async () => {
                 const { shell } = await import("electron")
-                await shell.openExternal("https://21st.dev")
+                await shell.openExternal("https://github.com/JakeVartanian/2code")
               },
             },
           ],
@@ -885,6 +885,8 @@ if (gotTheLock) {
     try {
       initDatabase()
       console.log("[App] Database initialized")
+      // Clean up orphaned session directories in background (non-blocking)
+      cleanupOrphanedSessionDirs()
     } catch (error) {
       console.error("[App] Failed to initialize database:", error)
     }
@@ -947,6 +949,7 @@ if (gotTheLock) {
     event.preventDefault()
     console.log("[App] Shutting down...")
     try {
+      abortAllClaudeSessions()
       cancelAllPendingOAuth()
       await cleanupGitWatchers()
       await closeDatabase()

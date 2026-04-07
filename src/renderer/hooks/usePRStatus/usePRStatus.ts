@@ -22,7 +22,7 @@ interface UsePRStatusResult {
 export function usePRStatus({
 	worktreePath,
 	enabled = true,
-	refetchInterval = 10000,
+	refetchInterval = 30000,
 }: UsePRStatusOptions): UsePRStatusResult {
 	const {
 		data: githubStatus,

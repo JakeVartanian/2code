@@ -4,6 +4,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator"
 import { app } from "electron"
 import { join } from "path"
 import { existsSync, mkdirSync } from "fs"
+import { readdir as readdirAsync, rm as rmAsync } from "fs/promises"
 import * as schema from "./schema"
 
 let db: ReturnType<typeof drizzle<typeof schema>> | null = null
@@ -92,6 +93,41 @@ export function closeDatabase(): void {
     sqlite = null
     db = null
     console.log("[DB] Database connection closed")
+  }
+}
+
+/**
+ * Clean up orphaned claude-sessions directories that no longer have a matching sub-chat in the DB.
+ * Runs async in the background — does not block startup.
+ */
+export async function cleanupOrphanedSessionDirs(): Promise<void> {
+  try {
+    const sessionsDir = join(app.getPath("userData"), "claude-sessions")
+    if (!existsSync(sessionsDir)) return
+
+    const database = getDatabase()
+    const allSubChatIds = new Set(
+      database.select({ id: schema.subChats.id }).from(schema.subChats).all().map((r) => r.id),
+    )
+    // Also include chatIds since Ollama sessions use chatId
+    const allChatIds = new Set(
+      database.select({ id: schema.chats.id }).from(schema.chats).all().map((r) => r.id),
+    )
+
+    const entries = await readdirAsync(sessionsDir, { withFileTypes: true })
+    let removed = 0
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (!allSubChatIds.has(entry.name) && !allChatIds.has(entry.name)) {
+        await rmAsync(join(sessionsDir, entry.name), { recursive: true, force: true })
+        removed++
+      }
+    }
+    if (removed > 0) {
+      console.log(`[DB] Cleaned up ${removed} orphaned claude-session directories`)
+    }
+  } catch (error) {
+    console.error("[DB] Error cleaning up orphaned sessions:", error)
   }
 }
 

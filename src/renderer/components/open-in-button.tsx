@@ -17,7 +17,7 @@ import {
 import { ChevronDown, Copy } from "lucide-react";
 
 // ─── Icon imports ───────────────────────────────────────────────────────────
-import cursorIcon from "../assets/app-icons/cursor.svg";
+import cursorIcon from "../assets/app-icons/cursor.png";
 import finderIcon from "../assets/app-icons/finder.png";
 import zedIcon from "../assets/app-icons/zed.png";
 import sublimeIcon from "../assets/app-icons/sublime.svg";

@@ -57,6 +57,7 @@ export default defineConfig({
       alias: {
         "@": resolve(__dirname, "src/renderer"),
       },
+      dedupe: ["shiki", "@shikijs/core", "@shikijs/engine-javascript"],
     },
     build: {
       rollupOptions: {

@@ -150,11 +150,16 @@ function parseMentions(prompt: string): {
  * Decrypt token using Electron's safeStorage
  */
 function decryptToken(encrypted: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    return Buffer.from(encrypted, "base64").toString("utf-8")
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      return Buffer.from(encrypted, "base64").toString("utf-8")
+    }
+    const buffer = Buffer.from(encrypted, "base64")
+    return safeStorage.decryptString(buffer)
+  } catch (error) {
+    console.error("[decryptToken] Failed to decrypt:", error)
+    return ""
   }
-  const buffer = Buffer.from(encrypted, "base64")
-  return safeStorage.decryptString(buffer)
 }
 
 /**
@@ -2074,7 +2079,7 @@ ${prompt}
                   }
                 },
                 stderr: (data: string) => {
-                  stderrLines.push(data)
+                  if (stderrLines.length < 200) stderrLines.push(data)
                   if (isUsingOllama) {
                     console.error("[Ollama stderr]", data)
                   } else {
@@ -2517,6 +2522,7 @@ ${prompt}
                             if (filePath) {
                               const windows = BrowserWindow.getAllWindows()
                               for (const win of windows) {
+                                if (win.isDestroyed()) continue
                                 win.webContents.send("file-changed", {
                                   filePath,
                                   type: toolPart.type,

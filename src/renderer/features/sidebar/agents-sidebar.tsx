@@ -50,6 +50,7 @@ import { AgentsRenameSubChatDialog } from "../agents/components/agents-rename-su
 import { OpenLocallyDialog } from "../agents/components/open-locally-dialog"
 import { useAutoImport } from "../agents/hooks/use-auto-import"
 import { ConfirmArchiveDialog } from "../../components/confirm-archive-dialog"
+import { clearChatRuntimeCaches, pruneOrphanedLocalStorageKeys } from "../agents/stores/sub-chat-runtime-cleanup"
 import { trpc } from "../../lib/trpc"
 import { toast } from "sonner"
 import {
@@ -1693,6 +1694,16 @@ export function AgentsSidebar({
   // Fetch all local chats (no project filter)
   const { data: localChats } = trpc.chats.list.useQuery({})
 
+  // Prune orphaned localStorage keys once after chat list loads
+  const hasPrunedRef = useRef(false)
+  useEffect(() => {
+    if (localChats && !hasPrunedRef.current) {
+      hasPrunedRef.current = true
+      const validIds = new Set(localChats.map((c) => c.id))
+      pruneOrphanedLocalStorageKeys(validIds)
+    }
+  }, [localChats])
+
   // Fetch user's teams (same as web) - always enabled to allow merged list
   const { data: teams, isLoading: isTeamsLoading, isError: isTeamsError } = useUserTeams(true)
 
@@ -1825,13 +1836,13 @@ export function AgentsSidebar({
   // File changes stats from DB - only for open sub-chats
   const { data: fileStatsData } = trpc.chats.getFileStats.useQuery(
     { openSubChatIds: allOpenSubChatIds },
-    { refetchInterval: 5000, enabled: allOpenSubChatIds.length > 0, placeholderData: (prev) => prev }
+    { refetchInterval: 15_000, staleTime: 10_000, enabled: allOpenSubChatIds.length > 0, placeholderData: (prev) => prev }
   )
 
   // Pending plan approvals from DB - only for open sub-chats
   const { data: pendingPlanApprovalsData } = trpc.chats.getPendingPlanApprovals.useQuery(
     { openSubChatIds: allOpenSubChatIds },
-    { refetchInterval: 5000, enabled: allOpenSubChatIds.length > 0, placeholderData: (prev) => prev }
+    { refetchInterval: 15_000, staleTime: 10_000, enabled: allOpenSubChatIds.length > 0, placeholderData: (prev) => prev }
   )
 
   // Fetch all projects for git info
@@ -1887,6 +1898,11 @@ export function AgentsSidebar({
   // Archive chat mutation
   const archiveChatMutation = trpc.chats.archive.useMutation({
     onSuccess: (_, variables) => {
+      // Clean up chat-level and sub-chat-level atom caches to prevent memory leaks
+      const cachedChat = utils.chats.get.getData({ id: variables.id })
+      const subChatIds = cachedChat?.subChats?.map((sc: any) => sc.id) ?? []
+      clearChatRuntimeCaches(variables.id, subChatIds)
+
       // Hide tooltip if visible (element may be removed from DOM before mouseLeave fires)
       if (agentTooltipTimerRef.current) {
         clearTimeout(agentTooltipTimerRef.current)

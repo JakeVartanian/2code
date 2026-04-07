@@ -181,7 +181,7 @@ interface SubChatSelectorProps {
   chatId?: string
 }
 
-export function SubChatSelector({
+export const SubChatSelector = memo(function SubChatSelector({
   onCreateNew,
   isMobile = false,
   onBackToChats,
@@ -1064,4 +1064,4 @@ export function SubChatSelector({
 
     </div>
   )
-}
+})

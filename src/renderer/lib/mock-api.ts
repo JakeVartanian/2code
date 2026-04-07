@@ -31,8 +31,8 @@ export const api = {
           {
             ...(opts ?? {}),
             enabled: !!chatId && opts?.enabled !== false,
-            staleTime: opts?.staleTime ?? 0,
-            gcTime: opts?.gcTime ?? 30_000,
+            staleTime: opts?.staleTime ?? 10_000,
+            gcTime: opts?.gcTime ?? 60_000,
           },
         )
 

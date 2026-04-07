@@ -163,8 +163,8 @@ function toRelativePath(filePath: string, projectPath?: string): string {
     const relative = filePath.slice(projectPath.length)
     return relative.startsWith("/") ? relative.slice(1) : relative
   }
-  // Handle worktree paths: /Users/.../.21st/worktrees/{chatId}/{subChatId}/relativePath
-  const worktreeMatch = filePath.match(/\.21st\/worktrees\/[^/]+\/[^/]+\/(.+)$/)
+  // Handle worktree paths: /Users/.../.2code/worktrees/{chatId}/{subChatId}/relativePath
+  const worktreeMatch = filePath.match(/\.2code\/worktrees\/[^/]+\/[^/]+\/(.+)$/)
   if (worktreeMatch) {
     return worktreeMatch[1]!
   }

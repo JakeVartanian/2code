@@ -27,6 +27,7 @@ import { TooltipProvider } from "../../components/ui/tooltip"
 import { ResizableSidebar } from "../../components/ui/resizable-sidebar"
 import { AgentsSidebar } from "../sidebar/agents-sidebar"
 import { AgentsContent } from "../agents/ui/agents-content"
+import { SectionErrorBoundary } from "../../components/ui/error-boundary"
 import { UpdateBanner } from "../../components/update-banner"
 import { WindowsTitleBar } from "../../components/windows-title-bar"
 import { useUpdateChecker } from "../../lib/hooks/use-update-checker"
@@ -320,17 +321,21 @@ export function AgentsLayout() {
           {isSettingsView ? (
             <SettingsSidebar />
           ) : (
-            <AgentsSidebar
-              desktopUser={desktopUser}
-              onSignOut={handleSignOut}
-              onToggleSidebar={handleCloseSidebar}
-            />
+            <SectionErrorBoundary name="Sidebar">
+              <AgentsSidebar
+                desktopUser={desktopUser}
+                onSignOut={handleSignOut}
+                onToggleSidebar={handleCloseSidebar}
+              />
+            </SectionErrorBoundary>
           )}
         </ResizableSidebar>
 
           {/* Main Content */}
           <div className="flex-1 overflow-hidden flex flex-col min-w-0">
-            <AgentsContent />
+            <SectionErrorBoundary name="Main Content">
+              <AgentsContent />
+            </SectionErrorBoundary>
           </div>
         </div>
 

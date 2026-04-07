@@ -170,11 +170,16 @@ function encryptToken(token: string): string {
  * Decrypt token using Electron's safeStorage
  */
 function decryptToken(encrypted: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    return Buffer.from(encrypted, "base64").toString("utf-8")
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      return Buffer.from(encrypted, "base64").toString("utf-8")
+    }
+    const buffer = Buffer.from(encrypted, "base64")
+    return safeStorage.decryptString(buffer)
+  } catch (error) {
+    console.error("[decryptToken] Failed to decrypt:", error)
+    return ""
   }
-  const buffer = Buffer.from(encrypted, "base64")
-  return safeStorage.decryptString(buffer)
 }
 
 /**

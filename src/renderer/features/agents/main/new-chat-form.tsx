@@ -943,19 +943,21 @@ export function NewChatForm({
   // Create chat mutation (real tRPC)
   const utils = trpc.useUtils()
   const createChatMutation = trpc.chats.create.useMutation({
-    onSuccess: (data) => {
-      // Clear editor, images, files, pasted texts, and file contents cache only on success
+    onMutate: (variables) => {
+      // Optimistic: immediately clear the form and navigate
       editorRef.current?.clear()
       clearImages()
       clearFiles()
       clearPastedTexts()
       fileContentsRef.current.clear()
       clearCurrentDraft()
-      utils.chats.list.invalidate()
-      setSelectedChatId(data.id)
       // New chats are always local
       setSelectedChatIsRemote(false)
       setChatSourceMode("local")
+    },
+    onSuccess: (data) => {
+      utils.chats.list.invalidate()
+      setSelectedChatId(data.id)
       // Track this chat and its first subchat as just created for typewriter effect
       const ids = [data.id]
       if (data.subChats?.[0]?.id) {

@@ -4,7 +4,7 @@ import { memo, useMemo, useEffect, useRef, useSyncExternalStore, useCallback } f
 import { useAtomValue } from "jotai"
 import { cn } from "../../../lib/utils"
 import { MemoizedMarkdown } from "../../../components/chat-markdown-renderer"
-import { getPerChatMessageKey, messageAtomFamily, isMessageStreamingAtomFamily } from "../stores/message-store"
+import { getPerChatMessageKey, messageAtomFamily, messageStructureAtomFamily, isMessageStreamingAtomFamily } from "../stores/message-store"
 import { useSearchHighlight, useSearchQuery } from "../search"
 import { appStore } from "../../../lib/jotai-store"
 
@@ -362,18 +362,18 @@ export const IsolatedTextPartsList = memo(function IsolatedTextPartsList({
   visibleStepsCount,
   showOnlyFinalText = false,
 }: IsolatedTextPartsProps) {
-  // Subscribe to message just to get parts structure (not content)
-  const message = useAtomValue(messageAtomFamily(getPerChatMessageKey(subChatId, messageId)))
+  // Subscribe to message structure only (not full content) to avoid re-renders on text changes
+  const structure = useAtomValue(messageStructureAtomFamily(getPerChatMessageKey(subChatId, messageId)))
 
   // Find indices of text parts that should be rendered
   // This is a stable calculation - only changes when parts array structure changes
   const textPartIndices = useMemo(() => {
-    const parts = message?.parts || []
+    const parts = structure?.partsStructure || []
     const indices: number[] = []
 
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i]
-      if (part.type === "text" && part.text?.trim()) {
+      if (part.type === "text" && part.hasText) {
         // Apply filtering based on finalTextIndex
         if (showOnlyFinalText) {
           if (finalTextIndex !== -1 && i >= finalTextIndex) {
@@ -388,7 +388,7 @@ export const IsolatedTextPartsList = memo(function IsolatedTextPartsList({
     }
 
     return indices
-  }, [message?.parts?.length, finalTextIndex, showOnlyFinalText])
+  }, [structure?.partsStructure, finalTextIndex, showOnlyFinalText])
 
   if (textPartIndices.length === 0) return null
 

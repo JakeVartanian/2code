@@ -65,7 +65,7 @@ export function ChangesHeader({
 
 	const { pr, isLoading: isPRLoading } = usePRStatus({
 		worktreePath,
-		refetchInterval: 10000,
+		refetchInterval: 30000,
 	});
 
 	const effectiveBaseBranch = baseBranch ?? branchData?.defaultBranch ?? "main";

@@ -20,7 +20,7 @@ import {
 import { APP_META, type ExternalApp } from "../../../../shared/external-apps"
 
 // Editor icon imports
-import cursorIcon from "../../../assets/app-icons/cursor.svg"
+import cursorIcon from "../../../assets/app-icons/cursor.png"
 import vscodeIcon from "../../../assets/app-icons/vscode.svg"
 import vscodeInsidersIcon from "../../../assets/app-icons/vscode-insiders.svg"
 import zedIcon from "../../../assets/app-icons/zed.png"

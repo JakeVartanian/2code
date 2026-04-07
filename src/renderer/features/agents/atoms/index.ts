@@ -1075,3 +1075,33 @@ export const fileViewerOpenAtomFamily = atomFamily((chatId: string) =>
     },
   ),
 )
+
+/**
+ * Clean up all chat-level atomFamily entries for a given chatId.
+ * Call this when a chat is archived or deleted to prevent memory leaks.
+ */
+export function clearChatAtomCaches(chatId: string) {
+  previewPathAtomFamily.remove(chatId)
+  viewportModeAtomFamily.remove(chatId)
+  previewScaleAtomFamily.remove(chatId)
+  mobileDeviceAtomFamily.remove(chatId)
+  diffSidebarOpenAtomFamily.remove(chatId)
+  diffFilesCollapsedAtomFamily.remove(chatId)
+  viewedFilesAtomFamily.remove(chatId)
+  planSidebarOpenAtomFamily.remove(chatId)
+  currentPlanPathAtomFamily.remove(chatId)
+  planEditRefetchTriggerAtomFamily.remove(chatId)
+  workspaceDiffCacheAtomFamily.remove(chatId)
+  fileViewerOpenAtomFamily.remove(chatId)
+}
+
+/**
+ * Clean up all subChat-level atomFamily entries for a given subChatId.
+ * Call this when a sub-chat is removed.
+ */
+export function clearSubChatAtomCaches(subChatId: string) {
+  subChatModelIdAtomFamily.remove(subChatId)
+  subChatModeAtomFamily.remove(subChatId)
+  currentTodosAtomFamily.remove(subChatId)
+  currentTaskToolsAtomFamily.remove(subChatId)
+}
