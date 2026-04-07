@@ -328,17 +328,25 @@ export const agentsRouter = router({
   fetchOpenRouterModels: publicProcedure
     .input(z.object({ apiKey: z.string() }))
     .mutation(async ({ input }) => {
+      console.log("[agents-router] fetchOpenRouterModels called with key:", input.apiKey.slice(0, 10) + "...")
       const res = await fetch("https://openrouter.ai/api/v1/models", {
         headers: { Authorization: `Bearer ${input.apiKey}` },
       })
-      if (!res.ok) throw new Error(`OpenRouter API error: ${res.status}`)
+      console.log("[agents-router] OpenRouter API response status:", res.status)
+      if (!res.ok) {
+        console.error("[agents-router] OpenRouter API error:", res.status)
+        throw new Error(`OpenRouter API error: ${res.status}`)
+      }
       const data = (await res.json()) as {
         data: { id: string; name: string; pricing?: { prompt: string } }[]
       }
-      return data.data.map((m) => ({
+      console.log("[agents-router] OpenRouter API returned", data.data.length, "models")
+      const models = data.data.map((m) => ({
         id: m.id,
         name: m.name,
         isFree: m.pricing?.prompt === "0" || m.id.endsWith(":free"),
       }))
+      console.log("[agents-router] Returning", models.length, "models to client")
+      return models
     }),
 })
