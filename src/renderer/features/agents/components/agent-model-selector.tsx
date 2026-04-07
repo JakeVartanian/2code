@@ -101,11 +101,12 @@ export function AgentModelSelector({
       for (const m of claude.models) {
         items.push({ type: "claude", model: m })
       }
-      // Add OpenRouter models if available
-      if (openRouter?.models && openRouter.models.length > 0) {
-        for (const m of openRouter.models) {
-          items.push({ type: "openrouter", model: m })
-        }
+    }
+
+    // Always add OpenRouter models if available (independent of offline/custom state)
+    if (openRouter?.models && openRouter.models.length > 0) {
+      for (const m of openRouter.models) {
+        items.push({ type: "openrouter", model: m })
       }
     }
 
