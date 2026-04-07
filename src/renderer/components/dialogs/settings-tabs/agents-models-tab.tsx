@@ -346,9 +346,17 @@ export function AgentsModelsTab() {
 
   const fetchOpenRouterModelsMutation = trpc.agents.fetchOpenRouterModels.useMutation({
     onSuccess: (models) => {
+      console.log("[agents-models-tab] Fetched OpenRouter models:", models.length)
       setOpenRouterModels(models)
+      // Ensure localStorage is updated
+      try {
+        localStorage.setItem("agents:openrouter-models", JSON.stringify(models))
+      } catch (e) {
+        console.error("Failed to persist OpenRouter models to localStorage:", e)
+      }
     },
     onError: (err) => {
+      console.error("[agents-models-tab] Failed to fetch OpenRouter models:", err)
       toast.error(err.message || "Failed to fetch OpenRouter models")
       setOpenRouterModels([])
     },
