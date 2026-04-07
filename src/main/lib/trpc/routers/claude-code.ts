@@ -382,6 +382,11 @@ export const claudeCodeRouter = router({
         throw new Error("Session expired. Please restart the authentication flow.")
       }
 
+      // If auto callback already completed this session, don't double-store
+      if (session.completed) {
+        return { success: true }
+      }
+
       // Parse "authCode#state" — works for both auto (localhost) and manual paste
       const raw = input.code.trim()
       const hashIdx = raw.indexOf("#")
@@ -597,7 +602,7 @@ export const claudeCodeRouter = router({
    * Open OAuth URL in browser
    */
   openOAuthUrl: publicProcedure
-    .input(z.string())
+    .input(z.string().url().refine(u => u.startsWith("https://"), { message: "Only HTTPS URLs allowed" }))
     .mutation(async ({ input: url }) => {
       await shell.openExternal(url)
       return { success: true }

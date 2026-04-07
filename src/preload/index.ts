@@ -194,6 +194,11 @@ contextBridge.exposeInMainWorld("desktopApi", {
     ipcRenderer.on("auth:error", handler)
     return () => ipcRenderer.removeListener("auth:error", handler)
   },
+  onAuthLoggedOut: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on("auth:logged-out", handler)
+    return () => ipcRenderer.removeListener("auth:logged-out", handler)
+  },
 
   // Shortcut events (from main process menu accelerators)
   onShortcutNewAgent: (callback: () => void) => {
@@ -365,6 +370,7 @@ export interface DesktopApi {
   onStreamError: (streamId: string, callback: (error: string) => void) => () => void
   onAuthSuccess: (callback: (user: any) => void) => () => void
   onAuthError: (callback: (error: string) => void) => () => void
+  onAuthLoggedOut: (callback: () => void) => () => void
   // Shortcuts
   onShortcutNewAgent: (callback: () => void) => () => void
   onShortcutOpenSettings: (callback: () => void) => () => void

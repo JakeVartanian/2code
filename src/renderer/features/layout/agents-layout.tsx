@@ -256,6 +256,17 @@ export function AgentsLayout() {
     setApiKeyOnboardingCompleted,
   ])
 
+  // Handle forced logout from main process (e.g. token refresh 401)
+  useEffect(() => {
+    if (!window.desktopApi?.onAuthLoggedOut) return
+    return window.desktopApi.onAuthLoggedOut(() => {
+      setSelectedProject(null)
+      setSelectedChatId(null)
+      setBillingMethod(null)
+      setAnthropicOnboardingCompleted(false)
+    })
+  }, [setSelectedProject, setSelectedChatId, setBillingMethod, setAnthropicOnboardingCompleted])
+
   // Clear sub-chat store when no chat is selected
   useEffect(() => {
     if (!selectedChatId) {

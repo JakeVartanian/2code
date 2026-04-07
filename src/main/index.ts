@@ -359,7 +359,6 @@ const server = createServer((req, res) => {
         code?.slice(0, 8) + "...",
         "state:",
         state?.slice(0, 8) + "...",
-        "all params:", Object.fromEntries(url.searchParams.entries()),
       )
 
       if (code && state) {
