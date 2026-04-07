@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useState, useMemo } from "react"
+import { memo, useState, useMemo, useEffect } from "react"
 import { Check, X } from "lucide-react"
 import { useAtomValue } from "jotai"
 import {
@@ -14,6 +14,8 @@ import { AgentToolInterrupted } from "./agent-tool-interrupted"
 import { areToolPropsEqual } from "./agent-tool-utils"
 import { cn } from "../../../lib/utils"
 import { selectedProjectAtom } from "../atoms"
+import { toolVerbosityAtom } from "../../../lib/atoms"
+import { appStore } from "../../../lib/jotai-store"
 
 interface AgentBashToolProps {
   part: any
@@ -60,7 +62,14 @@ export const AgentBashTool = memo(function AgentBashTool({
   partIndex,
   chatStatus,
 }: AgentBashToolProps) {
-  const [isOutputExpanded, setIsOutputExpanded] = useState(false)
+  const [isOutputExpanded, setIsOutputExpanded] = useState(() => appStore.get(toolVerbosityAtom) === "expanded")
+  // Retroactively update expanded state when user changes verbosity in settings.
+  // Uses appStore.sub() to avoid a Jotai hook subscription that re-renders during streaming.
+  useEffect(() => {
+    return appStore.sub(toolVerbosityAtom, () => {
+      setIsOutputExpanded(appStore.get(toolVerbosityAtom) === "expanded")
+    })
+  }, [])
   const { isPending } = getToolStatus(part, chatStatus)
   const selectedProject = useAtomValue(selectedProjectAtom)
   const projectPath = selectedProject?.path
@@ -191,8 +200,8 @@ export const AgentBashTool = memo(function AgentBashTool({
         </div>
       </div>
 
-      {/* Content - always visible, clickable to expand (only when collapsed and has more output) */}
-      <div
+      {/* Content - hidden in minimal mode, otherwise always visible */}
+      {verbosity !== "minimal" && <div
         onClick={() =>
           hasMoreOutput && !isOutputExpanded && setIsOutputExpanded(true)
         }
@@ -230,7 +239,7 @@ export const AgentBashTool = memo(function AgentBashTool({
           </div>
         )}
 
-      </div>
+      </div>}
     </div>
   )
 }, areToolPropsEqual)

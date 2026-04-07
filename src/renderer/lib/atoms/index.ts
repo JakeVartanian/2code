@@ -17,6 +17,9 @@ export {
   agentsUnseenChangesAtom,
   agentsSubChatUnseenChangesAtom,
   loadingSubChatsAtom,
+  isSubChatLoadingAtomFamily,
+  isChatLoadingAtomFamily,
+  loadingSubChatIdsForChatAtomFamily,
   setLoading,
   clearLoading,
   MODEL_ID_MAP,
@@ -680,6 +683,20 @@ export const showWorkspaceIconAtom = atomWithStorage<boolean>(
 export const alwaysExpandTodoListAtom = atomWithStorage<boolean>(
   "preferences:always-expand-todo-list",
   false, // Collapsed by default
+  undefined,
+  { getOnInit: true },
+)
+
+/**
+ * Tool output verbosity level
+ * minimal  — one-line header only, no output body rendered
+ * medium   — collapsed output (3-line bash, 72px diffs) — default
+ * expanded — all tool outputs auto-expanded
+ */
+export type ToolVerbosity = "minimal" | "medium" | "expanded"
+export const toolVerbosityAtom = atomWithStorage<ToolVerbosity>(
+  "preferences:tool-verbosity",
+  "medium",
   undefined,
   { getOnInit: true },
 )

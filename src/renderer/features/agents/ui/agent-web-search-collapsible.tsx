@@ -1,11 +1,13 @@
 "use client"
 
-import { memo, useState, useMemo } from "react"
+import { memo, useState, useMemo, useEffect } from "react"
 import { ChevronRight } from "lucide-react"
 
 import { areToolPropsEqual } from "./agent-tool-utils"
 import { TextShimmer } from "../../../components/ui/text-shimmer"
 import { cn } from "../../../lib/utils"
+import { toolVerbosityAtom } from "../../../lib/atoms"
+import { appStore } from "../../../lib/jotai-store"
 
 interface SearchResult {
   title: string
@@ -22,7 +24,13 @@ export const AgentWebSearchCollapsible = memo(
     part,
     chatStatus,
   }: AgentWebSearchCollapsibleProps) {
-    const [isExpanded, setIsExpanded] = useState(false)
+    const [isExpanded, setIsExpanded] = useState(() => appStore.get(toolVerbosityAtom) === "expanded")
+    // Retroactively update expanded state when user changes verbosity in settings.
+    useEffect(() => {
+      return appStore.sub(toolVerbosityAtom, () => {
+        setIsExpanded(appStore.get(toolVerbosityAtom) === "expanded")
+      })
+    }, [])
 
     const isPending =
       part.state !== "output-available" && part.state !== "output-error"

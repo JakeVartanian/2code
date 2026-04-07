@@ -11,11 +11,13 @@ import {
   preferredEditorAtom,
   thinkingBudgetTokensAtom,
   thinkingModeAtom,
+  toolVerbosityAtom,
   type AgentMode,
   type AutoAdvanceTarget,
   type CtrlTabTarget,
   type EffortLevel,
   type ThinkingMode,
+  type ToolVerbosity,
 } from "../../../lib/atoms"
 import { APP_META, type ExternalApp } from "../../../../shared/external-apps"
 import { ThinkingBudgetVisualizer } from "../../../features/agents/components/thinking-budget-visualizer"
@@ -157,6 +159,7 @@ export function AgentsPreferencesTab() {
   const [autoAdvanceTarget, setAutoAdvanceTarget] = useAtom(autoAdvanceTargetAtom)
   const [defaultAgentMode, setDefaultAgentMode] = useAtom(defaultAgentModeAtom)
   const [preferredEditor, setPreferredEditor] = useAtom(preferredEditorAtom)
+  const [toolVerbosity, setToolVerbosity] = useAtom(toolVerbosityAtom)
   const isNarrowScreen = useIsNarrowScreen()
 
   // Co-authored-by setting from Claude settings.json
@@ -299,6 +302,41 @@ export function AgentsPreferencesTab() {
             onCheckedChange={handleCoAuthoredByToggle}
             disabled={setCoAuthoredByMutation.isPending}
           />
+        </div>
+      </div>
+
+      {/* Tool Detail */}
+      <div className="bg-background rounded-lg border border-border overflow-hidden">
+        <div className="flex items-center justify-between p-4">
+          <div className="flex flex-col space-y-1">
+            <span className="text-sm font-medium text-foreground">
+              Tool Detail Level
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {toolVerbosity === "minimal"
+                ? "One-line summaries only — no output body"
+                : toolVerbosity === "medium"
+                  ? "Compact view with a few lines of output"
+                  : "All tool outputs shown in full"}
+            </span>
+          </div>
+          <div className="flex items-center rounded-md border border-input bg-muted/30 p-0.5">
+            {(["minimal", "medium", "expanded"] as const).map((level) => (
+              <button
+                key={level}
+                type="button"
+                onClick={() => setToolVerbosity(level)}
+                className={cn(
+                  "px-2.5 py-1 text-xs rounded-[4px] transition-colors capitalize",
+                  toolVerbosity === level
+                    ? "bg-background text-foreground shadow-sm font-medium"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {level === "minimal" ? "Minimal" : level === "medium" ? "Medium" : "Full"}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

@@ -21,6 +21,8 @@ import { areToolPropsEqual } from "./agent-tool-utils"
 import { getFileIconByExtension } from "../mentions/agents-file-mention"
 import { useFileOpen } from "../mentions"
 import { agentsDiffSidebarOpenAtom, agentsFocusedDiffFileAtom, selectedProjectAtom } from "../atoms"
+import { toolVerbosityAtom } from "../../../lib/atoms"
+import { appStore } from "../../../lib/jotai-store"
 import { cn } from "../../../lib/utils"
 
 interface AgentEditToolProps {
@@ -219,7 +221,13 @@ export const AgentEditTool = memo(function AgentEditTool({
   partIndex,
   chatStatus,
 }: AgentEditToolProps) {
-  const [isOutputExpanded, setIsOutputExpanded] = useState(false)
+  const [isOutputExpanded, setIsOutputExpanded] = useState(() => appStore.get(toolVerbosityAtom) === "expanded")
+  // Retroactively update expanded state when user changes verbosity in settings.
+  useEffect(() => {
+    return appStore.sub(toolVerbosityAtom, () => {
+      setIsOutputExpanded(appStore.get(toolVerbosityAtom) === "expanded")
+    })
+  }, [])
   const { isPending, isInterrupted } = getToolStatus(part, chatStatus)
   const codeTheme = useCodeTheme()
 
@@ -586,7 +594,7 @@ export const AgentEditTool = memo(function AgentEditTool({
       </div>
 
       {/* Content - git-style diff with syntax highlighting */}
-      {hasVisibleContent && (
+      {hasVisibleContent && verbosity !== "minimal" && (
         <div
           onClick={handleContentClick}
           className={cn(
