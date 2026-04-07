@@ -321,4 +321,24 @@ export const agentsRouter = router({
 
       return { deleted: true }
     }),
+
+  /**
+   * Fetch available models from OpenRouter API (main process, bypasses CSP)
+   */
+  fetchOpenRouterModels: publicProcedure
+    .input(z.object({ apiKey: z.string() }))
+    .mutation(async ({ input }) => {
+      const res = await fetch("https://openrouter.ai/api/v1/models", {
+        headers: { Authorization: `Bearer ${input.apiKey}` },
+      })
+      if (!res.ok) throw new Error(`OpenRouter API error: ${res.status}`)
+      const data = (await res.json()) as {
+        data: { id: string; name: string; pricing?: { prompt: string } }[]
+      }
+      return data.data.map((m) => ({
+        id: m.id,
+        name: m.name,
+        isFree: m.pricing?.prompt === "0" || m.id.endsWith(":free"),
+      }))
+    }),
 })

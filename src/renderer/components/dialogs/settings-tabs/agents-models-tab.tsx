@@ -344,36 +344,32 @@ export function AgentsModelsTab() {
     setOpenRouterKey(storedOpenRouterKey)
   }, [storedOpenRouterKey])
 
-  const fetchOpenRouterModels = useCallback(async (apiKey: string) => {
+  const fetchOpenRouterModelsMutation = trpc.agents.fetchOpenRouterModels.useMutation({
+    onSuccess: (models) => {
+      setOpenRouterModels(models)
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to fetch OpenRouter models")
+      setOpenRouterModels([])
+    },
+    onSettled: () => {
+      setIsFetchingOpenRouterModels(false)
+    },
+  })
+
+  const fetchOpenRouterModels = useCallback((apiKey: string) => {
     if (!apiKey.trim()) return
     setIsFetchingOpenRouterModels(true)
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/models", {
-        headers: { Authorization: `Bearer ${apiKey.trim()}` },
-      })
-      if (!res.ok) throw new Error(`OpenRouter API error: ${res.status}`)
-      const data = await res.json() as { data: { id: string; name: string; pricing?: { prompt: string } }[] }
-      const models = data.data.map((m) => ({
-        id: m.id,
-        name: m.name,
-        isFree: m.pricing?.prompt === "0" || m.id.endsWith(":free"),
-      }))
-      setOpenRouterModels(models)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to fetch OpenRouter models")
-      setOpenRouterModels([])
-    } finally {
-      setIsFetchingOpenRouterModels(false)
-    }
-  }, [setOpenRouterModels, setIsFetchingOpenRouterModels])
+    fetchOpenRouterModelsMutation.mutate({ apiKey: apiKey.trim() })
+  }, [setIsFetchingOpenRouterModels, fetchOpenRouterModelsMutation])
 
-  const handleOpenRouterKeyBlur = useCallback(async () => {
+  const handleOpenRouterKeyBlur = useCallback(() => {
     const trimmed = openRouterKey.trim()
     if (trimmed === storedOpenRouterKey) return
     setStoredOpenRouterKey(trimmed)
     if (trimmed) {
       toast.success("OpenRouter API key saved")
-      await fetchOpenRouterModels(trimmed)
+      fetchOpenRouterModels(trimmed)
     }
   }, [openRouterKey, storedOpenRouterKey, setStoredOpenRouterKey, fetchOpenRouterModels])
 
@@ -387,7 +383,7 @@ export function AgentsModelsTab() {
   // Always fetch OpenRouter models when key is present (on mount and key change)
   useEffect(() => {
     if (storedOpenRouterKey) {
-      void fetchOpenRouterModels(storedOpenRouterKey)
+      fetchOpenRouterModels(storedOpenRouterKey)
     }
   // Only re-run when the key itself changes, not on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
