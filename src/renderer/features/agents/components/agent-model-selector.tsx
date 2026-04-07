@@ -85,10 +85,8 @@ export function AgentModelSelector({
 
   // Debug logging
   useEffect(() => {
-    if (openRouter?.models && openRouter.models.length > 0) {
-      console.log("[AgentModelSelector] OpenRouter models loaded:", openRouter.models.length)
-    }
-  }, [openRouter])
+    console.log("[AgentModelSelector] Props changed - openRouter:", openRouter ? `${openRouter.models.length} models` : "undefined", "claude.models:", claude.models.length)
+  }, [openRouter, claude.models])
 
   // Build flat list of all models
   const allModels = useMemo<FlatModelItem[]>(() => {
@@ -145,6 +143,9 @@ export function AgentModelSelector({
           return matches
         case "custom":
           return "custom model".includes(q)
+        default:
+          console.warn("[AgentModelSelector] Unknown item type:", item)
+          return false
       }
     })
     console.log("[AgentModelSelector] Filter results:", results.length, "matched")
