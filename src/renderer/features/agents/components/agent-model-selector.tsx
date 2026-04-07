@@ -128,7 +128,8 @@ export function AgentModelSelector({
   const filteredModels = useMemo(() => {
     if (!search.trim()) return allModels
     const q = search.toLowerCase().trim()
-    return allModels.filter((item) => {
+    console.log("[AgentModelSelector] Filtering with search:", q, "Total models to filter:", allModels.length)
+    const results = allModels.filter((item) => {
       switch (item.type) {
         case "claude":
           return (
@@ -139,11 +140,15 @@ export function AgentModelSelector({
         case "ollama":
           return item.modelName.toLowerCase().includes(q)
         case "openrouter":
-          return item.model.name.toLowerCase().includes(q)
+          const matches = item.model.name.toLowerCase().includes(q)
+          if (matches) console.log("[AgentModelSelector] OpenRouter match:", item.model.name)
+          return matches
         case "custom":
           return "custom model".includes(q)
       }
     })
+    console.log("[AgentModelSelector] Filter results:", results.length, "matched")
+    return results
   }, [allModels, search])
 
   const handleOpenChange = useCallback(
