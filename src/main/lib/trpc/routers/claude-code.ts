@@ -105,7 +105,6 @@ export async function handleClaudeCodeOAuthCallback(code: string, state: string)
     redirect_uri: matchedSession.redirectUri,
     client_id: CLAUDE_CLIENT_ID,
     code_verifier: matchedSession.codeVerifier.slice(0, 8) + "...",
-    state: matchedSession.state.slice(0, 8) + "...",
   }))
 
   try {
@@ -118,7 +117,6 @@ export async function handleClaudeCodeOAuthCallback(code: string, state: string)
         redirect_uri: matchedSession.redirectUri,
         client_id: CLAUDE_CLIENT_ID,
         code_verifier: matchedSession.codeVerifier,
-        state: matchedSession.state,
       }),
     })
 
@@ -413,7 +411,6 @@ export const claudeCodeRouter = router({
           redirect_uri: session.redirectUri,
           client_id: CLAUDE_CLIENT_ID,
           code_verifier: session.codeVerifier,
-          state: session.state,
         }),
       })
 
@@ -430,7 +427,6 @@ export const claudeCodeRouter = router({
             redirect_uri: MANUAL_REDIRECT_URI,
             client_id: CLAUDE_CLIENT_ID,
             code_verifier: session.codeVerifier,
-            state: session.state,
           }),
         })
         if (tokenRes2.ok) {
