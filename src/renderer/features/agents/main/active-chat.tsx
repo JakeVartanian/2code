@@ -7402,7 +7402,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                                 contain: "layout style paint",
                               }}
                               aria-hidden
-                              inert=""
+                              inert={true}
                             >
                               <ChatDataSync chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={false}>
                               <ChatViewInner
@@ -7466,7 +7466,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                       contain: "layout style paint",
                     }}
                     aria-hidden={!isActive}
-                    {...(!isActive ? { inert: "" } : {})}
+                    inert={!isActive || undefined}
                   >
                     <ChatDataSync chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={isActive}>
                     <ChatViewInner
