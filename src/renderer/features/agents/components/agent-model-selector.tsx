@@ -1,7 +1,7 @@
 "use client"
 
 import { ChevronRight, Zap } from "lucide-react"
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Command,
   CommandEmpty,
@@ -82,6 +82,13 @@ export function AgentModelSelector({
   openRouter,
 }: AgentModelSelectorProps) {
   const [search, setSearch] = useState("")
+
+  // Debug logging
+  useEffect(() => {
+    if (openRouter?.models && openRouter.models.length > 0) {
+      console.log("[AgentModelSelector] OpenRouter models loaded:", openRouter.models.length)
+    }
+  }, [openRouter])
 
   // Build flat list of all models
   const allModels = useMemo<FlatModelItem[]>(() => {
