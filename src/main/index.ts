@@ -10,6 +10,7 @@ import {
   setupFocusUpdateCheck,
 } from "./lib/auto-updater"
 import { closeDatabase, initDatabase, cleanupOrphanedSessionDirs } from "./lib/db"
+import { setAppReady } from "./lib/trpc/routers/app"
 import {
   getLaunchDirectory,
   isCliInstalled,
@@ -894,6 +895,9 @@ if (gotTheLock) {
 
     // Create main window
     createMainWindow()
+
+    // Signal renderer that main process is fully initialized
+    setAppReady()
 
     // Initialize auto-updater (production only)
     if (app.isPackaged) {

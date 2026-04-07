@@ -9,6 +9,8 @@ import * as schema from "./schema"
 
 let db: ReturnType<typeof drizzle<typeof schema>> | null = null
 let sqlite: Database.Database | null = null
+// Prevents infinite retry loops — once init fails, stop trying
+let dbInitFailed: Error | null = null
 
 /**
  * Get the database path in the app's user data directory
@@ -46,18 +48,38 @@ export function initDatabase() {
     return db
   }
 
+  // Don't retry if a previous attempt already failed
+  if (dbInitFailed) {
+    throw dbInitFailed
+  }
+
   const dbPath = getDatabasePath()
   console.log(`[DB] Initializing database at: ${dbPath}`)
 
-  // Create SQLite connection
-  sqlite = new Database(dbPath)
-  sqlite.pragma("journal_mode = WAL")
-  sqlite.pragma("busy_timeout = 5000")
-  sqlite.pragma("synchronous = NORMAL")
-  sqlite.pragma("foreign_keys = ON")
+  try {
+    // Create SQLite connection
+    sqlite = new Database(dbPath)
+    console.log("[DB] SQLite connection opened")
 
-  // Create Drizzle instance
-  db = drizzle(sqlite, { schema })
+    sqlite.pragma("journal_mode = WAL")
+    sqlite.pragma("busy_timeout = 5000")
+    sqlite.pragma("synchronous = NORMAL")
+    sqlite.pragma("foreign_keys = ON")
+
+    // Create Drizzle instance
+    db = drizzle(sqlite, { schema })
+    console.log("[DB] Drizzle ORM initialized")
+  } catch (error) {
+    // Close any partial connection to avoid leaking handles
+    if (sqlite) {
+      try { sqlite.close() } catch {}
+      sqlite = null
+    }
+    db = null
+    dbInitFailed = error instanceof Error ? error : new Error(String(error))
+    console.error("[DB] Failed to open database:", dbInitFailed.message)
+    throw dbInitFailed
+  }
 
   // Run migrations
   const migrationsPath = getMigrationsPath()
@@ -73,7 +95,8 @@ export function initDatabase() {
       console.warn("[DB] Migration warning (column already exists, skipping):", msg)
     } else {
       console.error("[DB] Migration error:", error)
-      throw error
+      // DB connection is still valid even if a migration fails —
+      // don't throw, just log. The app can operate with whatever state the DB is in.
     }
   }
 
