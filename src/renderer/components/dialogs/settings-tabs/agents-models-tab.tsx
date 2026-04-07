@@ -340,6 +340,15 @@ export function AgentsModelsTab() {
   const [openRouterModels, setOpenRouterModels] = useAtom(openRouterModelsAtom)
   const [isFetchingOpenRouterModels, setIsFetchingOpenRouterModels] = useAtom(openRouterModelsLoadingAtom)
 
+  // Mount-level log to verify component is rendering
+  useEffect(() => {
+    console.log("[agents-models-tab] Component mounted/rendered, storedOpenRouterKey:", storedOpenRouterKey ? storedOpenRouterKey.slice(0, 10) + "..." : "EMPTY")
+    console.log("[agents-models-tab] openRouterModels from atom:", openRouterModels)
+    // Also check localStorage directly
+    const directLS = localStorage.getItem("agents:openrouter-api-key")
+    console.log("[agents-models-tab] Direct localStorage check for api-key:", directLS ? directLS.slice(0, 10) + "..." : "EMPTY")
+  }, [])
+
   useEffect(() => {
     setOpenRouterKey(storedOpenRouterKey)
   }, [storedOpenRouterKey])
@@ -369,14 +378,23 @@ export function AgentsModelsTab() {
   })
 
   const fetchOpenRouterModels = useCallback((apiKey: string) => {
-    if (!apiKey.trim()) return
+    console.log("[agents-models-tab] fetchOpenRouterModels called with key:", apiKey.slice(0, 10) + "...")
+    if (!apiKey.trim()) {
+      console.log("[agents-models-tab] fetchOpenRouterModels: key is empty, skipping")
+      return
+    }
     setIsFetchingOpenRouterModels(true)
+    console.log("[agents-models-tab] fetchOpenRouterModels: calling mutation")
     fetchOpenRouterModelsMutation.mutate({ apiKey: apiKey.trim() })
   }, [setIsFetchingOpenRouterModels, fetchOpenRouterModelsMutation])
 
   const handleOpenRouterKeyBlur = useCallback(() => {
     const trimmed = openRouterKey.trim()
-    if (trimmed === storedOpenRouterKey) return
+    console.log("[agents-models-tab] handleOpenRouterKeyBlur, trimmed:", trimmed ? trimmed.slice(0, 10) + "..." : "EMPTY", "stored:", storedOpenRouterKey ? storedOpenRouterKey.slice(0, 10) + "..." : "EMPTY")
+    if (trimmed === storedOpenRouterKey) {
+      console.log("[agents-models-tab] handleOpenRouterKeyBlur: key unchanged, skipping")
+      return
+    }
     setStoredOpenRouterKey(trimmed)
     if (trimmed) {
       toast.success("OpenRouter API key saved")
@@ -385,6 +403,7 @@ export function AgentsModelsTab() {
   }, [openRouterKey, storedOpenRouterKey, setStoredOpenRouterKey, fetchOpenRouterModels])
 
   const handleRemoveOpenRouterKey = () => {
+    console.log("[agents-models-tab] handleRemoveOpenRouterKey called")
     setStoredOpenRouterKey("")
     setOpenRouterKey("")
     setOpenRouterModels([])
@@ -393,11 +412,12 @@ export function AgentsModelsTab() {
 
   // Always fetch OpenRouter models when key is present (on mount and key change)
   useEffect(() => {
+    console.log("[agents-models-tab] useEffect (key dependency) triggered, storedOpenRouterKey:", storedOpenRouterKey ? storedOpenRouterKey.slice(0, 10) + "..." : "EMPTY")
     if (storedOpenRouterKey) {
-      console.log("[agents-models-tab] useEffect triggered, fetching models for key:", storedOpenRouterKey.slice(0, 10) + "...")
+      console.log("[agents-models-tab] useEffect: fetching models for key:", storedOpenRouterKey.slice(0, 10) + "...")
       fetchOpenRouterModels(storedOpenRouterKey)
     } else {
-      console.log("[agents-models-tab] No stored OpenRouter key found")
+      console.log("[agents-models-tab] useEffect: no stored OpenRouter key found")
     }
   // Only re-run when the key itself changes, not on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
