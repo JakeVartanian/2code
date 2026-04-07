@@ -347,7 +347,19 @@ export function AgentsModelsTab() {
     // Also check localStorage directly
     const directLS = localStorage.getItem("agents:openrouter-api-key")
     console.log("[agents-models-tab] Direct localStorage check for api-key:", directLS ? directLS.slice(0, 10) + "..." : "EMPTY")
+    const directModelsLS = localStorage.getItem("agents:openrouter-models")
+    console.log("[agents-models-tab] Direct localStorage check for models:", directModelsLS ? `${directModelsLS.length} chars (${JSON.parse(directModelsLS).length} models)` : "EMPTY")
   }, [])
+
+  // Ensure atom changes always sync to localStorage
+  useEffect(() => {
+    if (openRouterModels && openRouterModels.length > 0) {
+      console.log("[agents-models-tab] [SYNC] openRouterModels atom changed, syncing to localStorage:", openRouterModels.length, "models")
+      localStorage.setItem("agents:openrouter-models", JSON.stringify(openRouterModels))
+      const retrieved = localStorage.getItem("agents:openrouter-models")
+      console.log("[agents-models-tab] [SYNC] Verified localStorage now has:", retrieved ? `${JSON.parse(retrieved).length} models` : "EMPTY")
+    }
+  }, [openRouterModels])
 
   useEffect(() => {
     setOpenRouterKey(storedOpenRouterKey)
