@@ -322,7 +322,7 @@ function updateStoredAccessToken(newAccessToken: string, newRefreshToken?: strin
  * Uses in-memory cache with 45-min TTL to avoid refreshing on every message.
  * Falls back to stored token if refresh fails.
  */
-async function getClaudeCodeTokenFresh(): Promise<string | null> {
+export async function getClaudeCodeTokenFresh(): Promise<string | null> {
   // Check in-memory cache first
   if (tokenRefreshCache && Date.now() - tokenRefreshCache.refreshedAt < TOKEN_REFRESH_TTL_MS) {
     return tokenRefreshCache.token

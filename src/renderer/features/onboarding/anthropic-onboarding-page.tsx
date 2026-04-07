@@ -98,31 +98,31 @@ export function AnthropicOnboardingPage() {
     refetchInterval: isPolling || authStarted ? 1500 : false,
   })
 
-  // Auto-start auth on mount
+  // Auto-start auth exactly once on mount — empty deps prevents re-fire on error boundary resets
+  // or if startAuthMutation reference changes between renders.
   useEffect(() => {
     if (!checkedExistingToken || shouldOfferExistingToken) return
 
-    if (flowState.step === "idle") {
-      setFlowState({ step: "starting" })
-      startAuthMutation.mutate(undefined, {
-        onSuccess: (result) => {
-          setAuthStarted(true)
-          setFlowState({
-            step: "waiting_url",
-            sandboxId: result.sandboxId,
-            sandboxUrl: result.sandboxUrl,
-            sessionId: result.sessionId,
-          })
-        },
-        onError: (err) => {
-          setFlowState({
-            step: "error",
-            message: err.message || "Failed to start authentication",
-          })
-        },
-      })
-    }
-  }, [flowState.step, startAuthMutation, checkedExistingToken, shouldOfferExistingToken])
+    setFlowState({ step: "starting" })
+    startAuthMutation.mutate(undefined, {
+      onSuccess: (result) => {
+        setAuthStarted(true)
+        setFlowState({
+          step: "waiting_url",
+          sandboxId: result.sandboxId,
+          sandboxUrl: result.sandboxUrl,
+          sessionId: result.sessionId,
+        })
+      },
+      onError: (err) => {
+        setFlowState({
+          step: "error",
+          message: err.message || "Failed to start authentication",
+        })
+      },
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Complete onboarding as soon as the token is stored in the DB — belt-and-suspenders.
   // Only fires after auth has been started (so we don't complete on stale data from a previous session).
