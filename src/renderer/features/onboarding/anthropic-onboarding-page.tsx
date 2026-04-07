@@ -39,7 +39,7 @@ export function AnthropicOnboardingPage() {
   const [urlOpened, setUrlOpened] = useState(false)
   const [savedOauthUrl, setSavedOauthUrl] = useState<string | null>(null)
   const [savedManualUrl, setSavedManualUrl] = useState<string | null>(null)
-  const [showManualFallback, setShowManualFallback] = useState(false)
+  const [showManualInput, setShowManualInput] = useState(false)
   const [manualCode, setManualCode] = useState("")
   const urlOpenedAtRef = useRef<number | null>(null)
   const [ignoredExistingToken, setIgnoredExistingToken] = useState(false)
@@ -132,10 +132,10 @@ export function AnthropicOnboardingPage() {
     }
   }, [authStarted, isPolling, integrationQuery.data?.isConnected, setAnthropicOnboardingCompleted])
 
-  // Show manual fallback after 20s of waiting for browser callback
+  // Show manual input after 12s as a safety net, in case user already has a code
   useEffect(() => {
     if (!urlOpened) return
-    const timer = setTimeout(() => setShowManualFallback(true), 20000)
+    const timer = setTimeout(() => setShowManualInput(true), 12000)
     return () => clearTimeout(timer)
   }, [urlOpened])
 
@@ -286,17 +286,12 @@ export function AnthropicOnboardingPage() {
     }
   }
 
-  const handleOpenFallbackUrl = () => {
-    if (savedOauthUrl) {
-      openOAuthUrlMutation.mutate(savedOauthUrl)
-    }
-  }
-
   const handleOpenManualUrl = () => {
-    if (savedManualUrl) {
-      openOAuthUrlMutation.mutate(savedManualUrl)
-      setShowManualFallback(true)
+    const url = savedManualUrl ?? savedOauthUrl
+    if (url) {
+      openOAuthUrlMutation.mutate(url)
     }
+    setShowManualInput(true)
   }
 
   const handleManualCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -421,31 +416,34 @@ export function AnthropicOnboardingPage() {
           {/* Waiting for browser OAuth to complete */}
           {(urlOpened || flowState.step === "has_url") && (
             <div className="space-y-4 flex flex-col items-center w-full">
-              {!showManualFallback && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <IconSpinner className="h-4 w-4 shrink-0" />
-                  <span>Complete sign-in in the browser window…</span>
-                </div>
-              )}
-              {savedOauthUrl && !showManualFallback && (
+              {/* Always show spinner while waiting for auto-complete */}
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <IconSpinner className="h-4 w-4 shrink-0" />
+                <span>Complete sign-in in the browser window…</span>
+              </div>
+
+              {/* Immediate manual link — browser error or redirect failed */}
+              {!showManualInput && (
                 <p className="text-xs text-muted-foreground text-center">
-                  Browser didn't open?{" "}
+                  Browser showed an error?{" "}
                   <button
-                    onClick={handleOpenFallbackUrl}
+                    onClick={handleOpenManualUrl}
                     className="text-primary hover:underline"
                   >
-                    Click here to open it
+                    Click here for a code instead
                   </button>
                 </p>
               )}
-              {showManualFallback && (
+
+              {/* Manual code input — shown when user asks for it or after 12s */}
+              {showManualInput && (
                 <div className="space-y-3 w-full">
                   <p className="text-xs text-muted-foreground text-center">
-                    Signed in but still waiting?{" "}
+                    Paste the code from the browser, or{" "}
                     <button onClick={handleOpenManualUrl} className="text-primary hover:underline">
-                      Open sign-in again
+                      open sign-in again
                     </button>
-                    {" "}and paste the code below.
+                    {" "}to get one.
                   </p>
                   <Input
                     value={manualCode}
