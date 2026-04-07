@@ -819,14 +819,11 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     },
   )
 
-  // Abort active Claude sessions when the renderer crashes or navigates away,
+  // Abort active Claude sessions when the renderer crashes,
   // preventing a flood of "Render frame was disposed" errors from trpc-electron
   // trying to stream to a dead frame.
   window.webContents.on("render-process-gone", (_event, details) => {
     console.error("[Main] Renderer process gone in window", window.id, details)
-    abortAllClaudeSessions()
-  })
-  window.webContents.on("did-navigate", () => {
     abortAllClaudeSessions()
   })
 

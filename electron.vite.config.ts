@@ -51,12 +51,7 @@ export default defineConfig({
   },
   renderer: {
     plugins: [
-      react({
-        // In dev mode, use WDYR as JSX import source to track ALL component re-renders
-        jsxImportSource: isDev
-          ? "@welldone-software/why-did-you-render"
-          : undefined,
-      }),
+      react(),
     ],
     resolve: {
       alias: {
