@@ -60,6 +60,9 @@ import {
   selectedOllamaModelAtom,
   customHotkeysAtom,
   chatSourceModeAtom,
+  openRouterModelsAtom,
+  openRouterApiKeyAtom,
+  openRouterFreeOnlyAtom,
 } from "../../../lib/atoms"
 // Desktop uses real tRPC
 import { toast } from "sonner"
@@ -281,6 +284,9 @@ export function NewChatForm({
   // Get available models (with offline support)
   const availableModels = useAvailableModels()
   const [selectedOllamaModel, setSelectedOllamaModel] = useAtom(selectedOllamaModelAtom)
+  const [selectedOpenRouterModelId, setSelectedOpenRouterModelId] = useState<string | undefined>()
+  const openRouterModels = useAtomValue(openRouterModelsAtom)
+  const openRouterApiKey = useAtomValue(openRouterApiKeyAtom)
   const [thinkingEnabled, setThinkingEnabled] = useAtom(
     extendedThinkingEnabledAtom,
   )
@@ -1787,6 +1793,11 @@ export function NewChatForm({
                             thinkingEnabled,
                             onThinkingChange: setThinkingEnabled,
                           }}
+                          openRouter={openRouterApiKey ? {
+                            models: openRouterModels,
+                            selectedModelId: selectedOpenRouterModelId,
+                            onSelectModel: setSelectedOpenRouterModelId,
+                          } : undefined}
                         />
                       </div>
                     </div>

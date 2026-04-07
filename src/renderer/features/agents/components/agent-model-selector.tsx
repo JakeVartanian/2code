@@ -54,11 +54,17 @@ interface AgentModelSelectorProps {
     thinkingEnabled: boolean
     onThinkingChange: (enabled: boolean) => void
   }
+  openRouter?: {
+    models: { id: string; name: string; isFree: boolean }[]
+    selectedModelId?: string
+    onSelectModel: (modelId: string) => void
+  }
 }
 
 type FlatModelItem =
   | { type: "claude"; model: ClaudeModelOption }
   | { type: "ollama"; modelName: string; isRecommended: boolean }
+  | { type: "openrouter"; model: { id: string; name: string; isFree: boolean } }
   | { type: "custom" }
 
 export function AgentModelSelector({
@@ -73,6 +79,7 @@ export function AgentModelSelector({
   onOpenModelsSettings,
   onContinueWithProvider,
   claude,
+  openRouter,
 }: AgentModelSelectorProps) {
   const [search, setSearch] = useState("")
 
@@ -94,10 +101,16 @@ export function AgentModelSelector({
       for (const m of claude.models) {
         items.push({ type: "claude", model: m })
       }
+      // Add OpenRouter models if available
+      if (openRouter?.models && openRouter.models.length > 0) {
+        for (const m of openRouter.models) {
+          items.push({ type: "openrouter", model: m })
+        }
+      }
     }
 
     return items
-  }, [claude])
+  }, [claude, openRouter])
 
   // Filter by search
   const filteredModels = useMemo(() => {
@@ -113,6 +126,8 @@ export function AgentModelSelector({
           )
         case "ollama":
           return item.modelName.toLowerCase().includes(q)
+        case "openrouter":
+          return item.model.name.toLowerCase().includes(q)
         case "custom":
           return "custom model".includes(q)
       }
@@ -142,6 +157,8 @@ export function AgentModelSelector({
         return selectedAgentId === "claude-code" && claude.selectedModelId === item.model.id
       case "ollama":
         return selectedAgentId === "claude-code" && claude.selectedOllamaModel === item.modelName
+      case "openrouter":
+        return selectedAgentId === "claude-code" && openRouter?.selectedModelId === item.model.id
       case "custom":
         return selectedAgentId === "claude-code"
     }
@@ -157,6 +174,10 @@ export function AgentModelSelector({
         onSelectedAgentIdChange("claude-code")
         claude.onSelectOllamaModel(item.modelName)
         break
+      case "openrouter":
+        onSelectedAgentIdChange("claude-code")
+        openRouter?.onSelectModel(item.model.id)
+        break
       case "custom":
         onSelectedAgentIdChange("claude-code")
         break
@@ -170,6 +191,8 @@ export function AgentModelSelector({
         return <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
       case "ollama":
         return <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
+      case "openrouter":
+        return <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
       case "custom":
         return <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
     }
@@ -181,6 +204,8 @@ export function AgentModelSelector({
         return `${item.model.name} ${item.model.version}`
       case "ollama":
         return item.modelName + (item.isRecommended ? " (recommended)" : "")
+      case "openrouter":
+        return item.model.isFree ? `${item.model.name} (free)` : item.model.name
       case "custom":
         return "Custom Model"
     }
@@ -192,6 +217,8 @@ export function AgentModelSelector({
         return `claude-${item.model.id}`
       case "ollama":
         return `ollama-${item.modelName}`
+      case "openrouter":
+        return `openrouter-${item.model.id}`
       case "custom":
         return "custom"
     }
