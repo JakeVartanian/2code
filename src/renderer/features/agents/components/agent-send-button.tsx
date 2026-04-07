@@ -253,11 +253,8 @@ export function AgentSendButton({
     handleClick()
   }
 
-  // Hide tooltip during recording so wave indicator is visible
-  const tooltipOpen = isRecording ? false : undefined
-
   return (
-    <Tooltip delayDuration={1_000} open={tooltipOpen}>
+    <Tooltip delayDuration={1_000}>
       <TooltipTrigger asChild>
         <Button
           size={size}
@@ -273,7 +270,8 @@ export function AgentSendButton({
           {getIcon()}
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="left">{getTooltipContent()}</TooltipContent>
+      {/* Hide tooltip during recording so wave indicator is visible */}
+      {!isRecording && <TooltipContent side="left">{getTooltipContent()}</TooltipContent>}
     </Tooltip>
   )
 }

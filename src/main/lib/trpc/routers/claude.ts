@@ -793,6 +793,23 @@ export async function getAllMcpConfigHandler() {
 
 // ============ USAGE API HELPERS ============
 
+/** Read the encrypted refresh token for the active account from the app DB */
+function getStoredRefreshToken(): string | null {
+  try {
+    const db = getDatabase()
+    const settings = db.select().from(anthropicSettings).where(eq(anthropicSettings.id, "singleton")).get()
+    if (!settings?.activeAccountId) return null
+    const account = db.select().from(anthropicAccounts).where(eq(anthropicAccounts.id, settings.activeAccountId)).get()
+    if (!account?.refreshToken) return null
+    if (!safeStorage.isEncryptionAvailable()) {
+      return Buffer.from(account.refreshToken, "base64").toString("utf-8")
+    }
+    return safeStorage.decryptString(Buffer.from(account.refreshToken, "base64"))
+  } catch {
+    return null
+  }
+}
+
 const USAGE_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 const usageCache: { data: unknown; fetchedAt: number } = { data: null, fetchedAt: 0 }
 
@@ -3325,6 +3342,9 @@ ${prompt}
       return { error: "not_authenticated" as const }
     }
 
+    // Resolve refresh token: keychain first, then app DB (stored during OAuth exchange)
+    const refreshToken = keychainCreds?.refreshToken ?? getStoredRefreshToken() ?? undefined
+
     // If keychain token looks expired, proactively refresh before calling
     if (keychainCreds && isTokenExpired(keychainCreds.expiresAt) && keychainCreds.refreshToken) {
       try {
@@ -3336,7 +3356,7 @@ ${prompt}
       }
     }
 
-    const result = await fetchUsageWithRetry(accessToken, keychainCreds?.refreshToken)
+    const result = await fetchUsageWithRetry(accessToken, refreshToken)
     if (!("error" in result)) {
       usageCache.data = result
       usageCache.fetchedAt = Date.now()

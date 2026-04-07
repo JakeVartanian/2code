@@ -1112,6 +1112,7 @@ const ArchiveButton = memo(forwardRef<HTMLButtonElement, React.ButtonHTMLAttribu
 const UsageButton = memo(function UsageButton() {
   const [open, setOpen] = useState(false)
   const [blockTooltip, setBlockTooltip] = useState(false)
+  const [tooltipOpen, setTooltipOpen] = useState(false)
   const prevOpen = useRef(false)
 
   const { data, isFetching, refetch } = trpc.claude.getUsage.useQuery(undefined, {
@@ -1144,7 +1145,7 @@ const UsageButton = memo(function UsageButton() {
   const hasUsageData = data && !("error" in data)
 
   return (
-    <Tooltip delayDuration={500} open={open || blockTooltip ? false : undefined}>
+    <Tooltip delayDuration={500} open={open || blockTooltip ? false : tooltipOpen} onOpenChange={setTooltipOpen}>
       <TooltipTrigger asChild>
         <div>
           <DropdownMenu open={open} onOpenChange={setOpen}>

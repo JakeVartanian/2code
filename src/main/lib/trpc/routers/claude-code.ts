@@ -181,11 +181,12 @@ function decryptToken(encrypted: string): string {
  * Store OAuth token - now uses multi-account system
  * If setAsActive is true, also sets this account as active
  */
-function storeOAuthToken(oauthToken: string, setAsActive = true): string {
+function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: string): string {
   const authManager = getAuthManager()
   const user = authManager.getUser()
 
   const encryptedToken = encryptToken(oauthToken)
+  const encryptedRefresh = refreshToken ? encryptToken(refreshToken) : null
   const db = getDatabase()
   const newId = createId()
 
@@ -194,6 +195,7 @@ function storeOAuthToken(oauthToken: string, setAsActive = true): string {
     .values({
       id: newId,
       oauthToken: encryptedToken,
+      refreshToken: encryptedRefresh,
       displayName: "Anthropic Account",
       connectedAt: new Date(),
       desktopUserId: user?.id ?? null,
@@ -383,8 +385,8 @@ export const claudeCodeRouter = router({
             }),
           })
           if (tokenRes.ok) {
-            const tokenData = await tokenRes.json() as { access_token: string }
-            storeOAuthToken(tokenData.access_token)
+            const tokenData = await tokenRes.json() as { access_token: string; refresh_token?: string }
+            storeOAuthToken(tokenData.access_token, true, tokenData.refresh_token)
             // Mark session as completed so subsequent polls keep returning success
             session.completed = true
             console.log("[ClaudeCode] Token stored via auto localhost callback")
@@ -454,11 +456,11 @@ export const claudeCodeRouter = router({
         throw new Error(`Token exchange failed (${tokenRes.status}): ${errText}`)
       }
 
-      const tokenData = await tokenRes.json() as { access_token: string }
+      const tokenData = await tokenRes.json() as { access_token: string; refresh_token?: string }
 
       try { session.server.close() } catch {}
       oauthSessions.delete(input.sessionId)
-      storeOAuthToken(tokenData.access_token)
+      storeOAuthToken(tokenData.access_token, true, tokenData.refresh_token)
       console.log("[ClaudeCode] OAuth token stored")
       return { success: true }
     }),

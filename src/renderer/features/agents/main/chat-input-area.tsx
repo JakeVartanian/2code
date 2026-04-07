@@ -67,6 +67,7 @@ import {
 } from "../atoms"
 import { useAgentSubChatStore } from "../stores/sub-chat-store"
 import { AgentsSlashCommand, type SlashCommandOption } from "../commands"
+import { CLI_PASSTHROUGH_COMMANDS } from "../commands/builtin-commands"
 import { AgentModelSelector } from "../components/agent-model-selector"
 import { AgentSendButton } from "../components/agent-send-button"
 import type { UploadedFile, UploadedImage } from "../hooks/use-agents-file-upload"
@@ -1000,11 +1001,19 @@ export const ChatInputArea = memo(function ChatInputArea({
         }
       }
 
+      // CLI passthrough commands (/usage, /doctor, /config, /memory):
+      // insert and immediately send — these take no arguments
+      if (command.category === "builtin" && CLI_PASSTHROUGH_COMMANDS.has(command.name)) {
+        editorRef.current?.setValue(`/${command.name}`)
+        onSend()
+        return
+      }
+
       // For all other commands (builtin prompts and custom):
       // insert the command and let user add arguments or press Enter to send
       editorRef.current?.setValue(`/${command.name} `)
     },
-    [subChatMode, updateMode, onCreateNewSubChat, onCompact, editorRef],
+    [subChatMode, updateMode, onCreateNewSubChat, onCompact, onSend, editorRef],
   )
 
   // Paste handler for images, plain text, and large text (saved as files)

@@ -52,6 +52,9 @@ export function isPromptCommand(
   return type in COMMAND_PROMPTS
 }
 
+/** Commands that are passed through as-is to the Claude CLI (native CLI commands) */
+export const CLI_PASSTHROUGH_COMMANDS = new Set(["usage", "doctor", "config", "memory"])
+
 /**
  * Built-in slash commands that are handled client-side
  */
@@ -82,6 +85,34 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommandOption[] = [
     name: "compact",
     command: "/compact",
     description: "Compact conversation context to reduce token usage",
+    category: "builtin",
+  },
+  {
+    id: "builtin:usage",
+    name: "usage",
+    command: "/usage",
+    description: "Show Claude Code usage and session statistics",
+    category: "builtin",
+  },
+  {
+    id: "builtin:doctor",
+    name: "doctor",
+    command: "/doctor",
+    description: "Check Claude Code installation health",
+    category: "builtin",
+  },
+  {
+    id: "builtin:config",
+    name: "config",
+    command: "/config",
+    description: "View or edit Claude Code configuration",
+    category: "builtin",
+  },
+  {
+    id: "builtin:memory",
+    name: "memory",
+    command: "/memory",
+    description: "Edit Claude's memory (CLAUDE.md files)",
     category: "builtin",
   },
   // Prompt-based commands

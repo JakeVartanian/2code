@@ -52,6 +52,7 @@ function PropertyRow({
   tooltip?: string
 }) {
   const [showCopied, setShowCopied] = useState(false)
+  const [tooltipOpen, setTooltipOpen] = useState(false)
 
   const handleClick = useCallback(() => {
     if (copyable) {
@@ -90,7 +91,7 @@ function PropertyRow({
       {/* Value column - flexible */}
       <div className="flex-1 min-w-0 pl-2 truncate">
         {copyable ? (
-          <Tooltip open={showCopied ? true : undefined}>
+          <Tooltip open={showCopied || tooltipOpen} onOpenChange={setTooltipOpen}>
             <TooltipTrigger asChild>
               {valueEl}
             </TooltipTrigger>

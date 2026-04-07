@@ -5639,23 +5639,18 @@ export function ChatView({
   const isFetchingDiffRef = useRef(false)
 
   const fetchDiffStats = useCallback(async () => {
-    console.log("[fetchDiffStats] Called with:", { worktreePath, sandboxId, chatId, isDesktop: isDesktopApp() })
-
     // Desktop uses worktreePath, web uses sandboxId
     // Don't reset stats if worktreePath is temporarily undefined - just skip the fetch
     // This prevents the button from becoming disabled when component re-renders
     if (!worktreePath && !sandboxId) {
-      console.log("[fetchDiffStats] Skipping - no worktreePath or sandboxId")
       return
     }
 
     // Prevent duplicate parallel fetches
     if (isFetchingDiffRef.current) {
-      console.log("[fetchDiffStats] Skipping - already fetching")
       return
     }
     isFetchingDiffRef.current = true
-    console.log("[fetchDiffStats] Starting fetch...")
 
     try {
       // Desktop: use new getParsedDiff endpoint (all-in-one: parsing + file contents)
@@ -5704,13 +5699,10 @@ export function ChatView({
 
       // Remote sandbox: use stats from chat data (desktop) or fetch diff (web)
       if (sandboxId) {
-        console.log("[fetchDiffStats] Sandbox mode - sandboxId:", sandboxId)
-
         // Desktop app: use stats already provided in chat data
         // The diff sidebar won't work for remote chats (no worktree), but stats will show
         if (isDesktopApp()) {
           const remoteStats = (agentChat as any)?.remoteStats
-          console.log("[fetchDiffStats] Desktop remote chat - using remoteStats:", remoteStats)
 
           if (remoteStats) {
             setDiffStats({
@@ -5747,14 +5739,11 @@ export function ChatView({
         rawDiff = data.diff || null
 
         // Store raw diff for AgentDiffView
-        console.log("[fetchDiffStats] Setting diff content, length:", rawDiff?.length ?? 0)
         setDiffContent(rawDiff)
 
         if (rawDiff && rawDiff.trim()) {
           // Parse diff to get file list and stats (client-side for web)
-          console.log("[fetchDiffStats] Parsing diff...")
           const parsedFiles = splitUnifiedDiffByFile(rawDiff)
-          console.log("[fetchDiffStats] Parsed files:", parsedFiles.length, "files")
           setParsedFileDiffs(parsedFiles)
 
           let additions = 0
@@ -5764,7 +5753,6 @@ export function ChatView({
             deletions += file.deletions
           }
 
-          console.log("[fetchDiffStats] Setting stats:", { fileCount: parsedFiles.length, additions, deletions })
           setDiffStats({
             fileCount: parsedFiles.length,
             additions,
@@ -5773,7 +5761,6 @@ export function ChatView({
             hasChanges: parsedFiles.length > 0,
           })
         } else {
-          console.log("[fetchDiffStats] No diff content, setting empty stats")
           setDiffStats({
             fileCount: 0,
             additions: 0,
@@ -5790,7 +5777,6 @@ export function ChatView({
       console.error("[fetchDiffStats] Error:", error)
       setDiffStats((prev) => ({ ...prev, isLoading: false }))
     } finally {
-      console.log("[fetchDiffStats] Done")
       isFetchingDiffRef.current = false
     }
   }, [worktreePath, sandboxId, chatId, agentChat]) // Note: activeSubChatId removed - diff is same for whole chat
@@ -6097,7 +6083,6 @@ Make sure to preserve all functionality from both branches when resolving confli
 
     // If git shows no changes but we still have parsedFileDiffs, clear them
     if (!hasUncommittedChanges && parsedFileDiffs && parsedFileDiffs.length > 0) {
-      console.log('[active-chat] Git status empty but parsedFileDiffs has files, refreshing diff data')
       setParsedFileDiffs([])
       setPrefetchedFileContents({})
       setDiffContent(null)
@@ -6364,14 +6349,6 @@ Make sure to preserve all functionality from both branches when resolving confli
         .allSubChats.find((sc) => sc.id === subChatId)
       const subChatMode = subChatMeta?.mode || currentMode
 
-      console.log("[getOrCreateChat] Transport selection", {
-        subChatId: subChatId.slice(-8),
-        isRemoteChat,
-        chatSandboxId,
-        chatSandboxUrl,
-        worktreePath: worktreePath ? "exists" : "none",
-      })
-
       let transport: IPCChatTransport | RemoteChatTransport | null = null
 
       if (isRemoteChat && chatSandboxUrl) {
@@ -6379,10 +6356,6 @@ Make sure to preserve all functionality from both branches when resolving confli
         const subChatName = subChat?.name || "Chat"
         const selectedModelId = appStore.get(subChatModelIdAtomFamily(subChatId))
         const modelString = MODEL_ID_MAP[selectedModelId] || MODEL_ID_MAP["opus"]
-        console.log("[getOrCreateChat] Using RemoteChatTransport", {
-          sandboxUrl: chatSandboxUrl,
-          model: modelString,
-        })
         transport = new RemoteChatTransport({
           chatId,
           subChatId,
@@ -6629,20 +6602,12 @@ Make sure to preserve all functionality from both branches when resolving confli
     const newSubChatSandboxUrl = newSubChatSandboxId ? `https://3003-${newSubChatSandboxId}.e2b.app` : null
     const isNewSubChatRemote = !!(agentChat as any)?.isRemote || !!newSubChatSandboxId
 
-    console.log("[createNewSubChat] Transport selection", {
-      newId: newId.slice(-8),
-      isNewSubChatRemote,
-      newSubChatSandboxId,
-      newSubChatSandboxUrl,
-    })
-
     let newSubChatTransport: IPCChatTransport | RemoteChatTransport | null = null
 
     if (isNewSubChatRemote && newSubChatSandboxUrl) {
       // Remote sandbox chat: use HTTP SSE transport
       const selectedModelId = appStore.get(subChatModelIdAtomFamily(newId))
       const modelString = MODEL_ID_MAP[selectedModelId] || MODEL_ID_MAP["opus"]
-      console.log("[createNewSubChat] Using RemoteChatTransport", { model: modelString })
       newSubChatTransport = new RemoteChatTransport({
         chatId,
         subChatId: newId,
@@ -7437,6 +7402,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                                 contain: "layout style paint",
                               }}
                               aria-hidden
+                              inert=""
                             >
                               <ChatDataSync chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={false}>
                               <ChatViewInner
@@ -7500,6 +7466,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                       contain: "layout style paint",
                     }}
                     aria-hidden={!isActive}
+                    {...(!isActive ? { inert: "" } : {})}
                   >
                     <ChatDataSync chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={isActive}>
                     <ChatViewInner
