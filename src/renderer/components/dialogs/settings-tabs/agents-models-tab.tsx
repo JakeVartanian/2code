@@ -347,13 +347,16 @@ export function AgentsModelsTab() {
   const fetchOpenRouterModelsMutation = trpc.agents.fetchOpenRouterModels.useMutation({
     onSuccess: (models) => {
       console.log("[agents-models-tab] Fetched OpenRouter models:", models.length)
-      setOpenRouterModels(models)
-      // Ensure localStorage is updated
+      // Update localStorage FIRST, then update the atom
       try {
         localStorage.setItem("agents:openrouter-models", JSON.stringify(models))
+        console.log("[agents-models-tab] Persisted to localStorage")
       } catch (e) {
         console.error("Failed to persist OpenRouter models to localStorage:", e)
       }
+      // Then update the atom (should already be in sync due to localStorage above)
+      setOpenRouterModels(models)
+      console.log("[agents-models-tab] Updated atom")
     },
     onError: (err) => {
       console.error("[agents-models-tab] Failed to fetch OpenRouter models:", err)
