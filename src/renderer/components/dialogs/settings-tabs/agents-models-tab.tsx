@@ -394,7 +394,10 @@ export function AgentsModelsTab() {
   // Always fetch OpenRouter models when key is present (on mount and key change)
   useEffect(() => {
     if (storedOpenRouterKey) {
+      console.log("[agents-models-tab] useEffect triggered, fetching models for key:", storedOpenRouterKey.slice(0, 10) + "...")
       fetchOpenRouterModels(storedOpenRouterKey)
+    } else {
+      console.log("[agents-models-tab] No stored OpenRouter key found")
     }
   // Only re-run when the key itself changes, not on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
