@@ -292,6 +292,13 @@ export function NewChatForm({
     extendedThinkingEnabledAtom,
   )
 
+  // Log when OpenRouter data changes
+  useEffect(() => {
+    if (openRouterModels.length > 0) {
+      console.log("[new-chat-form] OpenRouter models loaded:", openRouterModels.length, "models, API key:", openRouterApiKey ? openRouterApiKey.slice(0, 10) + "..." : "EMPTY")
+    }
+  }, [openRouterModels, openRouterApiKey])
+
   // Filter OpenRouter models by free-only setting if enabled
   const filteredOpenRouterModels = useMemo(() => {
     if (!openRouterFreeOnly) return openRouterModels

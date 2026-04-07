@@ -112,11 +112,15 @@ export function AgentModelSelector({
 
     // Always add OpenRouter models if available (independent of offline/custom state)
     if (openRouter?.models && openRouter.models.length > 0) {
+      console.log("[AgentModelSelector] Adding OpenRouter models:", openRouter.models.length)
       for (const m of openRouter.models) {
         items.push({ type: "openrouter", model: m })
       }
+    } else {
+      console.log("[AgentModelSelector] No OpenRouter models available. openRouter:", openRouter)
     }
 
+    console.log("[AgentModelSelector] Total models in dropdown:", items.length, "(Claude:", claude.models.length, ", OpenRouter:", openRouter?.models.length || 0, ")")
     return items
   }, [claude, openRouter])
 
