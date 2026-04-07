@@ -15,10 +15,8 @@ interface SessionCostIndicatorProps {
   className?: string
 }
 
-function getTokenColor(totalTokens: number): string {
-  if (totalTokens < 50_000) return "text-emerald-500"
-  if (totalTokens < 200_000) return "text-amber-500"
-  return "text-orange-500"
+function getTokenColor(_totalTokens: number): string {
+  return "text-muted-foreground"
 }
 
 function formatSessionTokens(tokens: number): string {

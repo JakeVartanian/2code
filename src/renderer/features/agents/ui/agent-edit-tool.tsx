@@ -473,7 +473,7 @@ export const AgentEditTool = memo(function AgentEditTool({
       <div className="flex items-center gap-1.5 px-2 py-0.5">
         <span className="text-xs text-muted-foreground">
           {isPending ? (
-            <TextShimmer as="span" duration={1.2}>
+            <TextShimmer as="span" duration={2.5}>
               {headerAction}
             </TextShimmer>
           ) : (
@@ -516,7 +516,7 @@ export const AgentEditTool = memo(function AgentEditTool({
               {isPending || isInputStreaming ? (
                 <TextShimmer
                   as="span"
-                  duration={1.2}
+                  duration={2.5}
                   className="truncate"
                 >
                   {filename}

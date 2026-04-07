@@ -479,7 +479,7 @@ export const AgentTodoTool = memo(function AgentTodoTool({
             <span className="font-medium whitespace-nowrap flex-shrink-0">
               <TextShimmer
                 as="span"
-                duration={1.2}
+                duration={2.5}
                 className="inline-flex items-center text-xs leading-none h-4 m-0"
               >
                 Updating to-dos...
@@ -516,7 +516,7 @@ export const AgentTodoTool = memo(function AgentTodoTool({
               {isPending ? (
                 <TextShimmer
                   as="span"
-                  duration={1.2}
+                  duration={2.5}
                   className="inline-flex items-center text-xs leading-none h-4 m-0"
                 >
                   Creating to-do list...
@@ -588,7 +588,7 @@ export const AgentTodoTool = memo(function AgentTodoTool({
               {isPending ? (
                 <TextShimmer
                   as="span"
-                  duration={1.2}
+                  duration={2.5}
                   className="inline-flex items-center text-xs leading-none h-4 m-0"
                 >
                   {summaryTitle}

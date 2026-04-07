@@ -168,7 +168,7 @@ const SidebarSearchHistoryPopover = memo(function SidebarSearchHistoryPopover({
       sideOffset={4}
       collisionPadding={16}
       trigger={
-        <Tooltip delayDuration={500}>
+        <Tooltip>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
               <Button
@@ -1036,7 +1036,7 @@ export function AgentsSubChatsSidebar({
         allSubChatsLength={allSubChats.length}
         onSelect={handleSelectFromHistory}
       />
-      <Tooltip delayDuration={500}>
+      <Tooltip>
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
@@ -1097,7 +1097,7 @@ export function AgentsSubChatsSidebar({
           ) : (
             <div className="flex items-center justify-between gap-1 mb-1">
               {onBackToChats && (
-                <Tooltip delayDuration={500}>
+                <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
@@ -1190,7 +1190,7 @@ export function AgentsSubChatsSidebar({
               WebkitAppRegion: "no-drag",
             }}
           >
-            <Tooltip delayDuration={500}>
+            <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   onClick={handleCreateNew}

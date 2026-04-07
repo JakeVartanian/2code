@@ -129,7 +129,7 @@ const ChangesFileItemWithContext = memo(function ChangesFileItemWithContext({
 						onClick={(e) => e.stopPropagation()}
 						className="size-4 shrink-0 border-muted-foreground/50"
 					/>
-					<Tooltip delayDuration={500}>
+					<Tooltip>
 						<TooltipTrigger asChild>
 							<div className="flex-1 min-w-0 flex items-center overflow-hidden">
 								{dirPath && (

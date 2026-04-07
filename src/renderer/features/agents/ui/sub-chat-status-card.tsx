@@ -25,7 +25,7 @@ function AnimatedDots() {
   useEffect(() => {
     const interval = setInterval(() => {
       setDotCount((prev) => (prev % 3) + 1)
-    }, 400)
+    }, 800)
     return () => clearInterval(interval)
   }, [])
 

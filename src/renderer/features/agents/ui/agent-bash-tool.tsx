@@ -112,7 +112,7 @@ export const AgentBashTool = memo(function AgentBashTool({
             <span className="font-medium whitespace-nowrap flex-shrink-0">
               <TextShimmer
                 as="span"
-                duration={1.2}
+                duration={2.5}
                 className="inline-flex items-center text-xs leading-none h-4 m-0"
               >
                 Generating command
@@ -153,16 +153,16 @@ export const AgentBashTool = memo(function AgentBashTool({
         <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
           {/* Status */}
           {!isPending && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <div className="flex items-center gap-1 text-xs">
               {isSuccess ? (
                 <>
-                  <Check className="w-3 h-3" />
-                  <span>Success</span>
+                  <Check className="w-3 h-3 text-green-600 dark:text-green-400" />
+                  <span className="text-green-600 dark:text-green-400">Success</span>
                 </>
               ) : isError ? (
                 <>
-                  <X className="w-3 h-3" />
-                  <span>Failed</span>
+                  <X className="w-3 h-3 text-rose-500 dark:text-rose-400" />
+                  <span className="text-rose-500 dark:text-rose-400">Failed</span>
                 </>
               ) : null}
             </div>
@@ -223,9 +223,7 @@ export const AgentBashTool = memo(function AgentBashTool({
               "mt-1.5 font-mono text-xs whitespace-pre-wrap break-all",
               // If exitCode is 0, it's a warning (e.g. npm warnings)
               // If exitCode is non-zero, it's an error
-              exitCode === 0 || exitCode === undefined
-                ? "text-amber-600 dark:text-amber-400"
-                : "text-rose-500 dark:text-rose-400",
+              "text-amber-600/80 dark:text-amber-400/80",
             )}
           >
             {isOutputExpanded ? stderr : stderrLimited.text}

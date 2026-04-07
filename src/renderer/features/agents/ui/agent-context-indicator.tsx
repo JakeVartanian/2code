@@ -127,7 +127,7 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
             percent={percentUsed}
             size={14}
             strokeWidth={2.5}
-            className={isCompacting ? "animate-pulse" : undefined}
+            className={isCompacting ? "opacity-60" : undefined}
           />
         </div>
       </TooltipTrigger>

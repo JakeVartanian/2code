@@ -243,7 +243,7 @@ function CodeViewerHeader({
       {/* Right side: Actions */}
       <div className="flex items-center gap-1 flex-shrink-0">
         {/* Open in editor */}
-        <Tooltip delayDuration={500}>
+        <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"

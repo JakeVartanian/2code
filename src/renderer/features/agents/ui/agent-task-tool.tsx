@@ -136,7 +136,7 @@ export const AgentTaskTool = memo(function AgentTaskTool({
             {isPending ? (
               <TextShimmer
                 as="span"
-                duration={1.2}
+                duration={2.5}
                 className="font-medium whitespace-nowrap flex-shrink-0"
               >
                 {getTitle()}

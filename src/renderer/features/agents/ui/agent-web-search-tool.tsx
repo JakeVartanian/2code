@@ -80,7 +80,7 @@ export const AgentWebSearchTool = memo(function AgentWebSearchTool({
           {isPending ? (
             <TextShimmer
               as="span"
-              duration={1.2}
+              duration={2.5}
               className="text-xs text-muted-foreground"
             >
               Searching

@@ -48,6 +48,10 @@ module.exports = {
           foreground: "hsl(var(--plan-mode-foreground))",
         },
       },
+      fontSize: {
+        xxs: ["10px", { lineHeight: "14px" }],
+        micro: ["11px", { lineHeight: "16px" }],
+      },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",

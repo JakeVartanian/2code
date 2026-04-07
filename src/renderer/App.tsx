@@ -20,6 +20,7 @@ import {
   apiKeyOnboardingCompletedAtom,
   billingMethodAtom,
 } from "./lib/atoms"
+import { Logo } from "./components/ui/logo"
 import { appStore } from "./lib/jotai-store"
 import { VSCodeThemeProvider } from "./lib/themes/theme-provider"
 import { trpc } from "./lib/trpc"
@@ -105,9 +106,42 @@ function ThemedToaster() {
 }
 
 /**
+ * Full-screen spinner shown while the main process finishes initializing.
+ * Prevents any DB-touching tRPC calls from firing before the main process is ready.
+ */
+function AppLoadingScreen() {
+  return (
+    <div className="h-screen w-screen flex items-center justify-center bg-background">
+      <div className="animate-spin rounded-full p-2">
+        <Logo className="w-8 h-8 opacity-60" />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Readiness gate — renders a spinner until the main process is fully initialized.
+ * Separate component so AppContent's hooks always run in the same order.
+ */
+function AppReadyGate() {
+  const appStatusQuery = trpc.app.status.useQuery(undefined, {
+    refetchInterval: (query) => (query.state.data?.ready ? false : 300),
+    retry: true,
+    retryDelay: 300,
+  })
+
+  if (!appStatusQuery.data?.ready) {
+    return <AppLoadingScreen />
+  }
+
+  return <AppContent />
+}
+
+/**
  * Main content router - decides which page to show based on onboarding state
  */
 function AppContent() {
+
   const billingMethod = useAtomValue(billingMethodAtom)
   const setBillingMethod = useSetAtom(billingMethodAtom)
   const anthropicOnboardingCompleted = useAtomValue(
@@ -225,13 +259,13 @@ export function App() {
         <JotaiProvider store={appStore}>
           <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
             <VSCodeThemeProvider>
-              <TooltipProvider delayDuration={100}>
+              <TooltipProvider delayDuration={500}>
                 <TRPCProvider>
                   <div
                     data-agents-page
                     className="h-screen w-screen bg-background text-foreground overflow-hidden"
                   >
-                    <AppContent />
+                    <AppReadyGate />
                   </div>
                   <ThemedToaster />
                 </TRPCProvider>

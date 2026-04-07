@@ -279,7 +279,7 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
               </span>
               {onRetrySetup && (
                 <button
-                  className="px-2 py-1 text-sm hover:bg-destructive/20 rounded"
+                  className="px-3 py-1 text-sm font-medium bg-destructive/10 hover:bg-destructive/20 rounded-md transition-colors duration-150 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70 active:scale-[0.97]"
                   onClick={onRetrySetup}
                 >
                   Retry

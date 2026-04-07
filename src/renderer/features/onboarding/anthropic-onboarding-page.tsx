@@ -98,31 +98,8 @@ export function AnthropicOnboardingPage() {
     refetchInterval: isPolling || authStarted ? 1500 : false,
   })
 
-  // Auto-start auth exactly once on mount — empty deps prevents re-fire on error boundary resets
-  // or if startAuthMutation reference changes between renders.
-  useEffect(() => {
-    if (!checkedExistingToken || shouldOfferExistingToken) return
-
-    setFlowState({ step: "starting" })
-    startAuthMutation.mutate(undefined, {
-      onSuccess: (result) => {
-        setAuthStarted(true)
-        setFlowState({
-          step: "waiting_url",
-          sandboxId: result.sandboxId,
-          sandboxUrl: result.sandboxUrl,
-          sessionId: result.sessionId,
-        })
-      },
-      onError: (err) => {
-        setFlowState({
-          step: "error",
-          message: err.message || "Failed to start authentication",
-        })
-      },
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // Auth is NOT auto-started — user must click "Connect" to begin the flow.
+  // This prevents unexpected browser popups on first load.
 
   // Complete onboarding as soon as the token is stored in the DB — belt-and-suspenders.
   // Only fires after auth has been started (so we don't complete on stale data from a previous session).
@@ -194,16 +171,20 @@ export function AnthropicOnboardingPage() {
     setUserClickedConnect(true)
 
     if (flowState.step === "has_url") {
-      // Browser was already opened automatically in startAuth — just mark state
+      // Browser was already opened — just mark state
       urlOpenedRef.current = true
       setUrlOpened(true)
-    } else if (flowState.step === "error") {
-      // Retry on error
+      return
+    }
+
+    // Start auth for idle, error, or any non-active state
+    if (flowState.step === "idle" || flowState.step === "error") {
       urlOpenedRef.current = false
       setUrlOpened(false)
       setFlowState({ step: "starting" })
       try {
         const result = await startAuthMutation.mutateAsync()
+        setAuthStarted(true)
         setFlowState({
           step: "waiting_url",
           sandboxId: result.sandboxId,
@@ -218,8 +199,6 @@ export function AnthropicOnboardingPage() {
         })
       }
     }
-    // For idle, starting, waiting_url states - the useEffect will handle opening the URL
-    // when it becomes ready (userClickedConnect is now true)
   }
 
   const handleUseExistingToken = async () => {
@@ -394,10 +373,8 @@ export function AnthropicOnboardingPage() {
             </div>
           )}
 
-          {/* Connect Button - shows loader only if user clicked AND loading */}
-          {checkedExistingToken &&
-            !shouldOfferExistingToken &&
-            !urlOpened &&
+          {/* Connect Button - visible until browser opens or error shown */}
+          {!urlOpened &&
             flowState.step !== "has_url" &&
             flowState.step !== "error" && (
               <button

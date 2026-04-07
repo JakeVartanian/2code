@@ -1338,7 +1338,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                   onSubmit={onSubmitWithQuestionAnswer || handleEditorSubmit}
                   onForceSubmit={onForceSend}
                   onShiftTab={toggleMode}
-                  placeholder={isStreaming ? "Add to the queue" : "Plan, @ for context, / for commands"}
+                  placeholder={isStreaming ? "Type to queue a follow-up..." : messageTokenData.messageCount > 0 ? "Ask a follow-up or request changes..." : "Plan, @ for context, / for commands"}
                   className={cn(
                     "bg-transparent max-h-[200px] overflow-y-auto p-1",
                     isMobile && "min-h-[56px]",

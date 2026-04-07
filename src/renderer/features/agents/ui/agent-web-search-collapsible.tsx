@@ -73,7 +73,7 @@ export const AgentWebSearchCollapsible = memo(
                 {isStreaming ? (
                   <TextShimmer
                     as="span"
-                    duration={1.2}
+                    duration={2.5}
                     className="inline-flex items-center text-xs leading-none"
                   >
                     Searching web

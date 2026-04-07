@@ -305,6 +305,11 @@ export function AgentModelSelector({
                     >
                       {getItemIcon(item)}
                       <span className="truncate flex-1">{getItemLabel(item)}</span>
+                      {item.type === "claude" && item.model.tagline && (
+                        <span className="text-[10px] text-muted-foreground shrink-0">
+                          {item.model.tagline}
+                        </span>
+                      )}
                       {item.type === "claude" && item.model.costTier && (
                         <span className={cn("text-[10px] font-mono shrink-0", getCostTierColor(item.model.costTier))}>
                           {item.model.costTier}

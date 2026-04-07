@@ -69,7 +69,7 @@ export const AgentWebFetchTool = memo(function AgentWebFetchTool({
           {isPending ? (
             <TextShimmer
               as="span"
-              duration={1.2}
+              duration={2.5}
               className="text-xs text-muted-foreground"
             >
               Fetching

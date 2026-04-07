@@ -100,7 +100,7 @@ function PropertyRow({
             </TooltipContent>
           </Tooltip>
         ) : tooltip ? (
-          <Tooltip delayDuration={500}>
+          <Tooltip>
             <TooltipTrigger asChild>
               {valueEl}
             </TooltipTrigger>
@@ -296,7 +296,7 @@ export const InfoSection = memo(function InfoSection({
             <span className="text-xs text-muted-foreground truncate">Open in</span>
           </div>
           <div className="flex-1 min-w-0 pl-2">
-            <Tooltip delayDuration={500}>
+            <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"

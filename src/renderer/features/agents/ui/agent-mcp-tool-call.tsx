@@ -260,7 +260,7 @@ export const AgentMcpToolCall = memo(function AgentMcpToolCall({
               {isPending ? (
                 <TextShimmer
                   as="span"
-                  duration={1.2}
+                  duration={2.5}
                   className="inline-flex items-center text-xs leading-none h-4 m-0"
                 >
                   {title}

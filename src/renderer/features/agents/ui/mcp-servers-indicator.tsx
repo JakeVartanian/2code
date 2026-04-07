@@ -210,7 +210,7 @@ export const McpServersIndicator = memo(function McpServersIndicator({
 
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
-      <Tooltip delayDuration={500}>
+      <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <Button

@@ -622,7 +622,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
             <div key={idx} className="flex items-center gap-1.5 px-2 py-0.5">
               <span className="text-xs text-muted-foreground">
                 {isOpStreaming ? (
-                  <TextShimmer as="span" duration={1.2}>
+                  <TextShimmer as="span" duration={2.5}>
                     {isWrite ? "Creating plan..." : "Updating plan..."}
                   </TextShimmer>
                 ) : (

@@ -3239,7 +3239,9 @@ const ChatViewInner = memo(function ChatViewInner({
         return
       }
       if (isStreamingRef.current) {
-        toast.error("Cannot rollback while streaming")
+        toast.error("Cannot rollback while streaming", {
+          description: "Stop the current response first, then try again.",
+        })
         return
       }
 
@@ -3377,7 +3379,9 @@ const ChatViewInner = memo(function ChatViewInner({
         })
 
         if (!result.success) {
-          toast.error(`Failed to rollback: ${result.error}`)
+          toast.error("Rollback failed", {
+            description: result.error || "Try refreshing the chat.",
+          })
           setIsRollingBack(false)
           return
         }
@@ -3406,7 +3410,9 @@ const ChatViewInner = memo(function ChatViewInner({
         editorRef.current?.focus()
       } catch (error) {
         console.error("[handleRollback] Error:", error)
-        toast.error("Failed to rollback")
+        toast.error("Rollback failed", {
+          description: "An unexpected error occurred. Try refreshing the chat.",
+        })
       } finally {
         setIsRollingBack(false)
       }
@@ -7184,7 +7190,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                       />
                       {/* Open Locally button - desktop only, sandbox mode */}
                       {showOpenLocally && (
-                        <Tooltip delayDuration={500}>
+                        <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
                               variant="default"
@@ -7215,7 +7221,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                   sandboxId &&
                   chatSourceMode === "local" &&
                   (canOpenPreview ? (
-                    <Tooltip delayDuration={500}>
+                    <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
                           variant="ghost"
@@ -7250,7 +7256,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                     isUnifiedSidebarEnabled ? (
                       // Details button for unified sidebar
                       !isDetailsSidebarOpen && (
-                        <Tooltip delayDuration={500}>
+                        <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
                               variant="ghost"
@@ -7271,7 +7277,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                     ) : (
                       // Terminal button for legacy sidebars
                       !isTerminalSidebarOpen && (
-                        <Tooltip delayDuration={500}>
+                        <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
                               variant="ghost"
@@ -7293,7 +7299,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                   )}
                 {/* Restore Button - shows when viewing archived workspace (desktop only) */}
                 {!isMobileFullscreen && isArchived && (
-                  <Tooltip delayDuration={500}>
+                  <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
@@ -7497,8 +7503,12 @@ Make sure to preserve all functionality from both branches when resolving confli
             </div>
           ) : (
             <>
-              {/* Empty chat area - no loading indicator */}
-              <div className="flex-1" />
+              {/* Empty chat area - guidance message */}
+              <div className="flex-1 flex items-center justify-center">
+                <p className="text-sm text-muted-foreground/60 text-center max-w-xs px-4 select-none">
+                  Describe what you want to build or fix, then press Enter.
+                </p>
+              </div>
 
               {/* Disabled input while loading */}
               <div className="px-2 pb-2">

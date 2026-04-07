@@ -1146,7 +1146,7 @@ const UsageButton = memo(function UsageButton() {
   const hasUsageData = data && !("error" in data)
 
   return (
-    <Tooltip delayDuration={500} open={open || blockTooltip ? false : tooltipOpen} onOpenChange={setTooltipOpen}>
+    <Tooltip open={open || blockTooltip ? false : tooltipOpen} onOpenChange={setTooltipOpen}>
       <TooltipTrigger asChild>
         <div>
           <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -1289,7 +1289,7 @@ const ArchiveSection = memo(function ArchiveSection({ archivedChatsCount }: Arch
 
   return (
     <Tooltip
-      delayDuration={500}
+     
       open={archivePopoverOpen || blockArchiveTooltip ? false : undefined}
     >
       <TooltipTrigger asChild>
@@ -1380,7 +1380,7 @@ const SidebarHeader = memo(function SidebarHeader({
             WebkitAppRegion: "no-drag",
           }}
         >
-          <Tooltip delayDuration={500}>
+          <Tooltip>
             <TooltipTrigger asChild>
               <ButtonCustom
                 variant="ghost"
@@ -3054,7 +3054,7 @@ export function AgentsSidebar({
       <div className="px-2 pb-3 flex-shrink-0">
         <div className="space-y-2">
           {/* New Workspace Button */}
-          <Tooltip delayDuration={500}>
+          <Tooltip>
             <TooltipTrigger asChild>
               <ButtonCustom
                 onClick={handleNewAgent}
@@ -3293,7 +3293,7 @@ export function AgentsSidebar({
             <div className="flex items-center">
               <div className="flex items-center gap-1">
                 {/* Settings Button */}
-                <Tooltip delayDuration={500}>
+                <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
