@@ -23,7 +23,7 @@
     "dist:upload": "node scripts/upload-release.mjs",
     "claude:download": "node scripts/download-claude-binary.mjs --version=2.1.45",
     "claude:download:all": "node scripts/download-claude-binary.mjs --version=2.1.45 --all",
-    "package:mac:arm64": "npx electron-rebuild -f -w better-sqlite3,node-pty && electron-builder --mac --arm64",
+    "package:mac:arm64": "bun run claude:download && bun run build && npx electron-rebuild -f -w better-sqlite3,node-pty && electron-builder --mac --arm64",
     "release": "rm -rf release && (test -d node_modules || bun i) && bun run claude:download && bun run build && bun run package:mac && bun run dist:manifest && ./scripts/upload-release-wrangler.sh",
     "release:dev": "rm -rf release && bun run claude:download && bun run build && bun run package:mac && rm -rf node_modules && bun i",
     "sync:public": "./scripts/sync-to-public.sh",
@@ -166,6 +166,13 @@
       {
         "from": "resources/bin/VERSION",
         "to": "bin/VERSION"
+      },
+      {
+        "from": "resources/cli",
+        "to": "cli",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asar": true,

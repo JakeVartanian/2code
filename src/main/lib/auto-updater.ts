@@ -25,8 +25,8 @@ function initAutoUpdaterConfig() {
   autoUpdater.autoRunAppAfterInstall = true // Restart app after install
 }
 
-// Update URL — set to your own CDN or GitHub Releases
-const CDN_BASE = "" // TODO: Set to your release URL (e.g., GitHub Releases)
+// Update URL — R2 CDN for 2Code releases
+const CDN_BASE = "https://cdn.2code.dev/releases/desktop"
 
 // Minimum interval between update checks (prevent spam on rapid focus/blur)
 const MIN_CHECK_INTERVAL = 60 * 1000 // 1 minute

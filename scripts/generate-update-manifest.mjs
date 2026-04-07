@@ -10,8 +10,8 @@
  *   node scripts/generate-update-manifest.mjs
  *
  * The script expects ZIP files to exist in the release/ directory:
- *   - Agents-{version}-arm64-mac.zip
- *   - Agents-{version}-mac.zip
+ *   - 2Code-{version}-arm64-mac.zip
+ *   - 2Code-{version}-mac.zip
  *
  * Run this after `npm run dist` to generate the manifest files.
  */
@@ -248,13 +248,13 @@ console.log("Next steps:")
 console.log("1. Upload the following files to cdn.2code.dev/releases/desktop/:")
 if (arm64Manifest) {
   console.log(`   - ${prefix}-mac.yml`)
-  console.log(`   - Agents-${version}-arm64-mac.zip`)
-  console.log(`   - Agents-${version}-arm64.dmg (for manual download)`)
+  console.log(`   - 2Code-${version}-arm64-mac.zip`)
+  console.log(`   - 2Code-${version}-arm64.dmg (for manual download)`)
 }
 if (x64Manifest) {
   console.log(`   - ${prefix}-mac-x64.yml`)
-  console.log(`   - Agents-${version}-mac.zip`)
-  console.log(`   - Agents-${version}.dmg (for manual download)`)
+  console.log(`   - 2Code-${version}-mac.zip`)
+  console.log(`   - 2Code-${version}.dmg (for manual download)`)
 }
 console.log("2. Create a release entry in the admin dashboard")
 console.log("=".repeat(50))

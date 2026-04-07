@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Sync desktop app to public 1code repository
+# Sync desktop app to public 2code repository
 # Usage: ./scripts/sync-to-public.sh
 #
 # This script:
@@ -17,7 +17,7 @@ TAG="v$VERSION"
 PUBLIC_REPO="git@github.com:JakeVartanian/2code.git"
 PUBLIC_REPO_HTTPS="https://github.com/JakeVartanian/2code"
 PRIVATE_REPO="JakeVartanian/2code"
-TEMP_DIR="/tmp/1code-sync-$$"
+TEMP_DIR="/tmp/2code-sync-$$"
 
 echo "🔄 Syncing desktop app to public repository..."
 echo "   Version: $VERSION"
@@ -31,7 +31,7 @@ RELEASE_NOTES=$(gh release view "$TAG" --repo "$PRIVATE_REPO" --json body -q '.b
 if [ -z "$RELEASE_NOTES" ]; then
     echo "⚠️  No release found for $TAG in private repo"
     echo "   Please create a release in the private repo first:"
-    echo "   gh release create $TAG --title \"1Code $TAG\" --notes \"...\""
+    echo "   gh release create $TAG --title \"2Code $TAG\" --notes \"...\""
     echo ""
     read -p "Continue without release notes? (y/N) " -n 1 -r
     echo
@@ -109,7 +109,7 @@ if gh release view "$TAG" --repo "$PUBLIC_REPO_HTTPS" &>/dev/null; then
     echo "   Release $TAG already exists, updating..."
     gh release edit "$TAG" \
         --repo "$PUBLIC_REPO_HTTPS" \
-        --title "1Code $TAG" \
+        --title "2Code $TAG" \
         --notes "$RELEASE_NOTES"
 else
     echo "   Creating new release $TAG..."
@@ -119,7 +119,7 @@ else
 
     gh release create "$TAG" \
         --repo "$PUBLIC_REPO_HTTPS" \
-        --title "1Code $TAG" \
+        --title "2Code $TAG" \
         --notes "$RELEASE_NOTES"
 fi
 

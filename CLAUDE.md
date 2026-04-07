@@ -223,10 +223,10 @@ npm version patch --no-git-tag-version  # 0.0.27 → 0.0.28
 |------|---------|
 | `latest-mac.yml` | Manifest for arm64 auto-updates |
 | `latest-mac-x64.yml` | Manifest for Intel auto-updates |
-| `1Code-{version}-arm64-mac.zip` | Auto-update payload (arm64) |
-| `1Code-{version}-mac.zip` | Auto-update payload (Intel) |
-| `1Code-{version}-arm64.dmg` | Manual download (arm64) |
-| `1Code-{version}.dmg` | Manual download (Intel) |
+| `2Code-{version}-arm64-mac.zip` | Auto-update payload (arm64) |
+| `2Code-{version}-mac.zip` | Auto-update payload (Intel) |
+| `2Code-{version}-arm64.dmg` | Manual download (arm64) |
+| `2Code-{version}.dmg` | Manual download (Intel) |
 
 ### Auto-Update Flow
 
