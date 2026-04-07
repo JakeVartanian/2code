@@ -287,9 +287,16 @@ export function NewChatForm({
   const [selectedOpenRouterModelId, setSelectedOpenRouterModelId] = useState<string | undefined>()
   const openRouterModels = useAtomValue(openRouterModelsAtom)
   const openRouterApiKey = useAtomValue(openRouterApiKeyAtom)
+  const openRouterFreeOnly = useAtomValue(openRouterFreeOnlyAtom)
   const [thinkingEnabled, setThinkingEnabled] = useAtom(
     extendedThinkingEnabledAtom,
   )
+
+  // Filter OpenRouter models by free-only setting if enabled
+  const filteredOpenRouterModels = useMemo(() => {
+    if (!openRouterFreeOnly) return openRouterModels
+    return openRouterModels.filter((m) => m.isFree)
+  }, [openRouterModels, openRouterFreeOnly])
 
   const [selectedModel, setSelectedModel] = useState(
     () =>
@@ -319,6 +326,14 @@ export function NewChatForm({
       return "Custom Model"
     }
 
+    // Check if an OpenRouter model is selected
+    if (selectedOpenRouterModelId && filteredOpenRouterModels.length > 0) {
+      const orModel = filteredOpenRouterModels.find((m) => m.id === selectedOpenRouterModelId)
+      if (orModel) {
+        return orModel.name
+      }
+    }
+
     if (!selectedModel) {
       return "Select model"
     }
@@ -330,6 +345,8 @@ export function NewChatForm({
     currentOllamaModel,
     hasCustomClaudeConfig,
     selectedModel,
+    selectedOpenRouterModelId,
+    filteredOpenRouterModels,
   ])
   const [repoPopoverOpen, setRepoPopoverOpen] = useState(false)
   const [branchPopoverOpen, setBranchPopoverOpen] = useState(false)
@@ -1794,7 +1811,7 @@ export function NewChatForm({
                             onThinkingChange: setThinkingEnabled,
                           }}
                           openRouter={openRouterApiKey ? {
-                            models: openRouterModels,
+                            models: filteredOpenRouterModels,
                             selectedModelId: selectedOpenRouterModelId,
                             onSelectModel: setSelectedOpenRouterModelId,
                           } : undefined}
