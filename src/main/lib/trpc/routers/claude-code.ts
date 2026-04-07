@@ -105,19 +105,21 @@ export async function handleClaudeCodeOAuthCallback(code: string, state: string)
     redirect_uri: matchedSession.redirectUri,
     client_id: CLAUDE_CLIENT_ID,
     code_verifier: matchedSession.codeVerifier.slice(0, 8) + "...",
+    state: matchedSession.state.slice(0, 8) + "...",
   }))
 
   try {
     const tokenRes = await fetch(ANTHROPIC_TOKEN_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
         grant_type: "authorization_code",
         code,
         redirect_uri: matchedSession.redirectUri,
         client_id: CLAUDE_CLIENT_ID,
         code_verifier: matchedSession.codeVerifier,
-      }).toString(),
+        state: matchedSession.state,
+      }),
     })
 
     if (!tokenRes.ok) {
@@ -409,14 +411,15 @@ export const claudeCodeRouter = router({
 
       const tokenRes = await fetch(ANTHROPIC_TOKEN_ENDPOINT, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           grant_type: "authorization_code",
           code: authorizationCode,
           redirect_uri: session.redirectUri,
           client_id: CLAUDE_CLIENT_ID,
           code_verifier: session.codeVerifier,
-        }).toString(),
+          state: session.state,
+        }),
       })
 
       if (tokenRes.ok) {
@@ -425,14 +428,15 @@ export const claudeCodeRouter = router({
         // Auto redirect_uri failed — retry with manual redirect_uri
         const tokenRes2 = await fetch(ANTHROPIC_TOKEN_ENDPOINT, {
           method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
             grant_type: "authorization_code",
             code: authorizationCode,
             redirect_uri: MANUAL_REDIRECT_URI,
             client_id: CLAUDE_CLIENT_ID,
             code_verifier: session.codeVerifier,
-          }).toString(),
+            state: session.state,
+          }),
         })
         if (tokenRes2.ok) {
           tokenData = await tokenRes2.json() as TokenResponse
