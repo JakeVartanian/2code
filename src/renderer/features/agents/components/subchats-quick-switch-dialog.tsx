@@ -6,7 +6,7 @@ import { createPortal } from "react-dom"
 import { useAtomValue } from "jotai"
 import { cn } from "../../../lib/utils"
 import {
-  loadingSubChatsAtom,
+  isSubChatLoadingAtomFamily,
   agentsSubChatUnseenChangesAtom,
   subChatFilesAtom,
   type SubChatFileChange,
@@ -178,6 +178,35 @@ function SubChatCard({
   )
 }
 
+// Per-item sub-chat card that subscribes to its own loading state atom
+function SubChatCardWithLoading({
+  subChat,
+  isSelected,
+  unseenChanges,
+  subChatFiles,
+  index,
+  onHover,
+}: {
+  subChat: SubChatsQuickSwitchDialogProps["subChats"][0]
+  isSelected: boolean
+  unseenChanges: Set<string>
+  subChatFiles: Map<string, SubChatFileChange[]>
+  index: number
+  onHover?: (index: number) => void
+}) {
+  const isLoading = useAtomValue(isSubChatLoadingAtomFamily(subChat.id))
+  return (
+    <SubChatCard
+      subChat={subChat}
+      isSelected={isSelected}
+      isLoading={isLoading}
+      hasUnseenChanges={unseenChanges.has(subChat.id)}
+      fileChanges={subChatFiles.get(subChat.id) || []}
+      onMouseEnter={() => onHover?.(index)}
+    />
+  )
+}
+
 export function SubChatsQuickSwitchDialog({
   isOpen,
   subChats,
@@ -185,13 +214,6 @@ export function SubChatsQuickSwitchDialog({
   onHover,
 }: SubChatsQuickSwitchDialogProps) {
   if (typeof window === "undefined") return null
-
-  // Derive loading sub-chat IDs
-  const loadingSubChats = useAtomValue(loadingSubChatsAtom)
-  const loadingSubChatIds = useMemo(
-    () => new Set([...loadingSubChats.keys()]),
-    [loadingSubChats],
-  )
 
   // Unseen changes
   const unseenChanges = useAtomValue(agentsSubChatUnseenChangesAtom)
@@ -225,24 +247,17 @@ export function SubChatsQuickSwitchDialog({
                         "0 8px 32px 0 rgba(0,0,0,0.07), 0 0px 16px 0 rgba(0,0,0,0.04), 0 -8px 24px 0 rgba(0,0,0,0.03)",
                     }}
                   >
-                    {subChats.map((subChat, index) => {
-                      const isSelected = index === selectedIndex
-                      const isLoading = loadingSubChatIds.has(subChat.id)
-                      const hasUnseenChanges = unseenChanges.has(subChat.id)
-                      const fileChanges = subChatFiles.get(subChat.id) || []
-
-                      return (
-                        <SubChatCard
-                          key={subChat.id}
-                          subChat={subChat}
-                          isSelected={isSelected}
-                          isLoading={isLoading}
-                          hasUnseenChanges={hasUnseenChanges}
-                          fileChanges={fileChanges}
-                          onMouseEnter={() => onHover?.(index)}
-                        />
-                      )
-                    })}
+                    {subChats.map((subChat, index) => (
+                      <SubChatCardWithLoading
+                        key={subChat.id}
+                        subChat={subChat}
+                        isSelected={index === selectedIndex}
+                        unseenChanges={unseenChanges}
+                        subChatFiles={subChatFiles}
+                        index={index}
+                        onHover={onHover}
+                      />
+                    ))}
                   </div>
                 )}
               </div>

@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react"
 import { useAtomValue } from "jotai"
-import { loadingSubChatsAtom } from "../atoms"
+import { isSubChatLoadingAtomFamily } from "../atoms"
 import { Plus, ChevronDown, Play, AlignJustify, FolderDown } from "lucide-react"
 import {
   IconSpinner,
@@ -65,7 +65,7 @@ export function MobileChatHeader({
 }: MobileChatHeaderProps) {
   const activeSubChatId = useAgentSubChatStore((state) => state.activeSubChatId)
   const allSubChats = useAgentSubChatStore((state) => state.allSubChats)
-  const loadingSubChatsAtomValue = useAtomValue(loadingSubChatsAtom)
+  const isLoading = useAtomValue(isSubChatLoadingAtomFamily(activeSubChatId ?? ""))
 
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
 
@@ -73,10 +73,6 @@ export function MobileChatHeader({
   const activeSubChat = useMemo(() => {
     return allSubChats.find((sc) => sc.id === activeSubChatId)
   }, [allSubChats, activeSubChatId])
-
-  const isLoading = activeSubChatId
-    ? loadingSubChatsAtomValue.has(activeSubChatId)
-    : false
   const mode = activeSubChat?.mode || "agent"
 
   // Sort sub-chats by most recent first for history

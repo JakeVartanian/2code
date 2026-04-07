@@ -8,10 +8,12 @@ import { z } from "zod"
 import {
   buildClaudeEnv,
   checkOfflineFallback,
+  ChunkBatcher,
   createTransformer,
   getBundledClaudeBinaryPath,
   logClaudeEnv,
   logRawClaudeMessage,
+  type BatchedUIMessageChunk,
   type UIMessageChunk,
 } from "../../claude"
 import {
@@ -29,6 +31,7 @@ import {
   type McpServerConfig,
 } from "../../claude-config"
 import { anthropicAccounts, anthropicSettings, chats, claudeCodeCredentials, getDatabase, projects as projectsTable, subChats } from "../../db"
+import { scheduleDebouncedWrite, flushPendingWrite, flushAllPendingWrites } from "../../db/debounced-writer"
 import { createRollbackStash } from "../../git/stash"
 import {
   ensureMcpTokensFresh,
@@ -181,8 +184,6 @@ function getClaudeCodeToken(): string | null {
   try {
     const db = getDatabase()
 
-    console.log("[claude-auth] ========== CLAUDE CODE AUTH DEBUG ==========")
-
     // First try multi-account system
     const settings = db
       .select()
@@ -198,24 +199,9 @@ function getClaudeCodeToken(): string | null {
         .get()
 
       if (account?.oauthToken) {
-        console.log(
-          "[claude-auth] Using multi-account system, activeAccountId:",
-          settings.activeAccountId,
-        )
-        const decrypted = decryptToken(account.oauthToken)
-        console.log("[claude-auth] Token decrypted successfully")
-        console.log(
-          "[claude-auth] Token preview:",
-          decrypted.slice(0, 20) + "..." + decrypted.slice(-10),
-        )
-        console.log("[claude-auth] Token total length:", decrypted.length)
-        console.log("[claude-auth] ============================================")
-        return decrypted
+        console.log(`[claude-auth] token=oauth accountId=${settings.activeAccountId}`)
+        return decryptToken(account.oauthToken)
       }
-
-      console.log(
-        "[claude-auth] Active account not found or has no token, falling back to legacy",
-      )
     }
 
     // Fallback to legacy table
@@ -225,35 +211,13 @@ function getClaudeCodeToken(): string | null {
       .where(eq(claudeCodeCredentials.id, "default"))
       .get()
 
-    console.log(
-      "[claude-auth] Legacy credential record:",
-      cred
-        ? {
-            id: cred.id,
-            hasOauthToken: !!cred.oauthToken,
-            encryptedTokenLength: cred.oauthToken?.length ?? 0,
-            connectedAt: cred.connectedAt,
-            userId: cred.userId,
-          }
-        : null,
-    )
-
     if (!cred?.oauthToken) {
-      console.log("[claude-auth] No Claude Code credentials found")
-      console.log("[claude-auth] ============================================")
+      console.log("[claude-auth] no credentials found")
       return null
     }
 
-    const decrypted = decryptToken(cred.oauthToken)
-    console.log("[claude-auth] Token decrypted successfully (legacy)")
-    console.log(
-      "[claude-auth] Token preview:",
-      decrypted.slice(0, 20) + "..." + decrypted.slice(-10),
-    )
-    console.log("[claude-auth] Token total length:", decrypted.length)
-    console.log("[claude-auth] ============================================")
-
-    return decrypted
+    console.log("[claude-auth] token=oauth(legacy)")
+    return decryptToken(cred.oauthToken)
   } catch (error) {
     console.error("[claude-auth] Error getting Claude Code token:", error)
     return null
@@ -410,6 +374,8 @@ export function abortAllClaudeSessions(): void {
     controller.abort()
   }
   activeSessions.clear()
+  // Flush any debounced writes that haven't been persisted yet
+  flushAllPendingWrites()
 }
 
 // In-memory cache of working MCP server names (resets on app restart)
@@ -444,6 +410,27 @@ const projectMcpJsonCache = new Map<
   }
 >()
 
+// Cache for AGENTS.md (avoid re-reading on every message)
+const agentsMdCache = new Map<
+  string,
+  {
+    content: string
+    mtime: number
+  }
+>()
+
+// TTL cache for the fully merged MCP server config (avoid re-running all merge logic on every message)
+// Keys by project path. Invalidated after 30s or on explicit refresh.
+const MCP_MERGE_TTL_MS = 30_000
+const mergedMcpCache = new Map<
+  string,
+  {
+    allServers: Record<string, McpServerConfig>
+    projectServers: Record<string, McpServerConfig>
+    timestamp: number
+  }
+>()
+
 /**
  * Read .mcp.json with mtime-based caching
  */
@@ -468,6 +455,34 @@ async function readProjectMcpJsonCached(
     return servers
   } catch {
     return {}
+  }
+}
+
+/**
+ * Read AGENTS.md with mtime-based caching
+ * Prevents re-reading and re-injecting on every message
+ */
+async function readAgentsMdCached(cwd: string): Promise<string> {
+  try {
+    const agentsMdPath = path.join(cwd, "AGENTS.md")
+    const stats = await fs.stat(agentsMdPath).catch(() => null)
+    if (!stats) return ""
+
+    const cached = agentsMdCache.get(agentsMdPath)
+    if (cached && cached.mtime === stats.mtimeMs) {
+      return cached.content
+    }
+
+    const content = await fs.readFile(agentsMdPath, "utf-8")
+    if (!content.trim()) return ""
+
+    agentsMdCache.set(agentsMdPath, {
+      content,
+      mtime: stats.mtimeMs,
+    })
+    return content
+  } catch {
+    return ""
   }
 }
 
@@ -510,6 +525,8 @@ export function clearClaudeCaches() {
   symlinksCreated.clear()
   mcpConfigCache.clear()
   projectMcpJsonCache.clear()
+  agentsMdCache.clear()
+  mergedMcpCache.clear()
   console.log("[claude] All caches cleared")
 }
 
@@ -1108,7 +1125,8 @@ export const claudeRouter = router({
         let isObservableActive = true
 
         // Helper to safely emit (no-op if already unsubscribed)
-        const safeEmit = (chunk: UIMessageChunk) => {
+        // Accepts both individual chunks and batch messages to reduce IPC overhead.
+        const safeEmit = (chunk: BatchedUIMessageChunk) => {
           if (!isObservableActive) return false
           try {
             emit.next(chunk)
@@ -1118,6 +1136,12 @@ export const claudeRouter = router({
             return false
           }
         }
+
+        // Batch streaming chunks to reduce IPC overhead (~60fps instead of per-token).
+        // Critical chunks (errors, finish, interactive prompts) bypass batching.
+        const chunkBatcher = new ChunkBatcher((batchedChunk) => {
+          safeEmit(batchedChunk)
+        })
 
         // Helper to safely complete (no-op if already closed)
         const safeComplete = () => {
@@ -1235,14 +1259,13 @@ export const claudeRouter = router({
               }
               messagesToSave = [...existingMessages, userMessage]
 
-              db.update(subChats)
-                .set({
-                  messages: JSON.stringify(messagesToSave),
-                  streamId,
-                  updatedAt: new Date(),
-                })
-                .where(eq(subChats.id, input.subChatId))
-                .run()
+              // Debounced write: user message + streamId will be persisted within 100ms.
+              // The stream takes longer to start, and the final save will flush anyway.
+              scheduleDebouncedWrite(input.subChatId, {
+                messages: JSON.stringify(messagesToSave),
+                streamId,
+                updatedAt: new Date(),
+              })
             }
 
             // 2.5. AUTO-FALLBACK: Check internet and switch to Ollama if offline
@@ -1284,6 +1307,17 @@ export const claudeRouter = router({
                 `[SD] M:END sub=${subId} reason=sdk_load_error n=${chunkCount}`,
               )
               safeEmit({ type: "finish" } as UIMessageChunk)
+              safeComplete()
+              return
+            }
+
+            // Guard: if a newer sendMessage fired for the same subChatId while we were
+            // awaiting the SDK import, our AbortController was already aborted by that
+            // newer invocation. Bail out silently — the newer session will handle it.
+            if (abortController.signal.aborted) {
+              console.log(
+                `[SD] M:END sub=${subId} reason=superseded_by_newer_session`,
+              )
               safeComplete()
               return
             }
@@ -1545,56 +1579,64 @@ export const claudeRouter = router({
                   claudeConfig = {}
                 }
 
-                // Read ~/.claude/.claude.json once for reuse
-                let chatClaudeDirConfig: ClaudeConfig = {}
-                try {
-                  chatClaudeDirConfig = await readClaudeDirConfig()
-                } catch { /* ignore */ }
+                // Merged MCP config — TTL-cached per project path to avoid redundant I/O on every message
+                const cachedMerge = mergedMcpCache.get(lookupPath)
+                let allServers: Record<string, McpServerConfig>
+                let projectServers: Record<string, McpServerConfig>
 
-                // Merge global servers from all user-level sources
-                const globalServers = await getMergedGlobalMcpServers(claudeConfig, chatClaudeDirConfig)
+                if (
+                  cachedMerge &&
+                  Date.now() - cachedMerge.timestamp < MCP_MERGE_TTL_MS
+                ) {
+                  // Cache hit: skip file reads, readClaudeDirConfig, plugin discovery, DB query
+                  allServers = cachedMerge.allServers
+                  projectServers = cachedMerge.projectServers
+                } else {
+                  // Full merge: read ~/.claude/.claude.json, global + project + plugin servers
+                  let chatClaudeDirConfig: ClaudeConfig = {}
+                  try {
+                    chatClaudeDirConfig = await readClaudeDirConfig()
+                  } catch { /* ignore */ }
 
-                // Merge per-project servers from config files
-                const projectConfigServers = await getMergedLocalProjectMcpServers(lookupPath, claudeConfig, chatClaudeDirConfig)
+                  const globalServers = await getMergedGlobalMcpServers(claudeConfig, chatClaudeDirConfig)
+                  const projectConfigServers = await getMergedLocalProjectMcpServers(lookupPath, claudeConfig, chatClaudeDirConfig)
+                  const projectMcpJsonServers = await readProjectMcpJsonCached(lookupPath)
+                  projectServers = { ...projectMcpJsonServers, ...projectConfigServers }
 
-                // Read .mcp.json from project root (with mtime caching)
-                const projectMcpJsonServers = await readProjectMcpJsonCached(lookupPath)
+                  const [
+                    enabledPluginSources,
+                    pluginMcpConfigs,
+                    approvedServers,
+                  ] = await Promise.all([
+                    getEnabledPlugins(),
+                    discoverPluginMcpServers(),
+                    getApprovedPluginMcpServers(),
+                  ])
 
-                // Per-project config servers override .mcp.json
-                const projectServers = { ...projectMcpJsonServers, ...projectConfigServers }
-
-                // Load plugin MCP servers (filtered by enabled plugins and approval)
-                const [
-                  enabledPluginSources,
-                  pluginMcpConfigs,
-                  approvedServers,
-                ] = await Promise.all([
-                  getEnabledPlugins(),
-                  discoverPluginMcpServers(),
-                  getApprovedPluginMcpServers(),
-                ])
-
-                const pluginServers: Record<string, McpServerConfig> = {}
-                for (const pConfig of pluginMcpConfigs) {
-                  if (enabledPluginSources.includes(pConfig.pluginSource)) {
-                    for (const [name, serverConfig] of Object.entries(
-                      pConfig.mcpServers,
-                    )) {
-                      if (!globalServers[name] && !projectServers[name]) {
-                        const identifier = `${pConfig.pluginSource}:${name}`
-                        if (approvedServers.includes(identifier)) {
-                          pluginServers[name] = serverConfig
+                  const pluginServers: Record<string, McpServerConfig> = {}
+                  for (const pConfig of pluginMcpConfigs) {
+                    if (enabledPluginSources.includes(pConfig.pluginSource)) {
+                      for (const [name, serverConfig] of Object.entries(
+                        pConfig.mcpServers,
+                      )) {
+                        if (!globalServers[name] && !projectServers[name]) {
+                          const identifier = `${pConfig.pluginSource}:${name}`
+                          if (approvedServers.includes(identifier)) {
+                            pluginServers[name] = serverConfig
+                          }
                         }
                       }
                     }
                   }
-                }
 
-                // Priority: project > global > plugin
-                const allServers = {
-                  ...pluginServers,
-                  ...globalServers,
-                  ...projectServers,
+                  // Priority: project > global > plugin
+                  allServers = {
+                    ...pluginServers,
+                    ...globalServers,
+                    ...projectServers,
+                  }
+
+                  mergedMcpCache.set(lookupPath, { allServers, projectServers, timestamp: Date.now() })
                 }
 
                 // Filter to only working MCPs using scoped cache keys
@@ -1652,46 +1694,17 @@ export const claudeRouter = router({
               )
             }
 
-            // Build final env - only add OAuth token if we have one AND no existing API config
-            // Existing CLI config takes precedence over OAuth
+            // Build final env - rely on system keychain or existing API config
+            // Don't pass CLAUDE_CODE_OAUTH_TOKEN (Claude API doesn't support it)
+            // The subprocess will use: system keychain > ANTHROPIC_API_KEY > ANTHROPIC_AUTH_TOKEN
             const finalEnv = {
               ...claudeEnv,
-              ...(claudeCodeToken &&
-                !hasExistingApiConfig && {
-                  CLAUDE_CODE_OAUTH_TOKEN: claudeCodeToken,
-                }),
-              // Re-enable CLAUDE_CONFIG_DIR now that we properly map MCP configs
               CLAUDE_CONFIG_DIR: isolatedConfigDir,
             }
 
-            // Log auth method being used
-            console.log("[claude-auth] ========== AUTH METHOD USED ==========")
+            // Log auth method being used (single line)
             console.log(
-              "[claude-auth] hasExistingApiConfig:",
-              hasExistingApiConfig,
-            )
-            console.log(
-              "[claude-auth] claudeCodeToken available:",
-              !!claudeCodeToken,
-            )
-            console.log(
-              "[claude-auth] Using CLAUDE_CODE_OAUTH_TOKEN:",
-              !!finalEnv.CLAUDE_CODE_OAUTH_TOKEN,
-            )
-            console.log(
-              "[claude-auth] Using ANTHROPIC_API_KEY:",
-              !!finalEnv.ANTHROPIC_API_KEY,
-            )
-            console.log(
-              "[claude-auth] Using ANTHROPIC_BASE_URL:",
-              finalEnv.ANTHROPIC_BASE_URL || "(default)",
-            )
-            console.log(
-              "[claude-auth] Using ANTHROPIC_AUTH_TOKEN:",
-              !!finalEnv.ANTHROPIC_AUTH_TOKEN,
-            )
-            console.log(
-              "[claude-auth] ============================================",
+              `[claude-auth] method=${finalEnv.ANTHROPIC_API_KEY ? "api-key" : finalEnv.ANTHROPIC_AUTH_TOKEN ? "auth-token" : "keychain/default"} customApiConfig=${hasExistingApiConfig} baseUrl=${finalEnv.ANTHROPIC_BASE_URL || "(default)"}`,
             )
 
             // Get bundled Claude binary path
@@ -1700,33 +1713,10 @@ export const claudeRouter = router({
             const resumeSessionId =
               input.sessionId || existingSessionId || undefined
 
-            // DEBUG: Session resume path tracing
-            const expectedSanitizedCwd = input.cwd.replace(/[/.]/g, "-")
-            const expectedSessionPath = path.join(
-              isolatedConfigDir,
-              "projects",
-              expectedSanitizedCwd,
-              `${resumeSessionId}.jsonl`,
-            )
-            console.log(`[claude] ========== SESSION DEBUG ==========`)
-            console.log(`[claude] subChatId: ${input.subChatId}`)
-            console.log(`[claude] cwd: ${input.cwd}`)
+            // Session resume tracing (single line)
             console.log(
-              `[claude] sanitized cwd (expected): ${expectedSanitizedCwd}`,
+              `[claude] session: subChat=${input.subChatId} cwd=${input.cwd} resume=${resumeSessionId || "none"} resumeAtUuid=${resumeAtUuid || "none"} fork=${shouldForkResume}`,
             )
-            console.log(`[claude] CLAUDE_CONFIG_DIR: ${isolatedConfigDir}`)
-            console.log(
-              `[claude] Expected session path: ${expectedSessionPath}`,
-            )
-            console.log(`[claude] Session ID to resume: ${resumeSessionId}`)
-            console.log(
-              `[claude] Existing sessionId from DB: ${existingSessionId}`,
-            )
-            console.log(`[claude] Resume at UUID: ${resumeAtUuid}`)
-            console.log(
-              `[claude] Fork resume: ${shouldForkResume}, fork UUID: ${forkResumeAtUuid}`,
-            )
-            console.log(`[claude] ========== END SESSION DEBUG ==========`)
 
             console.log(
               `[SD] Query options - cwd: ${input.cwd}, projectPath: ${input.projectPath || "(not set)"}, mcpServers: ${mcpServersForSdk ? Object.keys(mcpServersForSdk).join(", ") : "(none)"}`,
@@ -1819,41 +1809,15 @@ export const claudeRouter = router({
               }
             }
 
-            // Log SDK configuration for debugging
+            // Log Ollama configuration (single line, no token data)
             if (isUsingOllama) {
-              console.log("[Ollama Debug] SDK Configuration:", {
-                model: resolvedModel,
-                baseUrl: finalEnv.ANTHROPIC_BASE_URL,
-                cwd: input.cwd,
-                configDir: isolatedConfigDir,
-                hasAuthToken: !!finalEnv.ANTHROPIC_AUTH_TOKEN,
-                tokenPreview:
-                  finalEnv.ANTHROPIC_AUTH_TOKEN?.slice(0, 10) + "...",
-              })
-              console.log("[Ollama Debug] Session settings:", {
-                resumeSessionId: resumeSessionId || "none (first message)",
-                mode: resumeSessionId ? "resume" : "continue",
-                note: resumeSessionId
-                  ? "Resuming existing session to maintain chat history"
-                  : "Starting new session with continue mode",
-              })
+              console.log(
+                `[Ollama] model=${resolvedModel} baseUrl=${finalEnv.ANTHROPIC_BASE_URL} hasAuthToken=${!!finalEnv.ANTHROPIC_AUTH_TOKEN} resume=${resumeSessionId || "none"}`,
+              )
             }
 
-            // Read AGENTS.md from project root if it exists
-            let agentsMdContent: string | undefined
-            try {
-              const agentsMdPath = path.join(input.cwd, "AGENTS.md")
-              agentsMdContent = await fs.readFile(agentsMdPath, "utf-8")
-              if (agentsMdContent.trim()) {
-                console.log(
-                  `[claude] Found AGENTS.md at ${agentsMdPath} (${agentsMdContent.length} chars)`,
-                )
-              } else {
-                agentsMdContent = undefined
-              }
-            } catch {
-              // AGENTS.md doesn't exist or can't be read - that's fine
-            }
+            // Read AGENTS.md from project root if it exists (cached to avoid re-reading on every message)
+            const agentsMdContent = await readAgentsMdCached(input.cwd)
 
             // For Ollama: embed context AND history directly in prompt
             // Ollama doesn't have server-side sessions, so we must include full history
@@ -1968,15 +1932,7 @@ IMPORTANT: When using tools, use these EXACT parameter names:
 
 When asked about the project, use Glob to find files and Read to examine them.
 Be concise and helpful.
-[/CONTEXT]${
-                agentsMdContent
-                  ? `
-
-[AGENTS.MD]
-${agentsMdContent}
-[/AGENTS.MD]`
-                  : ""
-              }
+[/CONTEXT]
 
 ${historyText}[CURRENT REQUEST]
 ${prompt}
@@ -2619,9 +2575,10 @@ ${prompt}
                       continue
                     }
 
-                    // Use safeEmit to prevent throws when observer is closed
-                    if (!safeEmit(chunk)) {
-                      // Observer closed (user clicked Stop), break out of loop
+                    // Use chunkBatcher to reduce IPC overhead (batches at ~60fps).
+                    // Critical chunks (errors, interactive prompts) are emitted immediately.
+                    if (!chunkBatcher.write(chunk)) {
+                      // Batcher disposed (session ending), break out of loop
                       console.log(
                         `[SD] M:EMIT_CLOSED sub=${subId} type=${chunk.type} n=${chunkCount}`,
                       )
@@ -2860,19 +2817,13 @@ ${prompt}
                     metadata,
                   }
                   const finalMessages = [...messagesToSave, assistantMessage]
-                  db.update(subChats)
-                    .set({
-                      messages: JSON.stringify(finalMessages),
-                      sessionId: metadata.sessionId,
-                      streamId: null,
-                      updatedAt: new Date(),
-                    })
-                    .where(eq(subChats.id, input.subChatId))
-                    .run()
-                  db.update(chats)
-                    .set({ updatedAt: new Date() })
-                    .where(eq(chats.id, input.chatId))
-                    .run()
+                  // Flush immediately: session is ending, data must be persisted now
+                  flushPendingWrite(input.subChatId, {
+                    messages: JSON.stringify(finalMessages),
+                    sessionId: metadata.sessionId,
+                    streamId: null,
+                    updatedAt: new Date(),
+                  }, input.chatId)
 
                   // Create snapshot stash for rollback support (on error)
                   if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
@@ -2948,32 +2899,21 @@ ${prompt}
 
               const finalMessages = [...messagesToSave, assistantMessage]
 
-              db.update(subChats)
-                .set({
-                  messages: JSON.stringify(finalMessages),
-                  sessionId: savedSessionId,
-                  streamId: null,
-                  updatedAt: new Date(),
-                })
-                .where(eq(subChats.id, input.subChatId))
-                .run()
+              // Flush immediately: session is ending, data must be persisted now
+              flushPendingWrite(input.subChatId, {
+                messages: JSON.stringify(finalMessages),
+                sessionId: savedSessionId,
+                streamId: null,
+                updatedAt: new Date(),
+              }, input.chatId)
             } else {
               // No assistant response - just clear streamId
-              db.update(subChats)
-                .set({
-                  sessionId: savedSessionId,
-                  streamId: null,
-                  updatedAt: new Date(),
-                })
-                .where(eq(subChats.id, input.subChatId))
-                .run()
+              flushPendingWrite(input.subChatId, {
+                sessionId: savedSessionId,
+                streamId: null,
+                updatedAt: new Date(),
+              }, input.chatId)
             }
-
-            // Update parent chat timestamp
-            db.update(chats)
-              .set({ updatedAt: new Date() })
-              .where(eq(chats.id, input.chatId))
-              .run()
 
             // Create snapshot stash for rollback support
             if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
@@ -2984,6 +2924,8 @@ ${prompt}
             console.log(
               `[SD] M:END sub=${subId} reason=ok n=${chunkCount} last=${lastChunkType} t=${duration}s`,
             )
+            // Flush any remaining batched chunks before emitting finish
+            chunkBatcher.dispose()
             if (pendingFinishChunk) {
               safeEmit(pendingFinishChunk)
             } else {
@@ -2996,6 +2938,7 @@ ${prompt}
             console.log(
               `[SD] M:END sub=${subId} reason=unexpected_error n=${chunkCount} t=${duration}s`,
             )
+            chunkBatcher.dispose()
             emitError(error, "Unexpected error")
             safeEmit({ type: "finish" } as UIMessageChunk)
             safeComplete()
@@ -3009,6 +2952,7 @@ ${prompt}
           console.log(
             `[SD] M:CLEANUP sub=${subId} sessionId=${currentSessionId || "none"}`,
           )
+          chunkBatcher.dispose() // Flush remaining batched chunks before teardown
           isObservableActive = false // Prevent emit after unsubscribe
           abortController.abort()
           activeSessions.delete(input.subChatId)
@@ -3115,6 +3059,8 @@ ${prompt}
     workingMcpServers.clear()
     mcpConfigCache.clear()
     projectMcpJsonCache.clear()
+    agentsMdCache.clear()
+    mergedMcpCache.clear()
     return { success: true }
   }),
 
@@ -3505,8 +3451,11 @@ ${prompt}
    * creds have refresh tokens) since rate limits are per-access-token.
    */
   getUsage: publicProcedure.query(async () => {
-    // Return cached response if fresh (5 min TTL)
+    // Return cached response if fresh (5 min TTL for success, 1 min for rate limits)
     if (usageCache.data && Date.now() - usageCache.fetchedAt < USAGE_CACHE_TTL_MS) {
+      return usageCache.data
+    }
+    if (usageCache.data && "error" in usageCache.data && usageCache.data.error === "rate_limited" && Date.now() - usageCache.fetchedAt < 60_000) {
       return usageCache.data
     }
 
@@ -3533,7 +3482,8 @@ ${prompt}
     }
 
     const result = await fetchUsageWithRetry(accessToken, refreshToken)
-    if (!("error" in result)) {
+    // Cache both success and rate_limited responses to avoid hammer hits
+    if (!("error" in result) || result.error === "rate_limited") {
       usageCache.data = result
       usageCache.fetchedAt = Date.now()
     }

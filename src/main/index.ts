@@ -973,6 +973,10 @@ if (gotTheLock) {
       abortAllClaudeSessions()
       cancelAllPendingOAuth()
       await cleanupGitWatchers()
+      // Give in-flight abort handlers time to flush their debounced writes before
+      // the database handle is closed. abort() triggers async catch blocks in claude.ts
+      // that call flushPendingWrite() — 200ms covers even slow event loop cycles.
+      await new Promise(resolve => setTimeout(resolve, 200))
       await closeDatabase()
     } catch (error) {
       console.error("[App] Cleanup error:", error)

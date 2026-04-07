@@ -429,7 +429,7 @@ export const thinkingModeAtom = atomWithStorage<ThinkingMode>(
 // Token budget for "enabled" mode (only used when thinkingMode === "enabled")
 export const thinkingBudgetTokensAtom = atomWithStorage<number>(
   "preferences:thinking-budget-tokens",
-  32_000,
+  8_000,
   undefined,
   { getOnInit: true },
 )

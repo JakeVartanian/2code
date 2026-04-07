@@ -82,7 +82,7 @@ import {
 import {
   CLAUDE_MODELS,
 } from "../lib/models"
-import { classifyTaskComplexity, recommendModel } from "../lib/smart-router"
+import { analyzeTask, type SettingsRecommendation } from "../lib/smart-router"
 import type { DiffTextContext, SelectedTextContext } from "../lib/queue-utils"
 import {
   AgentsFileMention,
@@ -668,6 +668,7 @@ export const ChatInputArea = memo(function ChatInputArea({
 
   // Smart model suggestion state
   const [modelSuggestion, setModelSuggestion] = useState<{ model: { id: string; name: string; version: string; costTier: "$" | "$$" | "$$$"; inputCostPer1M: number; outputCostPer1M: number; tagline: string }; reason: string } | null>(null)
+  const [settingsRecommendations, setSettingsRecommendations] = useState<SettingsRecommendation[]>([])
   const [suggestionDismissed, setSuggestionDismissed] = useState(false)
   const suggestionDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -676,18 +677,35 @@ export const ChatInputArea = memo(function ChatInputArea({
     if (suggestionDebounceRef.current) clearTimeout(suggestionDebounceRef.current)
     if (!text.trim() || hasCustomClaudeConfig || availableModels.isOffline) {
       setModelSuggestion(null)
+      setSettingsRecommendations([])
       return
     }
     suggestionDebounceRef.current = setTimeout(() => {
-      const complexity = classifyTaskComplexity(text, {
+      // Count mention types from the raw text
+      const fileMentionCount = (text.match(/@\[file:[^\]]+\]/g) || []).length +
+        (text.match(/@\[folder:[^\]]+\]/g) || []).length
+      const hasAgentMentions = /@\[agent:[^\]]+\]/.test(text)
+      const hasToolMentions = /@\[tool:[^\]]+\]/.test(text)
+      const hasCodeBlocks = /```/.test(text)
+
+      const result = analyzeTask(text, {
         isPlanMode: subChatMode === "plan",
         isFollowUp: messageTokenData.messageCount > 0,
+        messageCount: messageTokenData.messageCount,
+        fileMentionCount,
+        hasAgentMentions,
+        hasToolMentions,
+        hasCodeBlocks,
+        currentModelId: selectedModel?.id || "sonnet",
+        currentEffort: effortLevel,
+        currentThinkingMode: thinkingMode,
+        currentThinkingBudget: thinkingBudget,
       })
-      const suggestion = recommendModel(complexity, selectedModel?.id || "sonnet")
-      setModelSuggestion(suggestion)
+      setModelSuggestion(result.modelRecommendation)
+      setSettingsRecommendations(result.settingsRecommendations)
       setSuggestionDismissed(false)
     }, 600)
-  }, [hasCustomClaudeConfig, availableModels.isOffline, subChatMode, messageTokenData.messageCount, selectedModel?.id])
+  }, [hasCustomClaudeConfig, availableModels.isOffline, subChatMode, messageTokenData.messageCount, selectedModel?.id, effortLevel, thinkingMode, thinkingBudget])
 
   // Clean up debounce on unmount
   useEffect(() => {
@@ -702,6 +720,20 @@ export const ChatInputArea = memo(function ChatInputArea({
   const currentDraftTextRef = useRef<string>("")
   currentSubChatIdRef.current = subChatId
   currentChatIdRef.current = parentChatId
+
+  // Save draft text on unmount so it survives inactive-tab suspension.
+  // Previously this was implicit (blur fired when switching tabs), but with
+  // tab suspension ChatViewInner unmounts without a blur event.
+  useEffect(() => {
+    return () => {
+      const chatId = currentChatIdRef.current
+      const sId = currentSubChatIdRef.current
+      const text = currentDraftTextRef.current
+      if (chatId && text.trim()) {
+        saveSubChatDraftWithAttachments(chatId, sId, text, { images: [], files: [], textContexts: [] })
+      }
+    }
+  }, [])
 
   // Keyboard shortcut: Cmd+/ to open model selector
   useEffect(() => {
@@ -1605,9 +1637,11 @@ export const ChatInputArea = memo(function ChatInputArea({
                   <AgentQuickCreate />
 
                   {/* Smart model suggestion */}
-                  {!suggestionDismissed && modelSuggestion && (
+                  {!suggestionDismissed && (modelSuggestion || settingsRecommendations.length > 0) && (
                     <ModelSuggestionChip
                       suggestion={modelSuggestion}
+                      currentModelId={selectedModel?.id}
+                      settingsRecommendations={settingsRecommendations}
                       onAccept={(modelId) => {
                         const model = availableModels.models.find((m) => m.id === modelId)
                         if (model) {
@@ -1618,6 +1652,16 @@ export const ChatInputArea = memo(function ChatInputArea({
                         setModelSuggestion(null)
                       }}
                       onDismiss={() => setSuggestionDismissed(true)}
+                      onAcceptSettingsChange={(rec) => {
+                        if (rec.type === "effort") {
+                          setEffortLevel(rec.suggested as typeof effortLevel)
+                        } else if (rec.type === "thinking" && rec.suggested === "adaptive") {
+                          // Switch from "enabled" with fixed budget to "adaptive"
+                          setThinkingEnabled(true)
+                        }
+                        // Remove the accepted recommendation from the list
+                        setSettingsRecommendations((prev) => prev.filter((r) => r !== rec))
+                      }}
                     />
                   )}
 

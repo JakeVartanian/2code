@@ -179,7 +179,11 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     // Read model selection dynamically per sub-chat (so split panes stay independent)
     const selectedModelId = appStore.get(subChatModelIdAtomFamily(this.config.subChatId))
-    const modelString = MODEL_ID_MAP[selectedModelId] || MODEL_ID_MAP["opus"]
+    const modelString = MODEL_ID_MAP[selectedModelId]
+    if (!modelString && !selectedModelId?.includes("/")) {
+      console.warn(`[ipc-chat-transport] Unknown model ID "${selectedModelId}" — defaulting to sonnet. Check model selection.`)
+    }
+    const finalModelString = modelString || MODEL_ID_MAP["sonnet"]
 
     const storedCustomConfig = appStore.get(
       customClaudeConfigAtom,
@@ -205,29 +209,15 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     let lastChunkType = ""
     console.log(`[SD] R:START sub=${subId} cwd=${this.config.cwd} projectPath=${this.config.projectPath || "(not set)"} customConfig=${customConfig ? "set" : "not set"}`)
 
-    return new ReadableStream({
-      start: (controller) => {
-        const sub = trpcClient.claude.chat.subscribe(
-          {
-            subChatId: this.config.subChatId,
-            chatId: this.config.chatId,
-            prompt,
-            cwd: this.config.cwd,
-            projectPath: this.config.projectPath, // Original project path for MCP config lookup
-            mode: currentMode,
-            sessionId,
-            thinkingConfig,
-            effort,
-            ...(modelString && { model: modelString }),
-            ...(customConfig && { customConfig }),
-            ...(selectedOllamaModel && { selectedOllamaModel }),
-            historyEnabled,
-            offlineModeEnabled,
-            enableTasks,
-            ...(images.length > 0 && { images }),
-          },
-          {
-            onData: (chunk: UIMessageChunk) => {
+    // Set to true when finish or auth-error terminates the stream.
+    // Prevents ghost atom mutations from chunks that arrive after stream termination
+    // (e.g., remaining items in a batch after a finish chunk).
+    let streamTerminated = false
+
+    // Process a single chunk: handles side effects (atoms, toasts, modals) then enqueues.
+    // Extracted to support batch unwrapping — the onData handler calls this for each chunk.
+    const processChunk = (chunk: UIMessageChunk, controller: ReadableStreamDefaultController<UIMessageChunk>) => {
+              if (streamTerminated) return
               chunkCount++
               lastChunkType = chunk.type
 
@@ -363,6 +353,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 // the SDK Chat properly resets status from "streaming" to "ready"
                 // This allows user to retry sending messages after failed auth
                 console.log(`[SD] R:AUTH_ERR sub=${subId}`)
+                streamTerminated = true
                 controller.error(new Error("Authentication required"))
                 return
               }
@@ -447,12 +438,49 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
               if (chunk.type === "finish") {
                 console.log(`[SD] R:FINISH sub=${subId} n=${chunkCount}`)
+                streamTerminated = true
                 try {
                   controller.close()
                 } catch {
                   // Already closed
                 }
               }
+    }
+
+    return new ReadableStream({
+      start: (controller) => {
+        const sub = trpcClient.claude.chat.subscribe(
+          {
+            subChatId: this.config.subChatId,
+            chatId: this.config.chatId,
+            prompt,
+            cwd: this.config.cwd,
+            projectPath: this.config.projectPath, // Original project path for MCP config lookup
+            mode: currentMode,
+            sessionId,
+            thinkingConfig,
+            effort,
+            model: finalModelString,
+            ...(customConfig && { customConfig }),
+            ...(selectedOllamaModel && { selectedOllamaModel }),
+            historyEnabled,
+            offlineModeEnabled,
+            enableTasks,
+            ...(images.length > 0 && { images }),
+          },
+          {
+            onData: (rawChunk: UIMessageChunk) => {
+              // PERF: Unwrap batched chunks from ChunkBatcher.
+              // The main process batches streaming chunks at ~60fps to reduce IPC overhead.
+              // A batch message contains an array of individual chunks that we process sequentially.
+              if (rawChunk.type === "batch" && Array.isArray((rawChunk as any).chunks)) {
+                for (const innerChunk of (rawChunk as any).chunks) {
+                  processChunk(innerChunk, controller)
+                  if (streamTerminated) break
+                }
+                return
+              }
+              processChunk(rawChunk, controller)
             },
             onError: (err: Error) => {
               console.log(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
@@ -505,7 +533,12 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
           // Hidden file content - add to prompt but not displayed in UI
           const fc = p as any
           const fileName = fc.filePath?.split("/").pop() || fc.filePath || "file"
-          fileContents.push(`\n--- ${fileName} ---\n${fc.content}`)
+          // Limit file content to prevent massive token waste on large files
+          const MAX_CHARS = 32_000 // ~8k tokens
+          const content = fc.content.length > MAX_CHARS
+            ? fc.content.slice(0, MAX_CHARS) + `\n\n[File truncated at ${MAX_CHARS} chars — use Read tool for full content]`
+            : fc.content
+          fileContents.push(`\n--- ${fileName} ---\n${content}`)
         }
       }
 

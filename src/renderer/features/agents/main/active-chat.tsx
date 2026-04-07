@@ -2631,21 +2631,8 @@ const ChatViewInner = memo(function ChatViewInner({
     setQuickCommentState(null)
   }, [])
 
-  // Sync loading status to atom for UI indicators
-  // When streaming starts, set loading. When it stops, clear loading.
-  // Unseen changes, sound notification, and sidebar refresh are handled in onFinish callback
-  const setLoadingSubChats = useSetAtom(loadingSubChatsAtom)
-
-  useEffect(() => {
-    const storedParentChatId = agentChatStore.getParentChatId(subChatId)
-    if (!storedParentChatId) return
-
-    if (isStreaming) {
-      setLoading(setLoadingSubChats, subChatId, storedParentChatId)
-    } else {
-      clearLoading(setLoadingSubChats, subChatId)
-    }
-  }, [isStreaming, subChatId, setLoadingSubChats])
+  // Note: loading state sync (setLoading/clearLoading) is now handled in ChatDataSync
+  // so it works for BOTH active and inactive tabs. No duplicate sync needed here.
 
   // Watch for pending PR message and send it
   const [pendingPrMessage, setPendingPrMessage] = useAtom(pendingPrMessageAtom)
@@ -5424,6 +5411,28 @@ export function ChatView({
     }
   }, [activeSubChatId, chatId, chatSourceMode, tabsToRender])
 
+  // Periodic LRU eviction of stale Chat instances across all workspaces.
+  // Runs every 60 seconds and removes instances idle for >5 minutes that are
+  // not in the current tab set and not streaming. This prevents unbounded
+  // memory growth when users switch between many workspaces over time.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const keep = new Set(tabsToRender)
+      if (activeSubChatId) keep.add(activeSubChatId)
+      for (const id of splitPaneIds) keep.add(id)
+
+      const evicted = agentChatStore.evictStale(
+        (id) => useStreamingStatusStore.getState().isStreaming(id),
+        keep,
+      )
+      for (const id of evicted) {
+        clearRuntimeCachesForSubChat(id)
+      }
+    }, 60_000)
+
+    return () => clearInterval(interval)
+  }, [tabsToRender, activeSubChatId, splitPaneIds])
+
   // Get PR status when PR exists (for checking if it's open/merged/closed)
   const hasPrNumber = !!agentChat?.prNumber
   const { data: prStatusData, isLoading: isPrStatusLoading } = trpc.chats.getPrStatus.useQuery(
@@ -7386,59 +7395,35 @@ Make sure to preserve all functionality from both branches when resolving confli
                     }]
                   })}
                   hiddenTabs={
+                    /* PERF: Hidden tabs in split-pane mode only mount ChatDataSync
+                     * for streaming status tracking. ChatViewInner is NOT mounted,
+                     * eliminating DOM overhead for tabs not visible in any pane. */
                     <>
                       {tabsToRender
                         .filter(id => !splitPaneIds.includes(id))
                         .map(subChatId => {
                           const chat = getOrCreateChat(subChatId)
-                          const isFirstSubChat = getFirstSubChatId(agentSubChats) === subChatId
                           const belongsToWorkspace = agentSubChats.some(sc => sc.id === subChatId) ||
                                                     allSubChats.some(sc => sc.id === subChatId)
                           if (!chat || !belongsToWorkspace) return null
                           return (
-                            <div
-                              key={subChatId}
-                              className="absolute inset-0 flex flex-col"
-                              style={{
-                                opacity: 0,
-                                pointerEvents: "none",
-                                contain: "layout style paint",
-                              }}
-                              aria-hidden
-                              inert={true}
-                            >
-                              <ChatDataSync chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={false}>
-                              <ChatViewInner
-                                subChatId={subChatId}
-                                parentChatId={chatId}
-                                provider={inferProviderFromMessages(subChatId)}
-                                isFirstSubChat={isFirstSubChat}
-                                onAutoRename={handleAutoRename}
-                                onCreateNewSubChat={handleCreateNewSubChat}
-                                onProviderChange={handleProviderChange}
-                                teamId={selectedTeamId || undefined}
-                                repository={repository}
-                                isMobile={isMobileFullscreen}
-                                isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
-                                sandboxId={sandboxId || undefined}
-                                projectPath={worktreePath || undefined}
-                                isArchived={isArchived}
-                                onRestoreWorkspace={handleRestoreWorkspace}
-                                existingPrUrl={agentChat?.prUrl}
-                                isActive={false}
-                                isSplitPane={false}
-                                workspaceName={agentChat?.name ?? null}
-                                workspaceBranch={agentChat?.branch ?? null}
-                                workspaceRepoName={(agentChat as any)?.project?.gitRepo || (agentChat as any)?.project?.name || null}
-                              />
-                              </ChatDataSync>
-                            </div>
+                            <ChatDataSync key={subChatId} chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={false}>
+                              {null}
+                            </ChatDataSync>
                           )
                         })}
                     </>
                   }
                 />
               ) : (
+                /* PERF OPTIMIZATION: Only render ChatViewInner for the ACTIVE tab.
+                 * Inactive tabs only mount ChatDataSync (lightweight: tracks streaming status
+                 * and syncs per-subChat atoms at reduced throttle) without the heavy ChatViewInner
+                 * tree (markdown rendering, scroll observers, file watchers, etc.).
+                 *
+                 * When switching tabs, the newly active tab mounts ChatViewInner fresh and
+                 * ChatDataSync flushes its buffered messages to the global store immediately.
+                 * Scroll position is restored from scrollPositionCache (already saved on deactivation). */
                 tabsToRender.map(subChatId => {
                 const chat = getOrCreateChat(subChatId)
                 const isActive = subChatId === activeSubChatId
@@ -7452,26 +7437,32 @@ Make sure to preserve all functionality from both branches when resolving confli
 
                 if (!chat || !belongsToWorkspace) return null
 
+                if (!isActive) {
+                  // INACTIVE TAB: Mount only ChatDataSync for status tracking.
+                  // ChatDataSync with isActive=false uses 500ms throttle and skips
+                  // global atom syncs, dramatically reducing re-render overhead.
+                  // ChatViewInner is NOT mounted — no DOM, no scroll observers, no markdown.
+                  return (
+                    <ChatDataSync key={subChatId} chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={false}>
+                      {null}
+                    </ChatDataSync>
+                  )
+                }
+
+                // ACTIVE TAB: Full rendering with ChatViewInner
                 return (
                   <div
                     key={subChatId}
                     className="absolute inset-0 flex flex-col"
                     style={{
-                      // GPU-accelerated visibility switching (нативное ощущение)
-                      // transform + opacity быстрее чем visibility для GPU
-                      transform: isActive ? "translateZ(0)" : "translateZ(0) scale(0.98)",
-                      opacity: isActive ? 1 : 0,
-                      // Prevent pointer events on hidden tabs
-                      pointerEvents: isActive ? "auto" : "none",
-                      // Only hint GPU layer on the active tab to save VRAM
-                      willChange: isActive ? "transform, opacity" : "auto",
-                      // Изолируем layout - изменения внутри не влияют на другие табы
+                      transform: "translateZ(0)",
+                      opacity: 1,
+                      pointerEvents: "auto",
+                      willChange: "transform, opacity",
                       contain: "layout style paint",
                     }}
-                    aria-hidden={!isActive}
-                    inert={!isActive || undefined}
                   >
-                    <ChatDataSync chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={isActive}>
+                    <ChatDataSync chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={true}>
                     <ChatViewInner
                       subChatId={subChatId}
                       parentChatId={chatId}
@@ -7489,7 +7480,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                       isArchived={isArchived}
                       onRestoreWorkspace={handleRestoreWorkspace}
                       existingPrUrl={agentChat?.prUrl}
-                      isActive={isActive}
+                      isActive={true}
                       isSplitPane={false}
                       workspaceName={agentChat?.name ?? null}
                       workspaceBranch={agentChat?.branch ?? null}

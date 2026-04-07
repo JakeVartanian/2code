@@ -99,7 +99,7 @@ import {
   previousAgentChatIdAtom,
   selectedDraftIdAtom,
   showNewChatFormAtom,
-  loadingSubChatsAtom,
+  isChatLoadingAtomFamily,
   agentsUnseenChangesAtom,
   archivePopoverOpenAtom,
   agentsDebugModeAtom,
@@ -411,7 +411,6 @@ const AgentChatItem = React.memo(function AgentChatItem({
   chatProjectId,
   globalIndex,
   isSelected,
-  isLoading,
   hasUnseenChanges,
   hasPendingPlan,
   hasPendingQuestion,
@@ -459,7 +458,6 @@ const AgentChatItem = React.memo(function AgentChatItem({
   chatProjectId: string
   globalIndex: number
   isSelected: boolean
-  isLoading: boolean
   hasUnseenChanges: boolean
   hasPendingPlan: boolean
   hasPendingQuestion: boolean
@@ -500,6 +498,8 @@ const AgentChatItem = React.memo(function AgentChatItem({
   formatTime: (dateStr: string) => string
   isJustCreated: boolean
 }) {
+  // Per-item loading state - only re-renders this specific item when its loading state changes
+  const isLoading = useAtomValue(isChatLoadingAtomFamily(chatId))
   // Resolved hotkey for context menu
   const archiveWorkspaceHotkey = useResolvedHotkeyDisplay("archive-workspace")
 
@@ -808,7 +808,6 @@ function chatListSectionPropsAreEqual(
   if (prevProps.filteredChats !== nextProps.filteredChats) return false
 
   // Check Sets by reference - Jotai atoms return same reference if unchanged
-  if (prevProps.loadingChatIds !== nextProps.loadingChatIds) return false
   if (prevProps.unseenChanges !== nextProps.unseenChanges) return false
   if (prevProps.workspacePendingPlans !== nextProps.workspacePendingPlans) return false
   if (prevProps.workspacePendingQuestions !== nextProps.workspacePendingQuestions) return false
@@ -842,7 +841,6 @@ interface ChatListSectionProps {
   selectedChatId: string | null
   selectedChatIsRemote: boolean
   focusedChatIndex: number
-  loadingChatIds: Set<string>
   unseenChanges: Set<string>
   workspacePendingPlans: Set<string>
   workspacePendingQuestions: Set<string>
@@ -889,7 +887,6 @@ const ChatListSection = React.memo(function ChatListSection({
   selectedChatId,
   selectedChatIsRemote,
   focusedChatIndex,
-  loadingChatIds,
   unseenChanges,
   workspacePendingPlans,
   workspacePendingQuestions,
@@ -944,7 +941,6 @@ const ChatListSection = React.memo(function ChatListSection({
   })
 
   const renderChatItem = useCallback((chat: (typeof chats)[number], index: number) => {
-    const isLoading = loadingChatIds.has(chat.id)
     const chatOriginalId = chat.isRemote ? chat.id.replace(/^remote_/, '') : chat.id
     const isSelected = selectedChatId === chatOriginalId && selectedChatIsRemote === chat.isRemote
     const isPinned = pinnedChatIds.has(chat.id)
@@ -983,7 +979,6 @@ const ChatListSection = React.memo(function ChatListSection({
         chatProjectId={chat.projectId ?? ""}
         globalIndex={globalIndex}
         isSelected={isSelected}
-        isLoading={isLoading}
         hasUnseenChanges={unseenChanges.has(chat.id)}
         hasPendingPlan={hasPendingPlan}
         hasPendingQuestion={hasPendingQuestion}
@@ -1026,7 +1021,7 @@ const ChatListSection = React.memo(function ChatListSection({
       />
     )
   }, [
-    loadingChatIds, selectedChatId, selectedChatIsRemote, pinnedChatIds,
+    selectedChatId, selectedChatIsRemote, pinnedChatIds,
     globalIndexMap, focusedChatIndex, projectsMap, selectedChatIds,
     workspaceFileStats, workspacePendingPlans, workspacePendingQuestions,
     filteredChats, justCreatedIds, unseenChanges, isMultiSelectMode,
@@ -1114,6 +1109,7 @@ const UsageButton = memo(function UsageButton() {
   const [open, setOpen] = useState(false)
   const [blockTooltip, setBlockTooltip] = useState(false)
   const [tooltipOpen, setTooltipOpen] = useState(false)
+  const [lastRefetchTime, setLastRefetchTime] = useState(0)
   const prevOpen = useRef(false)
 
   const { data, isFetching, refetch } = trpc.claude.getUsage.useQuery(undefined, {
@@ -1121,6 +1117,13 @@ const UsageButton = memo(function UsageButton() {
     staleTime: 60_000,
     retry: false,
   })
+
+  const handleRefetch = useCallback(() => {
+    const now = Date.now()
+    if (now - lastRefetchTime < 1000) return // Prevent rapid-fire refreshes
+    setLastRefetchTime(now)
+    refetch()
+  }, [refetch, lastRefetchTime])
 
   useEffect(() => {
     if (prevOpen.current && !open) {
@@ -1164,7 +1167,7 @@ const UsageButton = memo(function UsageButton() {
                 <span className="text-xs font-medium text-foreground">Claude Usage</span>
                 <button
                   type="button"
-                  onClick={() => refetch()}
+                  onClick={handleRefetch}
                   className="text-muted-foreground hover:text-foreground transition-colors"
                   disabled={isFetching}
                 >
@@ -1573,7 +1576,6 @@ export function AgentsSidebar({
   const [selectedDraftId, setSelectedDraftId] = useAtom(selectedDraftIdAtom)
   const setShowNewChatForm = useSetAtom(showNewChatFormAtom)
   const setDesktopView = useSetAtom(desktopViewAtom)
-  const [loadingSubChats] = useAtom(loadingSubChatsAtom)
   const pendingQuestions = useAtomValue(pendingUserQuestionsAtom)
   // Use ref instead of state to avoid re-renders on hover
   const isSidebarHoveredRef = useRef(false)
@@ -1704,8 +1706,8 @@ export function AgentsSidebar({
     }
   }, [localChats])
 
-  // Fetch user's teams (same as web) - always enabled to allow merged list
-  const { data: teams, isLoading: isTeamsLoading, isError: isTeamsError } = useUserTeams(true)
+  // Remote teams disabled - no web account in this build
+  const { data: teams, isLoading: isTeamsLoading, isError: isTeamsError } = useUserTeams(false)
 
   // Fetch remote sandbox chats (same as web) - requires teamId
   const { data: remoteChats } = useRemoteChats()
@@ -2428,12 +2430,6 @@ export function AgentsSidebar({
     }
   }, [focusedChatIndex, filteredChats.length])
 
-  // Derive which chats have loading sub-chats
-  const loadingChatIds = useMemo(
-    () => new Set([...loadingSubChats.values()]),
-    [loadingSubChats],
-  )
-
   // Convert file stats to a Map for easy lookup (only for local chats)
   // Remote chat stats are provided directly via chat.remoteStats
   const workspaceFileStats = useMemo(() => {
@@ -3138,7 +3134,6 @@ export function AgentsSidebar({
                 selectedChatId={selectedChatId}
                 selectedChatIsRemote={selectedChatIsRemote}
                 focusedChatIndex={focusedChatIndex}
-                loadingChatIds={loadingChatIds}
                 unseenChanges={unseenChanges}
                 workspacePendingPlans={workspacePendingPlans}
                 workspacePendingQuestions={workspacePendingQuestions}
@@ -3182,7 +3177,6 @@ export function AgentsSidebar({
                 selectedChatId={selectedChatId}
                 selectedChatIsRemote={selectedChatIsRemote}
                 focusedChatIndex={focusedChatIndex}
-                loadingChatIds={loadingChatIds}
                 unseenChanges={unseenChanges}
                 workspacePendingPlans={workspacePendingPlans}
                 workspacePendingQuestions={workspacePendingQuestions}

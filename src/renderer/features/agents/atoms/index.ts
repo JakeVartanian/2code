@@ -138,6 +138,47 @@ export const mobileDeviceAtomFamily = atomFamily((chatId: string) =>
 // Set when generation starts, cleared when onFinish fires
 export const loadingSubChatsAtom = atom<Map<string, string>>(new Map())
 
+// ============================================================================
+// PER-SUBCHAT LOADING ATOMS (Performance optimization)
+// ============================================================================
+// Instead of reading the global Map (which triggers re-renders for ALL consumers
+// when ANY sub-chat's loading state changes), components can subscribe to a
+// per-subChat atom that only updates when THAT specific sub-chat changes.
+//
+// Usage:
+//   const isLoading = useAtomValue(isSubChatLoadingAtomFamily(subChatId))
+//   const parentChatIsLoading = useAtomValue(isChatLoadingAtomFamily(chatId))
+// ============================================================================
+
+// Per-subChat loading state: returns true if this specific subChat is loading
+export const isSubChatLoadingAtomFamily = atomFamily((subChatId: string) =>
+  atom((get) => get(loadingSubChatsAtom).has(subChatId))
+)
+
+// Per-parent-chat loading state: returns true if ANY sub-chat of this parent chat is loading
+// Used by the sidebar to show loading indicator on workspace items
+export const isChatLoadingAtomFamily = atomFamily((chatId: string) =>
+  atom((get) => {
+    const map = get(loadingSubChatsAtom)
+    for (const parentId of map.values()) {
+      if (parentId === chatId) return true
+    }
+    return false
+  })
+)
+
+// Set of loading subChat IDs for a given parent chat (for components that need the full set)
+export const loadingSubChatIdsForChatAtomFamily = atomFamily((chatId: string) =>
+  atom((get) => {
+    const map = get(loadingSubChatsAtom)
+    const ids = new Set<string>()
+    for (const [subChatId, parentId] of map) {
+      if (parentId === chatId) ids.add(subChatId)
+    }
+    return ids
+  })
+)
+
 // Helper to set loading state
 export const setLoading = (
   setter: (fn: (prev: Map<string, string>) => Map<string, string>) => void,
@@ -1093,6 +1134,7 @@ export function clearChatAtomCaches(chatId: string) {
   planEditRefetchTriggerAtomFamily.remove(chatId)
   workspaceDiffCacheAtomFamily.remove(chatId)
   fileViewerOpenAtomFamily.remove(chatId)
+  isChatLoadingAtomFamily.remove(chatId)
 }
 
 /**
@@ -1104,4 +1146,6 @@ export function clearSubChatAtomCaches(subChatId: string) {
   subChatModeAtomFamily.remove(subChatId)
   currentTodosAtomFamily.remove(subChatId)
   currentTaskToolsAtomFamily.remove(subChatId)
+  isSubChatLoadingAtomFamily.remove(subChatId)
+  loadingSubChatIdsForChatAtomFamily.remove(subChatId)
 }

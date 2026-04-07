@@ -5,6 +5,8 @@ import { Chat, useChat } from "@ai-sdk/react"
 import { useSetAtom } from "jotai"
 import { syncMessagesWithStatusAtom, type Message } from "../stores/message-store"
 import { useStreamingStatusStore } from "../stores/streaming-status-store"
+import { loadingSubChatsAtom, setLoading, clearLoading } from "../atoms"
+import { agentChatStore } from "../stores/agent-chat-store"
 
 // ============================================================================
 // CHAT DATA SYNC (LAYER 1)
@@ -69,7 +71,10 @@ export function ChatDataSync({
     id: subChatId,
     chat,
     resume: !!streamId,
-    experimental_throttle: 50,  // Throttle updates to reduce re-renders during streaming
+    // PERF: Inactive tabs use a much slower throttle to reduce re-render frequency.
+    // Active tabs need 50ms for smooth streaming UX; inactive tabs only need to keep
+    // the internal message buffer up to date for when they become active again.
+    experimental_throttle: isActive ? 50 : 500,
   })
 
   // Keep messages in a ref for non-reactive access
@@ -79,18 +84,81 @@ export function ChatDataSync({
   // Get setter for Jotai store
   const syncMessagesAtom = useSetAtom(syncMessagesWithStatusAtom)
 
+  // Track whether we have pending (un-synced) messages from when this tab was inactive.
+  // When isActive transitions to true, we flush the latest messages immediately.
+  const hasPendingSyncRef = useRef(false)
+  const prevIsActiveRef = useRef(isActive)
+
   // Sync to Jotai store - this is the ONLY thing we do with messages
   // Using useLayoutEffect to sync before paint
   // CRITICAL: Must pass subChatId to correctly key caches per chat
+  //
+  // PERF OPTIMIZATION: When isActive=false, we skip syncing to the global Jotai store
+  // entirely. The per-subChat atoms are still updated (updateGlobal: false) so that
+  // split-pane rendering and status tracking remain correct, but we only do this when
+  // the messages actually change structurally (new message count or status change).
+  const prevMessageCountRef = useRef(0)
+  const prevStatusRef = useRef(status)
+
   useLayoutEffect(() => {
-    syncMessagesAtom({ messages: messages as Message[], status, subChatId, updateGlobal: isActive })
+    if (isActive) {
+      // Active tab: always sync immediately (original behavior)
+      syncMessagesAtom({ messages: messages as Message[], status, subChatId, updateGlobal: true })
+      hasPendingSyncRef.current = false
+    } else {
+      // Inactive tab: only sync per-subChat atoms when message count or status changes.
+      // This prevents the 20Hz re-render cascade for hidden tabs during streaming.
+      const messageCount = messages.length
+      const statusChanged = status !== prevStatusRef.current
+      const countChanged = messageCount !== prevMessageCountRef.current
+
+      if (statusChanged || countChanged) {
+        syncMessagesAtom({ messages: messages as Message[], status, subChatId, updateGlobal: false })
+        prevMessageCountRef.current = messageCount
+        prevStatusRef.current = status
+      }
+      hasPendingSyncRef.current = true
+    }
   }, [messages, status, subChatId, isActive, syncMessagesAtom])
 
-  // Sync status to global streaming status store for queue processing
+  // Flush pending sync when tab becomes active (catch-up)
+  useLayoutEffect(() => {
+    if (isActive && !prevIsActiveRef.current && hasPendingSyncRef.current) {
+      // Tab just became active - flush latest messages to global store
+      syncMessagesAtom({ messages: messages as Message[], status, subChatId, updateGlobal: true })
+      hasPendingSyncRef.current = false
+    }
+    prevIsActiveRef.current = isActive
+  }, [isActive, messages, status, subChatId, syncMessagesAtom])
+
+  // Sync status to global streaming status store for queue processing.
+  // Clear on unmount so evicted/archived sub-chats don't leave stale entries.
   const setStreamingStatus = useStreamingStatusStore((s) => s.setStatus)
   useLayoutEffect(() => {
     setStreamingStatus(subChatId, status as "ready" | "streaming" | "submitted" | "error")
+    return () => {
+      // Use getState() to avoid adding clearStatus to deps (stable store reference)
+      useStreamingStatusStore.getState().clearStatus(subChatId)
+    }
   }, [subChatId, status, setStreamingStatus])
+
+  // Sync loading state to loadingSubChatsAtom so ALL tabs (active AND inactive)
+  // show sidebar loading indicators when streaming. Previously only ChatViewInner
+  // did this, so background tabs never showed loading dots in the sidebar.
+  const setLoadingSubChats = useSetAtom(loadingSubChatsAtom)
+  const isStreaming = status === "streaming" || status === "submitted"
+  useLayoutEffect(() => {
+    const parentChatId = agentChatStore.getParentChatId(subChatId)
+    if (!parentChatId) return
+    if (isStreaming) {
+      setLoading(setLoadingSubChats, subChatId, parentChatId)
+    } else {
+      clearLoading(setLoadingSubChats, subChatId)
+    }
+    return () => {
+      clearLoading(setLoadingSubChats, subChatId)
+    }
+  }, [isStreaming, subChatId, setLoadingSubChats])
 
   // Stable refs for actions to prevent context recreation
   const actionsRef = useRef({

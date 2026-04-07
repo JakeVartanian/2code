@@ -1,10 +1,9 @@
 "use client"
 
-import { useMemo } from "react"
 import { AnimatePresence } from "motion/react"
 import { createPortal } from "react-dom"
 import { useAtomValue } from "jotai"
-import { loadingSubChatsAtom } from "../atoms"
+import { isChatLoadingAtomFamily } from "../atoms"
 import { AgentChatCard } from "./agent-chat-card"
 
 interface AgentsQuickSwitchDialogProps {
@@ -22,6 +21,36 @@ interface AgentsQuickSwitchDialogProps {
   onHover?: (index: number) => void
 }
 
+// Per-item card that subscribes to its own loading state atom
+function AgentChatCardWithLoading({
+  chat,
+  isSelected,
+  projectsMap,
+  index,
+  onHover,
+}: {
+  chat: AgentsQuickSwitchDialogProps["chats"][0]
+  isSelected: boolean
+  projectsMap: AgentsQuickSwitchDialogProps["projectsMap"]
+  index: number
+  onHover?: (index: number) => void
+}) {
+  const isLoading = useAtomValue(isChatLoadingAtomFamily(chat.id))
+  const project = projectsMap.get(chat.projectId)
+  return (
+    <AgentChatCard
+      chat={chat}
+      isSelected={isSelected}
+      isLoading={isLoading}
+      variant="quick-switch"
+      gitOwner={project?.gitOwner}
+      gitProvider={project?.gitProvider}
+      repoName={project?.gitRepo || project?.name}
+      onMouseEnter={() => onHover?.(index)}
+    />
+  )
+}
+
 export function AgentsQuickSwitchDialog({
   isOpen,
   chats,
@@ -30,13 +59,6 @@ export function AgentsQuickSwitchDialog({
   onHover,
 }: AgentsQuickSwitchDialogProps) {
   if (typeof window === "undefined") return null
-
-  // Derive loading parent chat IDs from loadingSubChats Map
-  const loadingSubChats = useAtomValue(loadingSubChatsAtom)
-  const loadingChatIds = useMemo(
-    () => new Set([...loadingSubChats.values()]),
-    [loadingSubChats],
-  )
 
   return createPortal(
     <AnimatePresence>
@@ -64,25 +86,16 @@ export function AgentsQuickSwitchDialog({
                         "0 8px 32px 0 rgba(0,0,0,0.07), 0 0px 16px 0 rgba(0,0,0,0.04), 0 -8px 24px 0 rgba(0,0,0,0.03)",
                     }}
                   >
-                    {chats.map((chat, index) => {
-                      const isSelected = index === selectedIndex
-                      const isLoading = loadingChatIds.has(chat.id)
-                      const project = projectsMap.get(chat.projectId)
-
-                      return (
-                        <AgentChatCard
-                          key={chat.id}
-                          chat={chat}
-                          isSelected={isSelected}
-                          isLoading={isLoading}
-                          variant="quick-switch"
-                          gitOwner={project?.gitOwner}
-                          gitProvider={project?.gitProvider}
-                          repoName={project?.gitRepo || project?.name}
-                          onMouseEnter={() => onHover?.(index)}
-                        />
-                      )
-                    })}
+                    {chats.map((chat, index) => (
+                      <AgentChatCardWithLoading
+                        key={chat.id}
+                        chat={chat}
+                        isSelected={index === selectedIndex}
+                        projectsMap={projectsMap}
+                        index={index}
+                        onHover={onHover}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
