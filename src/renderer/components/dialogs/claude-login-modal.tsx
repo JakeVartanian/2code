@@ -62,6 +62,9 @@ export function ClaudeLoginModal({
   const [userClickedConnect, setUserClickedConnect] = useState(false)
   const [urlOpened, setUrlOpened] = useState(false)
   const [savedOauthUrl, setSavedOauthUrl] = useState<string | null>(null)
+  const [savedManualUrl, setSavedManualUrl] = useState<string | null>(null)
+  const [showManualInput, setShowManualInput] = useState(false)
+  const [authStarted, setAuthStarted] = useState(false)
   const urlOpenedRef = useRef(false)
   const didAutoStartForOpenRef = useRef(false)
 
@@ -71,24 +74,49 @@ export function ClaudeLoginModal({
   const openOAuthUrlMutation = trpc.claudeCode.openOAuthUrl.useMutation()
   const trpcUtils = trpc.useUtils()
 
-  // Poll for OAuth URL
+  const isPolling = flowState.step === "waiting_url" || flowState.step === "has_url"
+
+  // Poll for OAuth URL and auto-callback completion
   const pollStatusQuery = trpc.claudeCode.pollStatus.useQuery(
     {
-      sandboxUrl: flowState.step === "waiting_url" ? flowState.sandboxUrl : "",
-      sessionId: flowState.step === "waiting_url" ? flowState.sessionId : "",
+      sandboxUrl: isPolling ? flowState.sandboxUrl : "",
+      sessionId: isPolling ? flowState.sessionId : "",
     },
     {
-      enabled: flowState.step === "waiting_url",
+      enabled: isPolling,
       refetchInterval: 1500,
     }
   )
 
-  // Update flow state when we get the OAuth URL
+  // Also poll getIntegration as belt-and-suspenders once auth has started
+  const integrationQuery = trpc.claudeCode.getIntegration.useQuery(undefined, {
+    enabled: authStarted || isPolling,
+    refetchInterval: authStarted || isPolling ? 1500 : false,
+  })
+
+  // Complete as soon as token is stored in DB
   useEffect(() => {
-    if (
-      flowState.step === "waiting_url" &&
-      pollStatusQuery.data?.oauthUrl
-    ) {
+    if ((authStarted || isPolling) && integrationQuery.data?.isConnected) {
+      handleAuthSuccess()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStarted, isPolling, integrationQuery.data?.isConnected])
+
+  // Update flow state from poll results
+  useEffect(() => {
+    if (!pollStatusQuery.data) return
+
+    // Auto-complete: localhost callback captured and exchanged the token
+    if (pollStatusQuery.data.state === "success") {
+      handleAuthSuccess()
+      return
+    }
+
+    if (pollStatusQuery.data.manualUrl) {
+      setSavedManualUrl(pollStatusQuery.data.manualUrl)
+    }
+
+    if (flowState.step === "waiting_url" && pollStatusQuery.data.oauthUrl) {
       setSavedOauthUrl(pollStatusQuery.data.oauthUrl)
       setFlowState({
         step: "has_url",
@@ -98,28 +126,32 @@ export function ClaudeLoginModal({
         sessionId: flowState.sessionId,
       })
     } else if (
-      flowState.step === "waiting_url" &&
-      pollStatusQuery.data?.state === "error"
+      (flowState.step === "waiting_url" || flowState.step === "has_url") &&
+      pollStatusQuery.data.state === "error" &&
+      !integrationQuery.data?.isConnected
     ) {
       setFlowState({
         step: "error",
         message: pollStatusQuery.data.error || "Failed to get OAuth URL",
       })
     }
-  }, [pollStatusQuery.data, flowState])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollStatusQuery.data, integrationQuery.data?.isConnected])
 
-  // Open URL in browser when ready (after user clicked Connect)
+  // Auto-open browser when URL is ready (matches onboarding page behavior)
   useEffect(() => {
-    if (
-      flowState.step === "has_url" &&
-      userClickedConnect &&
-      !urlOpenedRef.current
-    ) {
+    if (flowState.step === "has_url" && !urlOpenedRef.current) {
       urlOpenedRef.current = true
       setUrlOpened(true)
-      openOAuthUrlMutation.mutate(flowState.oauthUrl)
     }
-  }, [flowState, userClickedConnect, openOAuthUrlMutation])
+  }, [flowState.step])
+
+  // Show manual input after 12s as a safety net
+  useEffect(() => {
+    if (!urlOpened) return
+    const timer = setTimeout(() => setShowManualInput(true), 12000)
+    return () => clearTimeout(timer)
+  }, [urlOpened])
 
   // Reset state when modal closes
   useEffect(() => {
@@ -129,10 +161,11 @@ export function ClaudeLoginModal({
       setUserClickedConnect(false)
       setUrlOpened(false)
       setSavedOauthUrl(null)
+      setSavedManualUrl(null)
+      setShowManualInput(false)
+      setAuthStarted(false)
       urlOpenedRef.current = false
       didAutoStartForOpenRef.current = false
-      // Clear pending retry if modal closed without success (user cancelled)
-      // Note: We don't clear here because success handler sets readyToRetry=true first
     }
   }, [open])
 
@@ -179,47 +212,22 @@ export function ClaudeLoginModal({
     setUserClickedConnect(true)
 
     if (flowState.step === "has_url") {
-      // URL is ready, open it immediately
-      urlOpenedRef.current = true
-      setUrlOpened(true)
+      // URL already ready — just re-open it
       openOAuthUrlMutation.mutate(flowState.oauthUrl)
-    } else if (flowState.step === "error") {
-      // Retry on error
+      return
+    }
+
+    if (flowState.step === "idle" || flowState.step === "error") {
       urlOpenedRef.current = false
       setUrlOpened(false)
+      setShowManualInput(false)
       setFlowState({ step: "starting" })
       try {
         const result = await startAuthMutation.mutateAsync()
+        setAuthStarted(true)
         if (result.autoUrl) {
           setSavedOauthUrl(result.autoUrl)
-          setFlowState({
-            step: "has_url",
-            sandboxId: result.sandboxId,
-            sandboxUrl: result.sandboxUrl,
-            sessionId: result.sessionId,
-            oauthUrl: result.autoUrl,
-          })
-        } else {
-          setFlowState({
-            step: "waiting_url",
-            sandboxId: result.sandboxId,
-            sandboxUrl: result.sandboxUrl,
-            sessionId: result.sessionId,
-          })
-        }
-      } catch (err) {
-        setFlowState({
-          step: "error",
-          message: err instanceof Error ? err.message : "Failed to start authentication",
-        })
-      }
-    } else if (flowState.step === "idle") {
-      // Start auth
-      setFlowState({ step: "starting" })
-      try {
-        const result = await startAuthMutation.mutateAsync()
-        if (result.autoUrl) {
-          setSavedOauthUrl(result.autoUrl)
+          if (result.manualUrl) setSavedManualUrl(result.manualUrl)
           setFlowState({
             step: "has_url",
             sandboxId: result.sandboxId,
@@ -258,8 +266,9 @@ export function ClaudeLoginModal({
     void handleConnectClick()
   }, [autoStartAuth, flowState.step, handleConnectClick, open])
 
-  const handleSubmitCode = async () => {
-    if (!authCode.trim() || flowState.step !== "has_url") return
+  const submitCode = async (code: string) => {
+    if (submitCodeMutation.isPending) return
+    if (!code.trim() || flowState.step !== "has_url") return
 
     const { sandboxUrl, sessionId } = flowState
     setFlowState({ step: "submitting" })
@@ -268,7 +277,7 @@ export function ClaudeLoginModal({
       await submitCodeMutation.mutateAsync({
         sandboxUrl,
         sessionId,
-        code: authCode.trim(),
+        code: code.trim(),
       })
       handleAuthSuccess()
     } catch (err) {
@@ -279,29 +288,15 @@ export function ClaudeLoginModal({
     }
   }
 
+  const handleSubmitCode = () => submitCode(authCode)
+
   const handleCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
     setAuthCode(value)
 
     // Auto-submit if the pasted value looks like a valid auth code
     if (isValidCodeFormat(value) && flowState.step === "has_url") {
-      const { sandboxUrl, sessionId } = flowState
-      setTimeout(async () => {
-        setFlowState({ step: "submitting" })
-        try {
-          await submitCodeMutation.mutateAsync({
-            sandboxUrl,
-            sessionId,
-            code: value.trim(),
-          })
-          handleAuthSuccess()
-        } catch (err) {
-          setFlowState({
-            step: "error",
-            message: err instanceof Error ? err.message : "Failed to submit code",
-          })
-        }
-      }, 100)
+      setTimeout(() => submitCode(value), 100)
     }
   }
 
@@ -312,9 +307,11 @@ export function ClaudeLoginModal({
   }
 
   const handleOpenFallbackUrl = () => {
-    if (savedOauthUrl) {
-      openOAuthUrlMutation.mutate(savedOauthUrl)
+    const url = savedManualUrl ?? savedOauthUrl
+    if (url) {
+      openOAuthUrlMutation.mutate(url)
     }
+    setShowManualInput(true)
   }
 
   const handleOpenModelsSettings = () => {
@@ -368,7 +365,7 @@ export function ClaudeLoginModal({
 
           {/* Content */}
           <div className="space-y-6">
-            {/* Connect Button - shows loader only if user clicked AND loading */}
+            {/* Connect Button */}
             {!urlOpened && flowState.step !== "has_url" && flowState.step !== "error" && (
               <Button
                 onClick={handleConnectClick}
@@ -383,41 +380,60 @@ export function ClaudeLoginModal({
               </Button>
             )}
 
-            {/* Code Input - Show after URL is opened or if has_url */}
-            {(urlOpened ||
-              flowState.step === "has_url" ||
-              flowState.step === "submitting") && (
-              <div className="space-y-4">
-                <Input
-                  value={authCode}
-                  onChange={handleCodeChange}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Paste your authentication code here..."
-                  className="font-mono text-center"
-                  autoFocus
-                  disabled={isSubmitting}
-                />
-                <Button
-                  onClick={handleSubmitCode}
-                  className="w-full"
-                  disabled={!authCode.trim() || isSubmitting}
-                >
-                  {isSubmitting ? <IconSpinner className="h-4 w-4" /> : "Continue"}
-                </Button>
-                <p className="text-xs text-muted-foreground text-center">
-                  A new tab has opened for authentication.
-                  {savedOauthUrl && (
-                    <>
-                      {" "}
-                      <button
-                        onClick={handleOpenFallbackUrl}
-                        className="text-primary hover:underline"
-                      >
-                        Didn't open? Click here
+            {/* Waiting for browser OAuth to complete */}
+            {(urlOpened || flowState.step === "has_url") && flowState.step !== "submitting" && (
+              <div className="space-y-4 flex flex-col items-center w-full">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <IconSpinner className="h-4 w-4 shrink-0" />
+                  <span>Complete sign-in in the browser window…</span>
+                </div>
+
+                {!showManualInput && (
+                  <p className="text-xs text-muted-foreground text-center">
+                    Browser showed an error?{" "}
+                    <button
+                      onClick={handleOpenFallbackUrl}
+                      className="text-primary hover:underline"
+                    >
+                      Click here for a code instead
+                    </button>
+                  </p>
+                )}
+
+                {showManualInput && (
+                  <div className="space-y-3 w-full">
+                    <p className="text-xs text-muted-foreground text-center">
+                      Paste the code from the browser, or{" "}
+                      <button onClick={handleOpenFallbackUrl} className="text-primary hover:underline">
+                        open sign-in again
                       </button>
-                    </>
-                  )}
-                </p>
+                      {" "}to get one.
+                    </p>
+                    <Input
+                      value={authCode}
+                      onChange={handleCodeChange}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Paste your authentication code here…"
+                      className="font-mono text-center text-xs"
+                      autoFocus
+                      disabled={isSubmitting}
+                    />
+                    <Button
+                      onClick={handleSubmitCode}
+                      className="w-full"
+                      disabled={!authCode.trim() || isSubmitting}
+                    >
+                      {isSubmitting ? <IconSpinner className="h-4 w-4" /> : "Continue"}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {flowState.step === "submitting" && (
+              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                <IconSpinner className="h-4 w-4 shrink-0" />
+                <span>Signing in…</span>
               </div>
             )}
 
