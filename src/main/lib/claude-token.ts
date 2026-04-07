@@ -200,10 +200,10 @@ export async function refreshClaudeToken(refreshToken: string): Promise<{
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
-    client_id: 'claude-desktop',
+    client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e', // FIX: match PKCE flow client_id
   });
 
-  const response = await fetch('https://api.anthropic.com/v1/oauth/token', {
+  const response = await fetch('https://platform.claude.com/v1/oauth/token', { // FIX: match PKCE flow endpoint
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString(),

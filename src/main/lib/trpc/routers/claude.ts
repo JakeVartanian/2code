@@ -147,6 +147,16 @@ function parseMentions(prompt: string): {
 }
 
 /**
+ * Encrypt token using Electron's safeStorage
+ */
+function encryptToken(token: string): string {
+  if (!safeStorage.isEncryptionAvailable()) {
+    return Buffer.from(token).toString("base64")
+  }
+  return safeStorage.encryptString(token).toString("base64")
+}
+
+/**
  * Decrypt token using Electron's safeStorage
  */
 function decryptToken(encrypted: string): string {
@@ -248,6 +258,124 @@ function getClaudeCodeToken(): string | null {
     console.error("[claude-auth] Error getting Claude Code token:", error)
     return null
   }
+}
+
+/**
+ * In-memory cache for refreshed tokens to avoid refreshing on every message.
+ * TTL: 45 minutes (Claude OAuth tokens typically expire after ~1 hour).
+ */
+let tokenRefreshCache: { token: string; refreshedAt: number } | null = null
+const TOKEN_REFRESH_TTL_MS = 45 * 60 * 1000 // 45 minutes
+
+/**
+ * Update the stored access token (and optionally refresh token) in the DB
+ * after a successful token refresh.
+ */
+function updateStoredAccessToken(newAccessToken: string, newRefreshToken?: string, expiresAt?: Date): void {
+  try {
+    const db = getDatabase()
+    const encrypted = encryptToken(newAccessToken)
+    const encryptedRefresh = newRefreshToken ? encryptToken(newRefreshToken) : undefined
+
+    // Update multi-account system
+    const settings = db
+      .select()
+      .from(anthropicSettings)
+      .where(eq(anthropicSettings.id, "singleton"))
+      .get()
+
+    if (settings?.activeAccountId) {
+      const updateData: Record<string, unknown> = { oauthToken: encrypted }
+      if (encryptedRefresh) {
+        updateData.refreshToken = encryptedRefresh
+      }
+      if (expiresAt) {
+        updateData.tokenExpiresAt = expiresAt
+      }
+      db.update(anthropicAccounts)
+        .set(updateData)
+        .where(eq(anthropicAccounts.id, settings.activeAccountId))
+        .run()
+    }
+
+    // Also update legacy table
+    const legacyCred = db
+      .select()
+      .from(claudeCodeCredentials)
+      .where(eq(claudeCodeCredentials.id, "default"))
+      .get()
+    if (legacyCred) {
+      db.update(claudeCodeCredentials)
+        .set({ oauthToken: encrypted })
+        .where(eq(claudeCodeCredentials.id, "default"))
+        .run()
+    }
+
+    console.log("[claude-auth] Stored tokens updated after refresh")
+  } catch (error) {
+    console.error("[claude-auth] Failed to update stored tokens:", error)
+  }
+}
+
+/**
+ * Get a fresh Claude Code OAuth token, auto-refreshing if expired.
+ * Uses in-memory cache with 45-min TTL to avoid refreshing on every message.
+ * Falls back to stored token if refresh fails.
+ */
+async function getClaudeCodeTokenFresh(): Promise<string | null> {
+  // Check in-memory cache first
+  if (tokenRefreshCache && Date.now() - tokenRefreshCache.refreshedAt < TOKEN_REFRESH_TTL_MS) {
+    return tokenRefreshCache.token
+  }
+
+  // Get the stored token (sync)
+  const storedToken = getClaudeCodeToken()
+
+  // Get refresh tokens from both sources
+  const appRefreshToken = getStoredRefreshToken()
+  const keychainCreds = getExistingClaudeCredentials()
+
+  // Check if keychain token is expired
+  const keychainExpired = keychainCreds ? isTokenExpired(keychainCreds.expiresAt) : true
+
+  // If keychain has a non-expired token, use it directly
+  if (keychainCreds?.accessToken && !keychainExpired) {
+    tokenRefreshCache = { token: keychainCreds.accessToken, refreshedAt: Date.now() }
+    return keychainCreds.accessToken
+  }
+
+  // If the DB token has a known expiry and is still fresh, use it without refreshing
+  const dbTokenExpiry = getStoredTokenExpiry()
+  const dbTokenExpired = dbTokenExpiry !== null ? isTokenExpired(dbTokenExpiry) : true
+  if (storedToken && !dbTokenExpired) {
+    tokenRefreshCache = { token: storedToken, refreshedAt: Date.now() }
+    return storedToken
+  }
+
+  // Try to refresh using the best available refresh token
+  const bestRefreshToken = appRefreshToken ?? keychainCreds?.refreshToken
+  if (bestRefreshToken) {
+    try {
+      const refreshed = await refreshClaudeToken(bestRefreshToken)
+      console.log("[claude-auth] Token refreshed successfully")
+      const expiresAt = refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined
+      updateStoredAccessToken(refreshed.accessToken, refreshed.refreshToken, expiresAt)
+      tokenRefreshCache = { token: refreshed.accessToken, refreshedAt: Date.now() }
+      return refreshed.accessToken
+    } catch (e) {
+      console.log("[claude-auth] Token refresh failed, using stored token:", e)
+      // Invalidate cache so we retry next time
+      tokenRefreshCache = null
+    }
+  }
+
+  // Fall back to stored token or keychain token
+  const fallback = storedToken ?? keychainCreds?.accessToken ?? null
+  if (fallback) {
+    // Cache even the fallback so we don't spam refresh attempts
+    tokenRefreshCache = { token: fallback, refreshedAt: Date.now() }
+  }
+  return fallback
 }
 
 // Dynamic import for ESM module - CACHED to avoid re-importing on every message
@@ -798,6 +926,19 @@ export async function getAllMcpConfigHandler() {
 
 // ============ USAGE API HELPERS ============
 
+/** Read the token expiry (ms epoch) for the active account from the app DB */
+function getStoredTokenExpiry(): number | null {
+  try {
+    const db = getDatabase()
+    const settings = db.select().from(anthropicSettings).where(eq(anthropicSettings.id, "singleton")).get()
+    if (!settings?.activeAccountId) return null
+    const account = db.select().from(anthropicAccounts).where(eq(anthropicAccounts.id, settings.activeAccountId)).get()
+    return account?.tokenExpiresAt?.getTime() ?? null
+  } catch {
+    return null
+  }
+}
+
 /** Read the encrypted refresh token for the active account from the app DB */
 function getStoredRefreshToken(): string | null {
   try {
@@ -1106,7 +1247,8 @@ export const claudeRouter = router({
 
             // 2.5. AUTO-FALLBACK: Check internet and switch to Ollama if offline
             // Only check if offline mode is enabled in settings
-            const claudeCodeToken = getClaudeCodeToken()
+            // Use async version that auto-refreshes expired tokens
+            const claudeCodeToken = await getClaudeCodeTokenFresh()
             const offlineResult = await checkOfflineFallback(
               input.customConfig,
               claudeCodeToken,
@@ -2122,12 +2264,16 @@ ${prompt}
             const MAX_POLICY_RETRIES = 2
             let policyRetryCount = 0
             let policyRetryNeeded = false
+            // Auto-retry on auth failure after token refresh (once)
+            let authRetryAttempted = false
+            let authRetryNeeded = false
             let messageCount = 0
             let pendingFinishChunk: UIMessageChunk | null = null
 
             // eslint-disable-next-line no-constant-condition
             while (true) {
               policyRetryNeeded = false
+              authRetryNeeded = false
               messageCount = 0
               pendingFinishChunk = null
 
@@ -2353,6 +2499,23 @@ ${prompt}
                         `[claude] USAGE_POLICY_VIOLATION - silent retry (attempt ${policyRetryCount}/${MAX_POLICY_RETRIES})`,
                       )
                       break // break for-await loop to retry
+                    }
+
+                    // On auth failure, try refreshing token and retrying once before showing modal
+                    if (errorCategory === "AUTH_FAILED_SDK" && !authRetryAttempted) {
+                      // Invalidate cache so refresh is forced
+                      tokenRefreshCache = null
+                      const refreshedToken = await getClaudeCodeTokenFresh()
+                      if (refreshedToken && refreshedToken !== claudeCodeToken) {
+                        authRetryAttempted = true
+                        authRetryNeeded = true
+                        // Update env for retry
+                        if (!hasExistingApiConfig && queryOptions.options?.env) {
+                          (queryOptions.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN = refreshedToken
+                        }
+                        console.log("[claude] Auth failed but token refreshed - retrying")
+                        break // break for-await loop to retry
+                      }
                     }
 
                     // Emit auth-error for authentication failures, regular error otherwise
@@ -2726,6 +2889,13 @@ ${prompt}
                 safeEmit({ type: "finish" } as UIMessageChunk)
                 safeComplete()
                 return
+              }
+
+              // Retry if auth failed and token was refreshed
+              if (authRetryNeeded) {
+                authRetryNeeded = false
+                console.log("[claude] Auth retry - restarting stream with refreshed token")
+                continue
               }
 
               // Retry if policy violation detected (transient false positive)

@@ -5,7 +5,7 @@ import { createServer, type Server } from "http"
 import { z } from "zod"
 import { getAuthManager } from "../../../index"
 import { getClaudeShellEnvironment } from "../../claude"
-import { getExistingClaudeToken } from "../../claude-token"
+import { getExistingClaudeCredentials, getExistingClaudeToken } from "../../claude-token"
 import {
   anthropicAccounts,
   anthropicSettings,
@@ -186,7 +186,7 @@ function decryptToken(encrypted: string): string {
  * Store OAuth token - now uses multi-account system
  * If setAsActive is true, also sets this account as active
  */
-function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: string): string {
+function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: string, expiresAt?: Date): string {
   const authManager = getAuthManager()
   const user = authManager.getUser()
 
@@ -201,6 +201,7 @@ function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: 
       id: newId,
       oauthToken: encryptedToken,
       refreshToken: encryptedRefresh,
+      tokenExpiresAt: expiresAt ?? null,
       displayName: "Anthropic Account",
       connectedAt: new Date(),
       desktopUserId: user?.id ?? null,
@@ -344,10 +345,10 @@ export const claudeCodeRouter = router({
 
     oauthSessions.set(sessionId, { codeVerifier, state, port, server, codePromise, codeResolve, codeReject, manualUrl, autoUrl, autoCode: null, completed: false, exchangeError: null })
 
-    // Auto-cleanup after 15 minutes
+    // Auto-cleanup after 15 minutes (only if not completed)
     setTimeout(() => {
       const s = oauthSessions.get(sessionId)
-      if (s) { try { s.server.close() } catch {}; oauthSessions.delete(sessionId) }
+      if (s && !s.completed) { try { s.server.close() } catch {}; oauthSessions.delete(sessionId) } // FIX: skip eviction if completed
     }, 15 * 60 * 1000)
 
     // Open the auto URL in the browser (same as CLI's d$($) call)
@@ -390,8 +391,9 @@ export const claudeCodeRouter = router({
             }),
           })
           if (tokenRes.ok) {
-            const tokenData = await tokenRes.json() as { access_token: string; refresh_token?: string }
-            storeOAuthToken(tokenData.access_token, true, tokenData.refresh_token)
+            const tokenData = await tokenRes.json() as { access_token: string; refresh_token?: string; expires_in?: number }
+            const expiresAt = tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000) : undefined
+            storeOAuthToken(tokenData.access_token, true, tokenData.refresh_token, expiresAt)
             // Mark session as completed so subsequent polls keep returning success
             session.completed = true
             console.log("[ClaudeCode] Token stored via auto localhost callback")
@@ -412,8 +414,8 @@ export const claudeCodeRouter = router({
         return { state: "error" as const, oauthUrl: session.autoUrl, error: session.exchangeError }
       }
 
-      // Return the auto URL — "Didn't open?" button re-opens the same localhost-redirect URL
-      return { state: "pending" as const, oauthUrl: session.autoUrl, error: null }
+      // Return both URLs — "Didn't open?" re-opens auto URL, manualUrl is fallback for code-paste
+      return { state: "pending" as const, oauthUrl: session.autoUrl, manualUrl: session.manualUrl, error: null }
     }),
 
   /**
@@ -440,6 +442,11 @@ export const claudeCodeRouter = router({
       const authorizationCode = raw.slice(0, hashIdx)
       const stateFromCode = raw.slice(hashIdx + 1)
 
+      // FIX: validate state parameter to prevent CSRF attacks
+      if (stateFromCode !== session.state) {
+        throw new Error("State mismatch — this authentication code may have been tampered with. Please try again.")
+      }
+
       // The redirect_uri MUST match what was sent in the auth request.
       // We always open the auto URL (localhost), so always use the localhost redirect_uri.
       const tokenRes = await fetch(ANTHROPIC_TOKEN_ENDPOINT, {
@@ -455,17 +462,45 @@ export const claudeCodeRouter = router({
         }),
       })
 
-      if (!tokenRes.ok) {
-        const errText = await tokenRes.text().catch(() => tokenRes.statusText)
-        console.error("[ClaudeCode] Token exchange failed:", tokenRes.status, errText)
-        throw new Error(`Token exchange failed (${tokenRes.status}): ${errText}`)
+      // Try auto (localhost) redirect_uri first, then fall back to manual redirect_uri
+      // This handles the case where the user used the manual URL fallback
+      type TokenResponse = { access_token: string; refresh_token?: string; expires_in?: number }
+      let tokenData: TokenResponse | null = null
+      if (tokenRes.ok) {
+        tokenData = await tokenRes.json() as TokenResponse
+      } else {
+        // Auto redirect_uri failed — retry with manual redirect_uri
+        const tokenRes2 = await fetch(ANTHROPIC_TOKEN_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            grant_type: "authorization_code",
+            code: authorizationCode,
+            redirect_uri: MANUAL_REDIRECT_URI,
+            client_id: CLAUDE_CLIENT_ID,
+            code_verifier: session.codeVerifier,
+            state: session.state,
+          }),
+        })
+        if (tokenRes2.ok) {
+          tokenData = await tokenRes2.json() as TokenResponse
+        } else {
+          const errText = await tokenRes2.text().catch(() => tokenRes2.statusText)
+          console.error("[ClaudeCode] Token exchange failed (both redirect URIs):", tokenRes.status, errText)
+          // FIX: user-friendly error messages instead of raw server response
+          if (tokenRes2.status === 400) {
+            throw new Error("Authentication code expired or already used. Please try again.")
+          } else if (tokenRes2.status === 401) {
+            throw new Error("Authentication rejected. Please try again.")
+          }
+          throw new Error(`Token exchange failed. Please try again.`)
+        }
       }
-
-      const tokenData = await tokenRes.json() as { access_token: string; refresh_token?: string }
 
       try { session.server.close() } catch {}
       oauthSessions.delete(input.sessionId)
-      storeOAuthToken(tokenData.access_token, true, tokenData.refresh_token)
+      const expiresAt = tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000) : undefined
+      storeOAuthToken(tokenData.access_token, true, tokenData.refresh_token, expiresAt)
       console.log("[ClaudeCode] OAuth token stored")
       return { success: true }
     }),
@@ -500,12 +535,13 @@ export const claudeCodeRouter = router({
    * Import Claude token from system credentials
    */
   importSystemToken: publicProcedure.mutation(() => {
-    const token = getExistingClaudeToken()?.trim()
-    if (!token) {
+    // FIX: use getExistingClaudeCredentials() to preserve refresh token
+    const creds = getExistingClaudeCredentials()
+    if (!creds?.accessToken) {
       throw new Error("No existing Claude token found")
     }
 
-    storeOAuthToken(token)
+    storeOAuthToken(creds.accessToken.trim(), true, creds.refreshToken)
     console.log("[ClaudeCode] Token imported from system")
     return { success: true }
   }),

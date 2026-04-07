@@ -242,9 +242,9 @@ console.log("[Protocol] =============================================")
 
 // Note: app.on("open-url") will be registered in app.whenReady()
 
-// SVG favicon as data URI for auth callback pages (matches web app favicon)
-const FAVICON_SVG = `<svg width="32" height="32" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="1024" height="1024" fill="#0033FF"/><path fill-rule="evenodd" clip-rule="evenodd" d="M800.165 148C842.048 148 876 181.952 876 223.835V686.415C876 690.606 872.606 694 868.415 694H640.915C636.729 694 633.335 697.394 633.335 701.585V868.415C633.335 872.606 629.936 876 625.75 876H223.835C181.952 876 148 842.048 148 800.165V702.59C148 697.262 150.807 692.326 155.376 689.586L427.843 526.1C434.031 522.388 431.956 513.238 425.327 512.118L423.962 512H155.585C151.394 512 148 508.606 148 504.415V337.585C148 333.394 151.394 330 155.585 330H443.75C447.936 330 451.335 326.606 451.335 322.415V155.585C451.335 151.394 454.729 148 458.915 148H800.165ZM458.915 330C454.729 330 451.335 333.394 451.335 337.585V686.415C451.335 690.606 454.729 694 458.915 694H625.75C629.936 694 633.335 690.606 633.335 686.415V337.585C633.335 333.394 629.936 330 625.75 330H458.915Z" fill="#F4F4F4"/></svg>`
-const FAVICON_DATA_URI = `data:image/svg+xml,${encodeURIComponent(FAVICON_SVG)}`
+// PNG favicon as base64 data URI for auth callback pages (new chip logo)
+const FAVICON_PNG_BASE64 = `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`
+const FAVICON_DATA_URI = `data:image/png;base64,${FAVICON_PNG_BASE64}`
 
 // Start local HTTP server for auth callbacks
 // This catches http://localhost:{AUTH_SERVER_PORT}/auth/callback?code=xxx and /callback (for MCP OAuth)
@@ -252,9 +252,10 @@ const server = createServer((req, res) => {
     const url = new URL(req.url || "", `http://localhost:${AUTH_SERVER_PORT}`)
 
     // Serve favicon
-    if (url.pathname === "/favicon.ico" || url.pathname === "/favicon.svg") {
-      res.writeHead(200, { "Content-Type": "image/svg+xml" })
-      res.end(FAVICON_SVG)
+    if (url.pathname === "/favicon.ico" || url.pathname === "/favicon.svg" || url.pathname === "/favicon.png") {
+      const faviconBuffer = Buffer.from(FAVICON_PNG_BASE64, "base64")
+      res.writeHead(200, { "Content-Type": "image/png", "Content-Length": faviconBuffer.length })
+      res.end(faviconBuffer)
       return
     }
 
@@ -275,7 +276,7 @@ const server = createServer((req, res) => {
 <html>
 <head>
   <meta charset="UTF-8">
-  <link rel="icon" type="image/svg+xml" href="${FAVICON_DATA_URI}">
+  <link rel="icon" type="image/png" href="${FAVICON_DATA_URI}">
   <title>2Code - Authentication</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -359,7 +360,7 @@ const server = createServer((req, res) => {
 <html>
 <head>
   <meta charset="UTF-8">
-  <link rel="icon" type="image/svg+xml" href="${FAVICON_DATA_URI}">
+  <link rel="icon" type="image/png" href="${FAVICON_DATA_URI}">
   <title>2Code - MCP Authentication</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }

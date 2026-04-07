@@ -116,6 +116,7 @@ export const anthropicAccounts = sqliteTable("anthropic_accounts", {
   displayName: text("display_name"), // User-editable label
   oauthToken: text("oauth_token").notNull(), // Encrypted with safeStorage
   refreshToken: text("refresh_token"), // Encrypted refresh token (nullable for legacy records)
+  tokenExpiresAt: integer("token_expires_at", { mode: "timestamp" }), // OAuth access token expiry
   connectedAt: integer("connected_at", { mode: "timestamp" }).$defaultFn(
     () => new Date(),
   ),

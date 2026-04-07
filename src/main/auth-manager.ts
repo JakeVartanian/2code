@@ -1,5 +1,5 @@
 import { AuthStore, AuthData, AuthUser } from "./auth-store"
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, powerMonitor } from "electron"
 import { AUTH_SERVER_PORT } from "./constants"
 
 // Get API URL - in packaged app always use production, in dev allow override
@@ -24,6 +24,17 @@ export class AuthManager {
     if (this.store.isAuthenticated()) {
       this.scheduleRefresh()
     }
+
+    // FIX: reschedule refresh after OS sleep/wake since setTimeout suspends during sleep
+    powerMonitor.on("resume", () => {
+      if (this.store.isAuthenticated()) {
+        if (this.store.needsRefresh()) {
+          this.refresh()
+        } else {
+          this.scheduleRefresh()
+        }
+      }
+    })
   }
 
   /**
@@ -119,6 +130,10 @@ export class AuthManager {
         // If refresh fails, clear auth and require re-login
         if (response.status === 401) {
           this.logout()
+          // FIX: notify all renderer windows so UI can react to implicit logout
+          for (const win of BrowserWindow.getAllWindows()) {
+            win.webContents.send("auth:logged-out")
+          }
         }
         return false
       }

@@ -38,6 +38,10 @@ export function AnthropicOnboardingPage() {
   const [userClickedConnect, setUserClickedConnect] = useState(false)
   const [urlOpened, setUrlOpened] = useState(false)
   const [savedOauthUrl, setSavedOauthUrl] = useState<string | null>(null)
+  const [savedManualUrl, setSavedManualUrl] = useState<string | null>(null)
+  const [showManualFallback, setShowManualFallback] = useState(false)
+  const [manualCode, setManualCode] = useState("")
+  const urlOpenedAtRef = useRef<number | null>(null)
   const [ignoredExistingToken, setIgnoredExistingToken] = useState(false)
   const [isUsingExistingToken, setIsUsingExistingToken] = useState(false)
   const [existingTokenError, setExistingTokenError] = useState<string | null>(null)
@@ -128,6 +132,13 @@ export function AnthropicOnboardingPage() {
     }
   }, [authStarted, isPolling, integrationQuery.data?.isConnected, setAnthropicOnboardingCompleted])
 
+  // Show manual fallback after 20s of waiting for browser callback
+  useEffect(() => {
+    if (!urlOpened) return
+    const timer = setTimeout(() => setShowManualFallback(true), 20000)
+    return () => clearTimeout(timer)
+  }, [urlOpened])
+
   // Update flow state from poll results
   useEffect(() => {
     if (!pollStatusQuery.data) return
@@ -136,6 +147,11 @@ export function AnthropicOnboardingPage() {
     if (pollStatusQuery.data.state === "success") {
       setAnthropicOnboardingCompleted(true)
       return
+    }
+
+    // Save manual URL whenever we get it
+    if (pollStatusQuery.data.manualUrl) {
+      setSavedManualUrl(pollStatusQuery.data.manualUrl)
     }
 
     if (flowState.step === "waiting_url" && pollStatusQuery.data.oauthUrl) {
@@ -231,6 +247,7 @@ export function AnthropicOnboardingPage() {
 
   // Submit code - reusable for both auto-submit and manual Enter
   const submitCode = async (code: string) => {
+    if (submitCodeMutation.isPending) return // FIX: prevent double-submit race condition
     if (!code.trim() || flowState.step !== "has_url") return
 
     const { sandboxUrl, sessionId } = flowState
@@ -272,6 +289,27 @@ export function AnthropicOnboardingPage() {
   const handleOpenFallbackUrl = () => {
     if (savedOauthUrl) {
       openOAuthUrlMutation.mutate(savedOauthUrl)
+    }
+  }
+
+  const handleOpenManualUrl = () => {
+    if (savedManualUrl) {
+      openOAuthUrlMutation.mutate(savedManualUrl)
+      setShowManualFallback(true)
+    }
+  }
+
+  const handleManualCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    setManualCode(value)
+    if (isValidCodeFormat(value) && flowState.step === "has_url") {
+      setTimeout(() => submitCode(value), 100)
+    }
+  }
+
+  const handleManualCodeKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && manualCode.trim()) {
+      submitCode(manualCode)
     }
   }
 
@@ -382,12 +420,14 @@ export function AnthropicOnboardingPage() {
 
           {/* Waiting for browser OAuth to complete */}
           {(urlOpened || flowState.step === "has_url") && (
-            <div className="space-y-3 flex flex-col items-center">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <IconSpinner className="h-4 w-4 shrink-0" />
-                <span>Complete sign-in in the browser window…</span>
-              </div>
-              {savedOauthUrl && (
+            <div className="space-y-4 flex flex-col items-center w-full">
+              {!showManualFallback && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <IconSpinner className="h-4 w-4 shrink-0" />
+                  <span>Complete sign-in in the browser window…</span>
+                </div>
+              )}
+              {savedOauthUrl && !showManualFallback && (
                 <p className="text-xs text-muted-foreground text-center">
                   Browser didn't open?{" "}
                   <button
@@ -397,6 +437,33 @@ export function AnthropicOnboardingPage() {
                     Click here to open it
                   </button>
                 </p>
+              )}
+              {showManualFallback && (
+                <div className="space-y-3 w-full">
+                  <p className="text-xs text-muted-foreground text-center">
+                    Signed in but still waiting?{" "}
+                    <button onClick={handleOpenManualUrl} className="text-primary hover:underline">
+                      Open sign-in again
+                    </button>
+                    {" "}and paste the code below.
+                  </p>
+                  <Input
+                    value={manualCode}
+                    onChange={handleManualCodeChange}
+                    onKeyDown={handleManualCodeKeyDown}
+                    placeholder="Paste your authentication code here…"
+                    className="font-mono text-center text-xs"
+                    autoFocus
+                    disabled={isSubmitting}
+                  />
+                  <button
+                    onClick={() => submitCode(manualCode)}
+                    disabled={!manualCode.trim() || isSubmitting || flowState.step !== "has_url"}
+                    className="w-full h-8 px-3 bg-primary text-primary-foreground rounded-lg text-sm font-medium transition-[background-color,transform] duration-150 hover:bg-primary/90 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  >
+                    {isSubmitting ? <IconSpinner className="h-4 w-4" /> : "Continue"}
+                  </button>
+                </div>
               )}
             </div>
           )}
