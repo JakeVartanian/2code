@@ -341,21 +341,37 @@ const server = createServer((req, res) => {
         res.end("Missing code parameter")
       }
     } else if (url.pathname === "/callback") {
-      // Handle MCP OAuth callback
+      // Shared callback for both MCP OAuth and Claude Code OAuth.
+      // Each handler looks up the state in its own in-memory map and ignores unknown states.
       const code = url.searchParams.get("code")
       const state = url.searchParams.get("state")
+      const error = url.searchParams.get("error")
+
+      if (error) {
+        console.error("[Auth Server] OAuth error:", error)
+        res.writeHead(200, { "Content-Type": "text/html" })
+        res.end(`<!DOCTYPE html><html><head><title>2Code</title></head><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;background:#09090b;color:#fafafa"><div style="text-align:center"><h2>Authorization failed</h2><p style="color:#71717a">You can close this tab</p></div></body></html>`)
+        return
+      }
+
       console.log(
-        "[Auth Server] Received MCP OAuth callback with code:",
+        "[Auth Server] /callback received, code:",
         code?.slice(0, 8) + "...",
         "state:",
         state?.slice(0, 8) + "...",
       )
 
       if (code && state) {
-        // Handle the MCP OAuth callback
+        // Try MCP OAuth first (sync map lookup, fire-and-forget)
         handleMcpOAuthCallback(code, state).catch((err) => console.error("[Auth Server] MCP OAuth callback failed:", err))
+        // Try Claude Code OAuth (dynamic import to avoid circular dep)
+        import("./lib/trpc/routers/claude-code").then(mod => {
+          mod.handleClaudeCodeOAuthCallback(code, state).catch(err =>
+            console.error("[Auth Server] Claude Code token exchange failed:", err)
+          )
+        }).catch(err => console.error("[Auth Server] Failed to load claude-code module:", err))
 
-        // Send success response and close the browser tab
+        // Send success page immediately (token exchanges happen async)
         res.writeHead(200, { "Content-Type": "text/html" })
         res.end(`<!DOCTYPE html>
 <html>
@@ -414,8 +430,8 @@ const server = createServer((req, res) => {
     <svg class="logo" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path fill-rule="evenodd" clip-rule="evenodd" d="M14.3333 0C15.2538 0 16 0.746192 16 1.66667V11.8333C16 11.9254 15.9254 12 15.8333 12H10.8333C10.7413 12 10.6667 12.0746 10.6667 12.1667V15.8333C10.6667 15.9254 10.592 16 10.5 16H1.66667C0.746192 16 0 15.2538 0 14.3333V12.1888C0 12.0717 0.0617409 11.9632 0.162081 11.903L6.15043 8.30986C6.28644 8.22833 6.24077 8.02716 6.09507 8.00256L6.06511 8H0.166667C0.0746186 8 0 7.92538 0 7.83333V4.16667C0 4.07462 0.0746193 4 0.166667 4H6.5C6.59205 4 6.66667 3.92538 6.66667 3.83333V0.166667C6.66667 0.0746193 6.74129 0 6.83333 0H14.3333ZM6.83333 4C6.74129 4 6.66667 4.07462 6.66667 4.16667V11.8333C6.66667 11.9254 6.74129 12 6.83333 12H10.5C10.592 12 10.6667 11.9254 10.6667 11.8333V4.16667C10.6667 4.07462 10.592 4 10.5 4H6.83333Z" fill="#0033FF"/>
     </svg>
-    <h1>MCP Server authenticated</h1>
-    <p>You can close this tab</p>
+    <h1>Authentication successful</h1>
+    <p>You can close this tab and return to 2Code</p>
   </div>
   <script>setTimeout(() => window.close(), 1000)</script>
 </body>

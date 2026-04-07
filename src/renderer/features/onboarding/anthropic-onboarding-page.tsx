@@ -185,12 +185,24 @@ export function AnthropicOnboardingPage() {
       try {
         const result = await startAuthMutation.mutateAsync()
         setAuthStarted(true)
-        setFlowState({
-          step: "waiting_url",
-          sandboxId: result.sandboxId,
-          sandboxUrl: result.sandboxUrl,
-          sessionId: result.sessionId,
-        })
+        if (result.autoUrl) {
+          setSavedOauthUrl(result.autoUrl)
+          if (result.manualUrl) setSavedManualUrl(result.manualUrl)
+          setFlowState({
+            step: "has_url",
+            sandboxId: result.sandboxId,
+            sandboxUrl: result.sandboxUrl,
+            sessionId: result.sessionId,
+            oauthUrl: result.autoUrl,
+          })
+        } else {
+          setFlowState({
+            step: "waiting_url",
+            sandboxId: result.sandboxId,
+            sandboxUrl: result.sandboxUrl,
+            sessionId: result.sessionId,
+          })
+        }
       } catch (err) {
         setFlowState({
           step: "error",

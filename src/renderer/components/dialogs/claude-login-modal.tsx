@@ -190,12 +190,23 @@ export function ClaudeLoginModal({
       setFlowState({ step: "starting" })
       try {
         const result = await startAuthMutation.mutateAsync()
-        setFlowState({
-          step: "waiting_url",
-          sandboxId: result.sandboxId,
-          sandboxUrl: result.sandboxUrl,
-          sessionId: result.sessionId,
-        })
+        if (result.autoUrl) {
+          setSavedOauthUrl(result.autoUrl)
+          setFlowState({
+            step: "has_url",
+            sandboxId: result.sandboxId,
+            sandboxUrl: result.sandboxUrl,
+            sessionId: result.sessionId,
+            oauthUrl: result.autoUrl,
+          })
+        } else {
+          setFlowState({
+            step: "waiting_url",
+            sandboxId: result.sandboxId,
+            sandboxUrl: result.sandboxUrl,
+            sessionId: result.sessionId,
+          })
+        }
       } catch (err) {
         setFlowState({
           step: "error",
@@ -207,12 +218,23 @@ export function ClaudeLoginModal({
       setFlowState({ step: "starting" })
       try {
         const result = await startAuthMutation.mutateAsync()
-        setFlowState({
-          step: "waiting_url",
-          sandboxId: result.sandboxId,
-          sandboxUrl: result.sandboxUrl,
-          sessionId: result.sessionId,
-        })
+        if (result.autoUrl) {
+          setSavedOauthUrl(result.autoUrl)
+          setFlowState({
+            step: "has_url",
+            sandboxId: result.sandboxId,
+            sandboxUrl: result.sandboxUrl,
+            sessionId: result.sessionId,
+            oauthUrl: result.autoUrl,
+          })
+        } else {
+          setFlowState({
+            step: "waiting_url",
+            sandboxId: result.sandboxId,
+            sandboxUrl: result.sandboxUrl,
+            sessionId: result.sessionId,
+          })
+        }
       } catch (err) {
         setFlowState({
           step: "error",
