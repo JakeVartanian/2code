@@ -355,24 +355,29 @@ export function AgentsModelsTab() {
 
   const fetchOpenRouterModelsMutation = trpc.agents.fetchOpenRouterModels.useMutation({
     onSuccess: (models) => {
-      console.log("[agents-models-tab] Fetched OpenRouter models:", models.length)
+      console.log("[agents-models-tab] [MUTATION] onSuccess called with models:", models.length)
+      console.log("[agents-models-tab] [MUTATION] model sample:", models[0])
       // Update localStorage FIRST, then update the atom
       try {
         localStorage.setItem("agents:openrouter-models", JSON.stringify(models))
-        console.log("[agents-models-tab] Persisted to localStorage")
+        console.log("[agents-models-tab] [MUTATION] Persisted to localStorage")
+        const retrieved = localStorage.getItem("agents:openrouter-models")
+        console.log("[agents-models-tab] [MUTATION] Verified retrieval from localStorage:", retrieved ? `${retrieved.length} chars` : "EMPTY")
       } catch (e) {
-        console.error("Failed to persist OpenRouter models to localStorage:", e)
+        console.error("[agents-models-tab] [MUTATION] Failed to persist OpenRouter models to localStorage:", e)
       }
       // Then update the atom (should already be in sync due to localStorage above)
+      console.log("[agents-models-tab] [MUTATION] About to call setOpenRouterModels with:", models.length, "models")
       setOpenRouterModels(models)
-      console.log("[agents-models-tab] Updated atom")
+      console.log("[agents-models-tab] [MUTATION] setOpenRouterModels called")
     },
     onError: (err) => {
-      console.error("[agents-models-tab] Failed to fetch OpenRouter models:", err)
+      console.error("[agents-models-tab] [MUTATION] onError called:", err)
       toast.error(err.message || "Failed to fetch OpenRouter models")
       setOpenRouterModels([])
     },
     onSettled: () => {
+      console.log("[agents-models-tab] [MUTATION] onSettled called")
       setIsFetchingOpenRouterModels(false)
     },
   })
@@ -383,9 +388,15 @@ export function AgentsModelsTab() {
       console.log("[agents-models-tab] fetchOpenRouterModels: key is empty, skipping")
       return
     }
+    console.log("[agents-models-tab] fetchOpenRouterModels: setting loading to true")
     setIsFetchingOpenRouterModels(true)
-    console.log("[agents-models-tab] fetchOpenRouterModels: calling mutation")
+    console.log("[agents-models-tab] fetchOpenRouterModels: calling mutation with key:", apiKey.slice(0, 10) + "...")
+    console.log("[agents-models-tab] fetchOpenRouterModels: mutation status before call:", {
+      isPending: fetchOpenRouterModelsMutation.isPending,
+      isLoading: fetchOpenRouterModelsMutation.isLoading,
+    })
     fetchOpenRouterModelsMutation.mutate({ apiKey: apiKey.trim() })
+    console.log("[agents-models-tab] fetchOpenRouterModels: mutation called")
   }, [setIsFetchingOpenRouterModels, fetchOpenRouterModelsMutation])
 
   const handleOpenRouterKeyBlur = useCallback(() => {
