@@ -7,6 +7,7 @@ import {
   HoverCardTrigger,
 } from "../../../components/ui/hover-card"
 import { cn } from "../../../lib/utils"
+import { formatCost } from "../lib/models"
 
 export interface AgentMessageMetadata {
   model?: string
@@ -15,6 +16,8 @@ export interface AgentMessageMetadata {
   inputTokens?: number
   outputTokens?: number
   totalTokens?: number
+  cacheReadInputTokens?: number
+  cacheCreationInputTokens?: number
   finalTextId?: string
   durationMs?: number
   resultSubtype?: string
@@ -46,6 +49,17 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`
 }
 
+function UsageRow({ label, value, className }: { label: string; value: string | number; className?: string }) {
+  return (
+    <div className="flex justify-between text-xs gap-4">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={cn("font-mono text-foreground", className)}>
+        {typeof value === "number" ? value.toLocaleString() : value}
+      </span>
+    </div>
+  )
+}
+
 export const AgentMessageUsage = memo(function AgentMessageUsage({
   metadata,
   isStreaming = false,
@@ -57,6 +71,9 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
     inputTokens = 0,
     outputTokens = 0,
     totalTokens = 0,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    totalCostUsd,
     durationMs,
     resultSubtype,
   } = metadata
@@ -66,6 +83,9 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
   if (!hasUsage) return null
 
   const displayTokens = totalTokens || inputTokens + outputTokens
+  const hasCost = totalCostUsd !== undefined && totalCostUsd > 0
+  const hasCacheInfo = (cacheReadInputTokens && cacheReadInputTokens > 0) ||
+    (cacheCreationInputTokens && cacheCreationInputTokens > 0)
 
   return (
     <HoverCard openDelay={400} closeDelay={100}>
@@ -73,12 +93,17 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
         <button
           tabIndex={-1}
           className={cn(
-            "h-5 px-1.5 flex items-center text-[10px] rounded-md",
+            "h-5 px-1.5 flex items-center gap-1 text-[10px] rounded-md",
             "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50",
             "transition-[background-color,transform] duration-150 ease-out",
           )}
         >
           <span className="font-mono">{formatTokens(displayTokens)}</span>
+          {hasCost && (
+            <span className="font-mono text-muted-foreground/40">
+              {formatCost(totalCostUsd)}
+            </span>
+          )}
         </button>
       </HoverCardTrigger>
       <HoverCardContent
@@ -91,31 +116,40 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
           {(resultSubtype || (durationMs !== undefined && durationMs > 0)) && (
             <div className="space-y-1">
               {resultSubtype && (
-                <div className="flex justify-between text-xs gap-4">
-                  <span className="text-muted-foreground">Status:</span>
-                  <span className="font-mono text-foreground">
-                    {resultSubtype === "success" ? "Success" : "Failed"}
-                  </span>
-                </div>
+                <UsageRow label="Status" value={resultSubtype === "success" ? "Success" : "Failed"} />
               )}
-
               {durationMs !== undefined && durationMs > 0 && (
-                <div className="flex justify-between text-xs gap-4">
-                  <span className="text-muted-foreground">Duration:</span>
-                  <span className="font-mono text-foreground">
-                    {formatDuration(durationMs)}
-                  </span>
-                </div>
+                <UsageRow label="Duration" value={formatDuration(durationMs)} />
               )}
             </div>
           )}
 
-          {/* Tokens group */}
+          {/* Token breakdown */}
           {displayTokens > 0 && (
+            <div className="space-y-1 pt-1.5 mt-1 border-t border-border/50">
+              <UsageRow label="Input" value={inputTokens.toLocaleString()} />
+              <UsageRow label="Output" value={outputTokens.toLocaleString()} />
+              {hasCacheInfo && cacheReadInputTokens && cacheReadInputTokens > 0 && (
+                <UsageRow label="Cache read" value={cacheReadInputTokens.toLocaleString()} className="text-emerald-500" />
+              )}
+              {hasCacheInfo && cacheCreationInputTokens && cacheCreationInputTokens > 0 && (
+                <UsageRow label="Cache write" value={cacheCreationInputTokens.toLocaleString()} className="text-amber-500" />
+              )}
+              <div className="flex justify-between text-xs gap-4 pt-1 border-t border-border/30">
+                <span className="text-muted-foreground font-medium">Total</span>
+                <span className="font-mono font-medium text-foreground">
+                  {displayTokens.toLocaleString()}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Cost */}
+          {hasCost && (
             <div className="flex justify-between text-xs gap-4 pt-1.5 mt-1 border-t border-border/50">
-              <span className="text-muted-foreground">Tokens:</span>
+              <span className="text-muted-foreground">Cost</span>
               <span className="font-mono font-medium text-foreground">
-                {displayTokens.toLocaleString()}
+                {formatCost(totalCostUsd)}
               </span>
             </div>
           )}

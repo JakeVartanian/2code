@@ -53,6 +53,8 @@ import {
   openRouterModelsAtom,
   selectedOllamaModelAtom,
   showOfflineModeFeaturesAtom,
+  thinkingBudgetTokensAtom,
+  thinkingModeAtom,
   type EffortLevel,
 } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
@@ -69,6 +71,8 @@ import { useAgentSubChatStore } from "../stores/sub-chat-store"
 import { AgentsSlashCommand, type SlashCommandOption } from "../commands"
 import { CLI_PASSTHROUGH_COMMANDS } from "../commands/builtin-commands"
 import { AgentModelSelector } from "../components/agent-model-selector"
+import { AgentQuickCreate } from "../components/agent-quick-create"
+import { ModelSuggestionChip } from "../components/model-suggestion-chip"
 import { AgentSendButton } from "../components/agent-send-button"
 import type { UploadedFile, UploadedImage } from "../hooks/use-agents-file-upload"
 import {
@@ -78,6 +82,7 @@ import {
 import {
   CLAUDE_MODELS,
 } from "../lib/models"
+import { classifyTaskComplexity, recommendModel } from "../lib/smart-router"
 import type { DiffTextContext, SelectedTextContext } from "../lib/queue-utils"
 import {
   AgentsFileMention,
@@ -86,6 +91,7 @@ import {
   type FileMentionOption,
 } from "../mentions"
 import { AgentContextIndicator, type MessageTokenData } from "../ui/agent-context-indicator"
+import { SessionCostIndicator } from "../ui/session-cost-indicator"
 import { AgentDiffTextContextItem } from "../ui/agent-diff-text-context-item"
 import { AgentFileItem } from "../ui/agent-file-item"
 import { AgentImageItem } from "../ui/agent-image-item"
@@ -518,6 +524,8 @@ export const ChatInputArea = memo(function ChatInputArea({
 
   // Extended thinking (reasoning) toggle
   const [thinkingEnabled, setThinkingEnabled] = useAtom(extendedThinkingEnabledAtom)
+  const thinkingMode = useAtomValue(thinkingModeAtom)
+  const [thinkingBudget, setThinkingBudget] = useAtom(thinkingBudgetTokensAtom)
 
   // Effort level control
   const [effortLevel, setEffortLevel] = useAtom(effortLevelAtom)
@@ -657,6 +665,36 @@ export const ChatInputArea = memo(function ChatInputArea({
   // Get resolved voice input hotkey
   const customHotkeys = useAtomValue(customHotkeysAtom)
   const voiceInputHotkey = getResolvedHotkey("voice-input", customHotkeys)
+
+  // Smart model suggestion state
+  const [modelSuggestion, setModelSuggestion] = useState<{ model: { id: string; name: string; version: string; costTier: "$" | "$$" | "$$$"; inputCostPer1M: number; outputCostPer1M: number; tagline: string }; reason: string } | null>(null)
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false)
+  const suggestionDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Update suggestion when input content changes (debounced)
+  const updateSuggestion = useCallback((text: string) => {
+    if (suggestionDebounceRef.current) clearTimeout(suggestionDebounceRef.current)
+    if (!text.trim() || hasCustomClaudeConfig || availableModels.isOffline) {
+      setModelSuggestion(null)
+      return
+    }
+    suggestionDebounceRef.current = setTimeout(() => {
+      const complexity = classifyTaskComplexity(text, {
+        isPlanMode: subChatMode === "plan",
+        isFollowUp: messageTokenData.messageCount > 0,
+      })
+      const suggestion = recommendModel(complexity, selectedModel?.id || "sonnet")
+      setModelSuggestion(suggestion)
+      setSuggestionDismissed(false)
+    }, 600)
+  }, [hasCustomClaudeConfig, availableModels.isOffline, subChatMode, messageTokenData.messageCount, selectedModel?.id])
+
+  // Clean up debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (suggestionDebounceRef.current) clearTimeout(suggestionDebounceRef.current)
+    }
+  }, [])
 
   // Refs for draft saving
   const currentSubChatIdRef = useRef<string>(subChatId)
@@ -905,7 +943,9 @@ export const ChatInputArea = memo(function ChatInputArea({
     // Sync the draft text ref for unmount save
     const draft = editorRef.current?.getValue() || ""
     currentDraftTextRef.current = draft
-  }, [editorRef, onInputContentChange])
+    // Update smart model suggestion
+    updateSuggestion(draft)
+  }, [editorRef, onInputContentChange, updateSuggestion])
 
   // Editor submit handler - handles Enter key with queue logic
   // If input is empty and queue has items, stop stream and send first from queue
@@ -1549,6 +1589,9 @@ export const ChatInputArea = memo(function ChatInputArea({
                         isConnected: isClaudeConnected,
                         thinkingEnabled,
                         onThinkingChange: setThinkingEnabled,
+                        thinkingBudget,
+                        onThinkingBudgetChange: setThinkingBudget,
+                        thinkingMode,
                       }}
                       openRouter={openRouterApiKey ? {
                         models: filteredOpenRouterModels,
@@ -1557,6 +1600,26 @@ export const ChatInputArea = memo(function ChatInputArea({
                       } : undefined}
                     />
                   </div>
+
+                  {/* Quick agent creation */}
+                  <AgentQuickCreate />
+
+                  {/* Smart model suggestion */}
+                  {!suggestionDismissed && modelSuggestion && (
+                    <ModelSuggestionChip
+                      suggestion={modelSuggestion}
+                      onAccept={(modelId) => {
+                        const model = availableModels.models.find((m) => m.id === modelId)
+                        if (model) {
+                          setSelectedModel(model)
+                          setSelectedSubChatModelId(model.id)
+                          setLastSelectedModelId(model.id)
+                        }
+                        setModelSuggestion(null)
+                      }}
+                      onDismiss={() => setSuggestionDismissed(true)}
+                    />
+                  )}
 
                 </div>
 
@@ -1583,6 +1646,9 @@ export const ChatInputArea = memo(function ChatInputArea({
                     </div>
                   ) : (
                     <>
+                      {/* Session token usage */}
+                      <SessionCostIndicator tokenData={messageTokenData} />
+
                       {/* Context window indicator - click to compact */}
                       <AgentContextIndicator
                         tokenData={messageTokenData}

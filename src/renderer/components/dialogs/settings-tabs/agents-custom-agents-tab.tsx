@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useListKeyboardNav } from "./use-list-keyboard-nav"
-import { useAtomValue } from "jotai"
+import { useAtom, useAtomValue } from "jotai"
 import { selectedProjectAtom, settingsAgentsSidebarWidthAtom } from "../../../features/agents/atoms"
+import { hiddenMentionAgentsAtom } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
-import { Plus } from "lucide-react"
+import { Plus, AlertTriangle } from "lucide-react"
 import { CustomAgentIconFilled } from "../../ui/icons"
 import { Input } from "../../ui/input"
 import { Label } from "../../ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select"
+import { Switch } from "../../ui/switch"
 import { Textarea } from "../../ui/textarea"
 import { Button } from "../../ui/button"
 import { ResizableSidebar } from "../../ui/resizable-sidebar"
@@ -23,6 +25,7 @@ interface FileAgent {
   model?: "sonnet" | "opus" | "haiku" | "inherit"
   source: "user" | "project"
   path: string
+  valid?: boolean
 }
 
 // --- Detail Panel (Editable) ---
@@ -30,10 +33,14 @@ function AgentDetail({
   agent,
   onSave,
   isSaving,
+  isMentionEnabled,
+  onToggleMention,
 }: {
   agent: FileAgent
   onSave: (data: { description: string; prompt: string; model?: "sonnet" | "opus" | "haiku" | "inherit" }) => void
   isSaving: boolean
+  isMentionEnabled: boolean
+  onToggleMention: (enabled: boolean) => void
 }) {
   const [description, setDescription] = useState(agent.description)
   const [prompt, setPrompt] = useState(agent.prompt)
@@ -109,6 +116,38 @@ function AgentDetail({
               {isSaving ? "Saving..." : "Save"}
             </Button>
           )}
+        </div>
+
+        {/* Invalid agent warning */}
+        {agent.valid === false && (
+          <div className="flex items-start gap-2 p-2.5 rounded-md bg-yellow-500/10 border border-yellow-500/20">
+            <AlertTriangle className="h-4 w-4 text-yellow-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-medium text-yellow-600 dark:text-yellow-400">Invalid agent</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {!agent.description && !agent.prompt
+                  ? "Missing description and system prompt."
+                  : !agent.description
+                    ? "Missing description."
+                    : "Missing system prompt."}{" "}
+                This agent won't appear in @ mentions until fixed.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Show in @ mentions toggle */}
+        <div className="flex items-center justify-between">
+          <div>
+            <Label>Show in @ mentions</Label>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Include this agent when typing @ in the chat
+            </p>
+          </div>
+          <Switch
+            checked={isMentionEnabled}
+            onCheckedChange={onToggleMention}
+          />
         </div>
 
         {/* Description */}
@@ -308,6 +347,15 @@ export function AgentsCustomAgentsTab() {
     return () => document.removeEventListener("keydown", handler)
   }, [])
   const selectedProject = useAtomValue(selectedProjectAtom)
+  const [hiddenAgents, setHiddenAgents] = useAtom(hiddenMentionAgentsAtom)
+
+  const handleToggleMention = useCallback((name: string, enabled: boolean) => {
+    if (enabled) {
+      setHiddenAgents(prev => prev.filter(n => n !== name))
+    } else {
+      setHiddenAgents(prev => prev.includes(name) ? prev : [...prev, name])
+    }
+  }, [setHiddenAgents])
 
   const { data: agents = [], isLoading, refetch } = trpc.agents.list.useQuery(
     selectedProject?.path ? { cwd: selectedProject.path } : undefined,
@@ -558,6 +606,8 @@ export function AgentsCustomAgentsTab() {
             agent={selectedAgent}
             onSave={(data) => handleSave(selectedAgent, data)}
             isSaving={updateMutation.isPending}
+            isMentionEnabled={!hiddenAgents.includes(selectedAgent.name)}
+            onToggleMention={(enabled) => handleToggleMention(selectedAgent.name, enabled)}
           />
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center px-4">

@@ -20,6 +20,8 @@ import {
   PopoverTrigger,
 } from "../../../components/ui/popover"
 import { cn } from "../../../lib/utils"
+import { type CostTier, getCostTierColor } from "../lib/models"
+import { ThinkingBudgetVisualizer } from "./thinking-budget-visualizer"
 
 export type AgentProviderId = "claude-code"
 
@@ -27,6 +29,8 @@ type ClaudeModelOption = {
   id: string
   name: string
   version: string
+  costTier?: CostTier
+  tagline?: string
 }
 
 interface AgentModelSelectorProps {
@@ -53,6 +57,9 @@ interface AgentModelSelectorProps {
     isConnected: boolean
     thinkingEnabled: boolean
     onThinkingChange: (enabled: boolean) => void
+    thinkingBudget?: number
+    onThinkingBudgetChange?: (budget: number) => void
+    thinkingMode?: "adaptive" | "enabled" | "disabled"
   }
   openRouter?: {
     models: { id: string; name: string; isFree: boolean }[]
@@ -203,7 +210,9 @@ export function AgentModelSelector({
   const getItemLabel = (item: FlatModelItem): string => {
     switch (item.type) {
       case "claude":
-        return `${item.model.name} ${item.model.version}`
+        return item.model.tagline
+          ? `${item.model.name} ${item.model.version}`
+          : `${item.model.name} ${item.model.version}`
       case "ollama":
         return item.modelName + (item.isRecommended ? " (recommended)" : "")
       case "openrouter":
@@ -269,6 +278,15 @@ export function AgentModelSelector({
                   className="scale-75"
                 />
               </div>
+              {claude.thinkingMode === "enabled" && claude.thinkingBudget !== undefined && claude.onThinkingBudgetChange && (
+                <div className="px-1.5 pb-1.5" onClick={(e) => e.stopPropagation()}>
+                  <ThinkingBudgetVisualizer
+                    budget={claude.thinkingBudget}
+                    onBudgetChange={claude.onThinkingBudgetChange}
+                    compact
+                  />
+                </div>
+              )}
               <CommandSeparator />
             </>
           )}
@@ -287,6 +305,11 @@ export function AgentModelSelector({
                     >
                       {getItemIcon(item)}
                       <span className="truncate flex-1">{getItemLabel(item)}</span>
+                      {item.type === "claude" && item.model.costTier && (
+                        <span className={cn("text-[10px] font-mono shrink-0", getCostTierColor(item.model.costTier))}>
+                          {item.model.costTier}
+                        </span>
+                      )}
                       {selected && (
                         <CheckIcon className="h-4 w-4 shrink-0" />
                       )}

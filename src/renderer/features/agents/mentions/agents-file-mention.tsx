@@ -19,7 +19,7 @@ import { createRoot } from "react-dom/client"
 import { useAtomValue } from "jotai"
 import type { FileMentionOption } from "./agents-mentions-editor"
 import { MENTION_PREFIXES } from "./agents-mentions-editor"
-import { sessionInfoAtom } from "../../../lib/atoms"
+import { sessionInfoAtom, hiddenMentionAgentsAtom, hiddenMentionSkillsAtom } from "../../../lib/atoms"
 import {
   FilesIcon,
   IconSpinner,
@@ -720,22 +720,38 @@ export const AgentsFileMention = memo(function AgentsFileMention({
   // Get session info (MCP servers, tools) from atom
   const sessionInfo = useAtomValue(sessionInfoAtom)
 
-  // Fetch skills from filesystem (cached for 5 minutes)
+  // Fetch skills from filesystem (cached for 30 seconds)
   const { data: skills = [], isFetching: isFetchingSkills } = trpc.skills.listEnabled.useQuery(
     projectPath ? { cwd: projectPath } : undefined,
     {
       enabled: isOpen,
-      staleTime: 5 * 60 * 1000, // 5 minutes - skills don't change frequently
+      staleTime: 30 * 1000, // 30 seconds - reflect disk changes faster
     },
   )
 
-  // Fetch custom agents from filesystem (cached for 5 minutes)
-  const { data: customAgents = [], isFetching: isFetchingAgents } = trpc.agents.listEnabled.useQuery(
+  // Fetch custom agents from filesystem (cached for 30 seconds)
+  const { data: allAgents = [], isFetching: isFetchingAgents } = trpc.agents.listEnabled.useQuery(
     projectPath ? { cwd: projectPath } : undefined,
     {
       enabled: isOpen,
-      staleTime: 5 * 60 * 1000, // 5 minutes - agents don't change frequently
+      staleTime: 30 * 1000, // 30 seconds - reflect disk changes faster
     },
+  )
+
+  // Read hidden lists from preferences
+  const hiddenAgents = useAtomValue(hiddenMentionAgentsAtom)
+  const hiddenSkills = useAtomValue(hiddenMentionSkillsAtom)
+
+  // Filter to valid, non-hidden agents
+  const customAgents = useMemo(
+    () => allAgents.filter((a: any) => a.valid !== false && !hiddenAgents.includes(a.name)),
+    [allAgents, hiddenAgents],
+  )
+
+  // Filter to non-hidden skills
+  const visibleSkills = useMemo(
+    () => skills.filter((s: any) => !hiddenSkills.includes(s.name)),
+    [skills, hiddenSkills],
   )
 
   // Debounce search text (300ms to match canvas implementation)
@@ -850,7 +866,7 @@ export const AgentsFileMention = memo(function AgentsFileMention({
   const skillOptions: FileMentionOption[] = useMemo(() => {
     const searchLower = debouncedSearchText.toLowerCase()
 
-    return skills
+    return visibleSkills
       .filter(skill =>
         // Multi-word search: all words must match in name OR description
         matchesMultiWordSearch(skill.name, searchLower) ||
@@ -867,7 +883,7 @@ export const AgentsFileMention = memo(function AgentsFileMention({
         description: skill.description,
         source: skill.source,
       }))
-  }, [skills, debouncedSearchText])
+  }, [visibleSkills, debouncedSearchText])
 
   // Convert custom agents to mention options
   const agentOptions: FileMentionOption[] = useMemo(() => {
@@ -924,7 +940,7 @@ export const AgentsFileMention = memo(function AgentsFileMention({
 
   // Check if we have skills, agents, or tools
   // Use base data (not search-filtered) for stable category display
-  const hasSkills = skills.length > 0
+  const hasSkills = visibleSkills.length > 0
   const hasAgents = customAgents.length > 0
   const hasTools = allToolOptions.length > 0
   const hasOnlyFiles = !hasSkills && !hasAgents && !hasTools

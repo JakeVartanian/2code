@@ -12,6 +12,7 @@ import {
 } from "./agent-utils"
 import { discoverInstalledPlugins, getPluginComponentPaths } from "../../plugins"
 import { getEnabledPlugins } from "./claude-settings"
+import { getClaudeCodeTokenFresh } from "./claude"
 
 // Shared procedure for listing agents
 const listAgentsProcedure = publicProcedure
@@ -320,6 +321,101 @@ export const agentsRouter = router({
       await fs.unlink(agentPath)
 
       return { deleted: true }
+    }),
+
+  /**
+   * Generate an agent definition from a natural language description using Claude Sonnet
+   */
+  generateFromDescription: publicProcedure
+    .input(
+      z.object({
+        description: z.string().min(10),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const token = await getClaudeCodeTokenFresh()
+      if (!token) {
+        throw new Error("Not authenticated with Claude. Please sign in first.")
+      }
+
+      const systemPrompt = `You are an expert at creating Claude subagent definitions. When given a description of what a subagent should do, generate a complete, thorough agent definition.
+
+Respond with ONLY a valid JSON object (no markdown fences, no explanation) with these fields:
+- "name": string — kebab-case identifier, descriptive, max 30 chars (e.g. "security-reviewer", "api-designer")
+- "description": string — one concise sentence, max 100 chars
+- "prompt": string — a thorough, detailed system prompt (200-600 words) that covers:
+  1. The agent's specific role, expertise, and domain knowledge
+  2. How it should approach tasks step-by-step
+  3. What it should focus on and prioritize
+  4. What it should avoid or not do
+  5. Expected output format and quality standards
+  6. Any relevant best practices or frameworks it should apply
+- "model": "sonnet" | "opus" | "haiku" — choose based on task complexity ("opus" for deep analysis/architecture, "sonnet" for general coding tasks, "haiku" for simple/fast tasks)
+
+Make the system prompt specific and actionable, not generic. Include concrete examples of the kind of analysis or output the agent should produce.`
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5-20250514",
+          max_tokens: 2048,
+          system: systemPrompt,
+          messages: [
+            {
+              role: "user",
+              content: `Create a subagent for: ${input.description}`,
+            },
+          ],
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "")
+        throw new Error(
+          `Claude API error (${response.status}): ${errorText.slice(0, 200)}`
+        )
+      }
+
+      const data = (await response.json()) as {
+        content: Array<{ type: string; text: string }>
+      }
+      const text = data.content[0]?.text ?? ""
+
+      // Extract JSON from the response
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) {
+        throw new Error("Failed to parse agent definition from AI response")
+      }
+
+      let parsed: {
+        name: string
+        description: string
+        prompt: string
+        model?: string
+      }
+      try {
+        parsed = JSON.parse(jsonMatch[0])
+      } catch {
+        throw new Error("AI returned invalid JSON for agent definition")
+      }
+
+      if (!parsed.name || !parsed.prompt) {
+        throw new Error("AI response missing required fields (name, prompt)")
+      }
+
+      return {
+        name: parsed.name,
+        description: parsed.description || "",
+        prompt: parsed.prompt,
+        model: VALID_AGENT_MODELS.includes(parsed.model as any)
+          ? (parsed.model as (typeof VALID_AGENT_MODELS)[number])
+          : undefined,
+      }
     }),
 
   /**

@@ -18,6 +18,7 @@ import {
   type ThinkingMode,
 } from "../../../lib/atoms"
 import { APP_META, type ExternalApp } from "../../../../shared/external-apps"
+import { ThinkingBudgetVisualizer } from "../../../features/agents/components/thinking-budget-visualizer"
 
 // Editor icon imports
 import cursorIcon from "../../../assets/app-icons/cursor.png"
@@ -218,7 +219,7 @@ export function AgentsPreferencesTab() {
           </div>
         </div>
         {thinkingMode === "enabled" && (
-          <div className="flex items-center justify-between p-4 border-t border-border">
+          <div className="p-4 border-t border-border space-y-2">
             <div className="flex flex-col space-y-1">
               <span className="text-sm font-medium text-foreground">
                 Thinking Budget
@@ -227,20 +228,10 @@ export function AgentsPreferencesTab() {
                 Max tokens for thinking ({(thinkingBudget / 1000).toFixed(0)}k)
               </span>
             </div>
-            <Select
-              value={String(thinkingBudget)}
-              onValueChange={(v) => setThinkingBudget(Number(v))}
-            >
-              <SelectTrigger className="w-auto px-2">
-                <span className="text-xs">{(thinkingBudget / 1000).toFixed(0)}k tokens</span>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="8000">8k</SelectItem>
-                <SelectItem value="16000">16k</SelectItem>
-                <SelectItem value="32000">32k</SelectItem>
-                <SelectItem value="64000">64k</SelectItem>
-              </SelectContent>
-            </Select>
+            <ThinkingBudgetVisualizer
+              budget={thinkingBudget}
+              onBudgetChange={setThinkingBudget}
+            />
           </div>
         )}
         <div className="flex items-center justify-between p-4 border-t border-border">

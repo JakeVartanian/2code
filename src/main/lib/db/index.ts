@@ -67,8 +67,14 @@ export function initDatabase() {
     migrate(db, { migrationsFolder: migrationsPath })
     console.log("[DB] Migrations completed")
   } catch (error) {
-    console.error("[DB] Migration error:", error)
-    throw error
+    const msg = error instanceof Error ? error.message : String(error)
+    // "duplicate column name" means the column already exists — DB is in the correct state
+    if (msg.includes("duplicate column name")) {
+      console.warn("[DB] Migration warning (column already exists, skipping):", msg)
+    } else {
+      console.error("[DB] Migration error:", error)
+      throw error
+    }
   }
 
   return db

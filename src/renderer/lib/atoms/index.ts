@@ -861,6 +861,24 @@ export const hiddenModelsAtom = atomWithStorage<string[]>(
   { getOnInit: true },
 )
 
+// Agents hidden from the @ mention dropdown (by name)
+// All agents are shown by default; only hidden ones are stored
+export const hiddenMentionAgentsAtom = atomWithStorage<string[]>(
+  "preferences:hidden-mention-agents",
+  [],
+  undefined,
+  { getOnInit: true },
+)
+
+// Skills hidden from the @ mention dropdown (by name)
+// All skills are shown by default; only hidden ones are stored
+export const hiddenMentionSkillsAtom = atomWithStorage<string[]>(
+  "preferences:hidden-mention-skills",
+  [],
+  undefined,
+  { getOnInit: true },
+)
+
 // ============================================
 // SESSION INFO ATOMS (MCP, Plugins, Tools)
 // ============================================

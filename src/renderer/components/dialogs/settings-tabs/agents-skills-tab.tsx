@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useListKeyboardNav } from "./use-list-keyboard-nav"
-import { useAtomValue } from "jotai"
+import { useAtom, useAtomValue } from "jotai"
 import { selectedProjectAtom, settingsSkillsSidebarWidthAtom } from "../../../features/agents/atoms"
+import { hiddenMentionSkillsAtom } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
 import { Plus, Trash2 } from "lucide-react"
@@ -9,6 +10,7 @@ import { SkillIcon, MarkdownIcon, CodeIcon } from "../../ui/icons"
 import { Input } from "../../ui/input"
 import { Label } from "../../ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select"
+import { Switch } from "../../ui/switch"
 import { Textarea } from "../../ui/textarea"
 import { Button } from "../../ui/button"
 import { ResizableSidebar } from "../../ui/resizable-sidebar"
@@ -45,11 +47,15 @@ function ItemDetail({
   onSave,
   onDelete,
   isSaving,
+  isMentionEnabled,
+  onToggleMention,
 }: {
   item: UnifiedItem
   onSave: (data: { description: string; content: string }) => void
   onDelete?: () => void
   isSaving: boolean
+  isMentionEnabled?: boolean
+  onToggleMention?: (enabled: boolean) => void
 }) {
   const [description, setDescription] = useState(item.description)
   const [content, setContent] = useState(item.content)
@@ -145,6 +151,22 @@ function ItemDetail({
             </code>
           </div>
         </div>
+
+        {/* Show in @ mentions toggle (skills only) */}
+        {item.kind === "skill" && onToggleMention && isMentionEnabled !== undefined && (
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Show in @ mentions</Label>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Include this skill when typing @ in the chat
+              </p>
+            </div>
+            <Switch
+              checked={isMentionEnabled}
+              onCheckedChange={onToggleMention}
+            />
+          </div>
+        )}
 
         {/* Instructions */}
         <div className="space-y-1.5">
@@ -394,6 +416,15 @@ export function AgentsSkillsTab() {
   }, [])
 
   const selectedProject = useAtomValue(selectedProjectAtom)
+  const [hiddenSkills, setHiddenSkills] = useAtom(hiddenMentionSkillsAtom)
+
+  const handleToggleSkillMention = useCallback((name: string, enabled: boolean) => {
+    if (enabled) {
+      setHiddenSkills(prev => prev.filter(n => n !== name))
+    } else {
+      setHiddenSkills(prev => prev.includes(name) ? prev : [...prev, name])
+    }
+  }, [setHiddenSkills])
 
   // Fetch skills
   const { data: skills = [], isLoading: isLoadingSkills, refetch: refetchSkills } = trpc.skills.list.useQuery(
@@ -715,6 +746,8 @@ export function AgentsSkillsTab() {
             onSave={(data) => handleSave(selectedItem, data)}
             onDelete={selectedItem.source !== "plugin" ? () => setDeletingItem(selectedItem) : undefined}
             isSaving={isSaving}
+            isMentionEnabled={selectedItem.kind === "skill" ? !hiddenSkills.includes(selectedItem.name) : undefined}
+            onToggleMention={selectedItem.kind === "skill" ? (enabled) => handleToggleSkillMention(selectedItem.name, enabled) : undefined}
           />
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center px-4">

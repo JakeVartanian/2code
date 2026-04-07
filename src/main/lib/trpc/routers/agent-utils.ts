@@ -25,6 +25,7 @@ export interface FileAgent extends ParsedAgent {
   source: "user" | "project" | "plugin"
   pluginName?: string
   path: string
+  valid: boolean
 }
 
 /**
@@ -216,30 +217,31 @@ export async function scanAgentsDirectory(
           const content = await fs.readFile(agentPath, "utf-8")
           const parsed = parseAgentMd(content, entry.name)
 
-          if (parsed.description && parsed.prompt) {
-            // For project agents, show relative path; for user agents, show ~/.claude/... path
-            let displayPath: string
-            if (source === "project" && basePath) {
-              displayPath = path.relative(basePath, agentPath)
-            } else {
-              // For user agents, show ~/.claude/agents/... format
-              const homeDir = os.homedir()
-              displayPath = agentPath.startsWith(homeDir)
-                ? "~" + agentPath.slice(homeDir.length)
-                : agentPath
-            }
+          const isValid = !!(parsed.description && parsed.prompt)
 
-            agents.push({
-              name: parsed.name || entry.name.replace(".md", ""),
-              description: parsed.description,
-              prompt: parsed.prompt,
-              tools: parsed.tools,
-              disallowedTools: parsed.disallowedTools,
-              model: parsed.model,
-              source,
-              path: displayPath,
-            })
+          // For project agents, show relative path; for user agents, show ~/.claude/... path
+          let displayPath: string
+          if (source === "project" && basePath) {
+            displayPath = path.relative(basePath, agentPath)
+          } else {
+            // For user agents, show ~/.claude/agents/... format
+            const homeDir = os.homedir()
+            displayPath = agentPath.startsWith(homeDir)
+              ? "~" + agentPath.slice(homeDir.length)
+              : agentPath
           }
+
+          agents.push({
+            name: parsed.name || entry.name.replace(".md", ""),
+            description: parsed.description || "",
+            prompt: parsed.prompt || "",
+            tools: parsed.tools,
+            disallowedTools: parsed.disallowedTools,
+            model: parsed.model,
+            source,
+            path: displayPath,
+            valid: isValid,
+          })
         } catch (err) {
           console.error(`[agents] Failed to read agent ${entry.name}:`, err)
         }
