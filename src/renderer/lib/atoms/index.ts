@@ -297,6 +297,15 @@ export const openRouterModelsAtom = atomWithStorage<{ id: string; name: string; 
 // Loading state for OpenRouter models
 export const openRouterModelsLoadingAtom = atom<boolean>(false)
 
+// Set of OpenRouter model IDs that the user has explicitly enabled for the dropdown.
+// When models are first fetched, none are enabled (all hidden by default).
+export const enabledOpenRouterModelsAtom = atomWithStorage<string[]>(
+  "agents:enabled-openrouter-models",
+  [],
+  undefined,
+  { getOnInit: true },
+)
+
 // New: Model profiles storage
 export const modelProfilesAtom = atomWithStorage<ModelProfile[]>(
   "agents:model-profiles",

@@ -44,9 +44,13 @@ import {
   apiKeyOnboardingCompletedAtom,
   customClaudeConfigAtom,
   effortLevelAtom,
+  enabledOpenRouterModelsAtom,
   extendedThinkingEnabledAtom,
   hiddenModelsAtom,
   normalizeCustomClaudeConfig,
+  openRouterApiKeyAtom,
+  openRouterFreeOnlyAtom,
+  openRouterModelsAtom,
   selectedOllamaModelAtom,
   showOfflineModeFeaturesAtom,
   type EffortLevel,
@@ -470,6 +474,21 @@ export const ChatInputArea = memo(function ChatInputArea({
 
   const hiddenModels = useAtomValue(hiddenModelsAtom)
 
+  // OpenRouter state
+  const openRouterModels = useAtomValue(openRouterModelsAtom)
+  const openRouterApiKey = useAtomValue(openRouterApiKeyAtom)
+  const openRouterFreeOnly = useAtomValue(openRouterFreeOnlyAtom)
+  const enabledOpenRouterModels = useAtomValue(enabledOpenRouterModelsAtom)
+  const [selectedOpenRouterModelId, setSelectedOpenRouterModelId] = useState<string | undefined>()
+
+  const filteredOpenRouterModels = useMemo(() => {
+    let models = openRouterModels.filter((m) => enabledOpenRouterModels.includes(m.id))
+    if (openRouterFreeOnly) {
+      models = models.filter((m) => m.isFree)
+    }
+    return models
+  }, [openRouterModels, openRouterFreeOnly, enabledOpenRouterModels])
+
   // Connection status for providers
   const anthropicOnboardingCompleted = useAtomValue(anthropicOnboardingCompletedAtom)
   const apiKeyOnboardingCompleted = useAtomValue(apiKeyOnboardingCompletedAtom)
@@ -512,6 +531,14 @@ export const ChatInputArea = memo(function ChatInputArea({
       return "Custom Model"
     }
 
+    // Check if an OpenRouter model is selected
+    if (selectedOpenRouterModelId && filteredOpenRouterModels.length > 0) {
+      const orModel = filteredOpenRouterModels.find((m) => m.id === selectedOpenRouterModelId)
+      if (orModel) {
+        return orModel.name
+      }
+    }
+
     if (!selectedModel) {
       return "Select model"
     }
@@ -523,6 +550,8 @@ export const ChatInputArea = memo(function ChatInputArea({
     currentOllamaModel,
     hasCustomClaudeConfig,
     selectedModel,
+    selectedOpenRouterModelId,
+    filteredOpenRouterModels,
   ])
 
   // MCP status - from getAllMcpConfig query (provides global/local grouping)
@@ -1512,6 +1541,11 @@ export const ChatInputArea = memo(function ChatInputArea({
                         thinkingEnabled,
                         onThinkingChange: setThinkingEnabled,
                       }}
+                      openRouter={openRouterApiKey ? {
+                        models: filteredOpenRouterModels,
+                        selectedModelId: selectedOpenRouterModelId,
+                        onSelectModel: setSelectedOpenRouterModelId,
+                      } : undefined}
                     />
                   </div>
 

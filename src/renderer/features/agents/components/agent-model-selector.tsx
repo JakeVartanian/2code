@@ -1,7 +1,7 @@
 "use client"
 
 import { ChevronRight, Zap } from "lucide-react"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import {
   Command,
   CommandEmpty,
@@ -83,11 +83,6 @@ export function AgentModelSelector({
 }: AgentModelSelectorProps) {
   const [search, setSearch] = useState("")
 
-  // Debug logging
-  useEffect(() => {
-    console.log("[AgentModelSelector] Props changed - openRouter:", openRouter ? `${openRouter.models.length} models` : "undefined", "claude.models:", claude.models.length)
-  }, [openRouter, claude.models])
-
   // Build flat list of all models
   const allModels = useMemo<FlatModelItem[]>(() => {
     const items: FlatModelItem[] = []
@@ -108,17 +103,12 @@ export function AgentModelSelector({
       }
     }
 
-    // Always add OpenRouter models if available (independent of offline/custom state)
     if (openRouter?.models && openRouter.models.length > 0) {
-      console.log("[AgentModelSelector] Adding OpenRouter models:", openRouter.models.length)
       for (const m of openRouter.models) {
         items.push({ type: "openrouter", model: m })
       }
-    } else {
-      console.log("[AgentModelSelector] No OpenRouter models available. openRouter:", openRouter)
     }
 
-    console.log("[AgentModelSelector] Total models in dropdown:", items.length, "(Claude:", claude.models.length, ", OpenRouter:", openRouter?.models.length || 0, ")")
     return items
   }, [claude, openRouter])
 
@@ -126,8 +116,7 @@ export function AgentModelSelector({
   const filteredModels = useMemo(() => {
     if (!search.trim()) return allModels
     const q = search.toLowerCase().trim()
-    console.log("[AgentModelSelector] Filtering with search:", q, "Total models to filter:", allModels.length)
-    const results = allModels.filter((item) => {
+    return allModels.filter((item) => {
       switch (item.type) {
         case "claude":
           return (
@@ -138,18 +127,13 @@ export function AgentModelSelector({
         case "ollama":
           return item.modelName.toLowerCase().includes(q)
         case "openrouter":
-          const matches = item.model.name.toLowerCase().includes(q)
-          if (matches) console.log("[AgentModelSelector] OpenRouter match:", item.model.name)
-          return matches
+          return item.model.name.toLowerCase().includes(q)
         case "custom":
           return "custom model".includes(q)
         default:
-          console.warn("[AgentModelSelector] Unknown item type:", item)
           return false
       }
     })
-    console.log("[AgentModelSelector] Filter results:", results.length, "matched")
-    return results
   }, [allModels, search])
 
   const handleOpenChange = useCallback(

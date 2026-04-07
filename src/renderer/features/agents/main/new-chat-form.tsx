@@ -63,6 +63,7 @@ import {
   openRouterModelsAtom,
   openRouterApiKeyAtom,
   openRouterFreeOnlyAtom,
+  enabledOpenRouterModelsAtom,
 } from "../../../lib/atoms"
 // Desktop uses real tRPC
 import { toast } from "sonner"
@@ -288,22 +289,19 @@ export function NewChatForm({
   const openRouterModels = useAtomValue(openRouterModelsAtom)
   const openRouterApiKey = useAtomValue(openRouterApiKeyAtom)
   const openRouterFreeOnly = useAtomValue(openRouterFreeOnlyAtom)
+  const enabledOpenRouterModels = useAtomValue(enabledOpenRouterModelsAtom)
   const [thinkingEnabled, setThinkingEnabled] = useAtom(
     extendedThinkingEnabledAtom,
   )
 
-  // Log when OpenRouter data changes
-  useEffect(() => {
-    if (openRouterModels.length > 0) {
-      console.log("[new-chat-form] OpenRouter models loaded:", openRouterModels.length, "models, API key:", openRouterApiKey ? openRouterApiKey.slice(0, 10) + "..." : "EMPTY")
-    }
-  }, [openRouterModels, openRouterApiKey])
-
-  // Filter OpenRouter models by free-only setting if enabled
+  // Only show OpenRouter models that are both enabled and pass free-only filter
   const filteredOpenRouterModels = useMemo(() => {
-    if (!openRouterFreeOnly) return openRouterModels
-    return openRouterModels.filter((m) => m.isFree)
-  }, [openRouterModels, openRouterFreeOnly])
+    let models = openRouterModels.filter((m) => enabledOpenRouterModels.includes(m.id))
+    if (openRouterFreeOnly) {
+      models = models.filter((m) => m.isFree)
+    }
+    return models
+  }, [openRouterModels, openRouterFreeOnly, enabledOpenRouterModels])
 
   const [selectedModel, setSelectedModel] = useState(
     () =>

@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import {
   agentsLoginModalOpenAtom,
   claudeLoginModalConfigAtom,
+  enabledOpenRouterModelsAtom,
   hiddenModelsAtom,
   openaiApiKeyAtom,
   openRouterApiKeyAtom,
@@ -339,27 +340,8 @@ export function AgentsModelsTab() {
   const [openRouterKey, setOpenRouterKey] = useState(storedOpenRouterKey)
   const [openRouterModels, setOpenRouterModels] = useAtom(openRouterModelsAtom)
   const [isFetchingOpenRouterModels, setIsFetchingOpenRouterModels] = useAtom(openRouterModelsLoadingAtom)
-
-  // Mount-level log to verify component is rendering
-  useEffect(() => {
-    console.log("[agents-models-tab] Component mounted/rendered, storedOpenRouterKey:", storedOpenRouterKey ? storedOpenRouterKey.slice(0, 10) + "..." : "EMPTY")
-    console.log("[agents-models-tab] openRouterModels from atom:", openRouterModels)
-    // Also check localStorage directly
-    const directLS = localStorage.getItem("agents:openrouter-api-key")
-    console.log("[agents-models-tab] Direct localStorage check for api-key:", directLS ? directLS.slice(0, 10) + "..." : "EMPTY")
-    const directModelsLS = localStorage.getItem("agents:openrouter-models")
-    console.log("[agents-models-tab] Direct localStorage check for models:", directModelsLS ? `${directModelsLS.length} chars (${JSON.parse(directModelsLS).length} models)` : "EMPTY")
-  }, [])
-
-  // Ensure atom changes always sync to localStorage
-  useEffect(() => {
-    if (openRouterModels && openRouterModels.length > 0) {
-      console.log("[agents-models-tab] [SYNC] openRouterModels atom changed, syncing to localStorage:", openRouterModels.length, "models")
-      localStorage.setItem("agents:openrouter-models", JSON.stringify(openRouterModels))
-      const retrieved = localStorage.getItem("agents:openrouter-models")
-      console.log("[agents-models-tab] [SYNC] Verified localStorage now has:", retrieved ? `${JSON.parse(retrieved).length} models` : "EMPTY")
-    }
-  }, [openRouterModels])
+  const [enabledOpenRouterModels, setEnabledOpenRouterModels] = useAtom(enabledOpenRouterModelsAtom)
+  const [openRouterModelSearch, setOpenRouterModelSearch] = useState("")
 
   useEffect(() => {
     setOpenRouterKey(storedOpenRouterKey)
@@ -367,57 +349,26 @@ export function AgentsModelsTab() {
 
   const fetchOpenRouterModelsMutation = trpc.agents.fetchOpenRouterModels.useMutation({
     onSuccess: (models) => {
-      console.log("[agents-models-tab] [MUTATION] onSuccess called with models:", models.length)
-      console.log("[agents-models-tab] [MUTATION] model sample:", models[0])
-      // Update localStorage FIRST, then update the atom
-      try {
-        localStorage.setItem("agents:openrouter-models", JSON.stringify(models))
-        console.log("[agents-models-tab] [MUTATION] Persisted to localStorage")
-        const retrieved = localStorage.getItem("agents:openrouter-models")
-        console.log("[agents-models-tab] [MUTATION] Verified retrieval from localStorage:", retrieved ? `${retrieved.length} chars` : "EMPTY")
-      } catch (e) {
-        console.error("[agents-models-tab] [MUTATION] Failed to persist OpenRouter models to localStorage:", e)
-      }
-      // Then update the atom (should already be in sync due to localStorage above)
-      console.log("[agents-models-tab] [MUTATION] About to call setOpenRouterModels with:", models.length, "models")
       setOpenRouterModels(models)
-      console.log("[agents-models-tab] [MUTATION] setOpenRouterModels called")
     },
     onError: (err) => {
-      console.error("[agents-models-tab] [MUTATION] onError called:", err)
       toast.error(err.message || "Failed to fetch OpenRouter models")
       setOpenRouterModels([])
     },
     onSettled: () => {
-      console.log("[agents-models-tab] [MUTATION] onSettled called")
       setIsFetchingOpenRouterModels(false)
     },
   })
 
   const fetchOpenRouterModels = useCallback((apiKey: string) => {
-    console.log("[agents-models-tab] fetchOpenRouterModels called with key:", apiKey.slice(0, 10) + "...")
-    if (!apiKey.trim()) {
-      console.log("[agents-models-tab] fetchOpenRouterModels: key is empty, skipping")
-      return
-    }
-    console.log("[agents-models-tab] fetchOpenRouterModels: setting loading to true")
+    if (!apiKey.trim()) return
     setIsFetchingOpenRouterModels(true)
-    console.log("[agents-models-tab] fetchOpenRouterModels: calling mutation with key:", apiKey.slice(0, 10) + "...")
-    console.log("[agents-models-tab] fetchOpenRouterModels: mutation status before call:", {
-      isPending: fetchOpenRouterModelsMutation.isPending,
-      isLoading: fetchOpenRouterModelsMutation.isLoading,
-    })
     fetchOpenRouterModelsMutation.mutate({ apiKey: apiKey.trim() })
-    console.log("[agents-models-tab] fetchOpenRouterModels: mutation called")
   }, [setIsFetchingOpenRouterModels, fetchOpenRouterModelsMutation])
 
   const handleOpenRouterKeyBlur = useCallback(() => {
     const trimmed = openRouterKey.trim()
-    console.log("[agents-models-tab] handleOpenRouterKeyBlur, trimmed:", trimmed ? trimmed.slice(0, 10) + "..." : "EMPTY", "stored:", storedOpenRouterKey ? storedOpenRouterKey.slice(0, 10) + "..." : "EMPTY")
-    if (trimmed === storedOpenRouterKey) {
-      console.log("[agents-models-tab] handleOpenRouterKeyBlur: key unchanged, skipping")
-      return
-    }
+    if (trimmed === storedOpenRouterKey) return
     setStoredOpenRouterKey(trimmed)
     if (trimmed) {
       toast.success("OpenRouter API key saved")
@@ -426,30 +377,56 @@ export function AgentsModelsTab() {
   }, [openRouterKey, storedOpenRouterKey, setStoredOpenRouterKey, fetchOpenRouterModels])
 
   const handleRemoveOpenRouterKey = () => {
-    console.log("[agents-models-tab] handleRemoveOpenRouterKey called")
     setStoredOpenRouterKey("")
     setOpenRouterKey("")
     setOpenRouterModels([])
     toast.success("OpenRouter API key removed")
   }
 
-  // Always fetch OpenRouter models when key is present (on mount and key change)
+  // Fetch OpenRouter models on mount only if we have a key but no cached models
   useEffect(() => {
-    console.log("[agents-models-tab] useEffect (key dependency) triggered, storedOpenRouterKey:", storedOpenRouterKey ? storedOpenRouterKey.slice(0, 10) + "..." : "EMPTY")
-    if (storedOpenRouterKey) {
-      console.log("[agents-models-tab] useEffect: fetching models for key:", storedOpenRouterKey.slice(0, 10) + "...")
+    if (storedOpenRouterKey && openRouterModels.length === 0) {
       fetchOpenRouterModels(storedOpenRouterKey)
-    } else {
-      console.log("[agents-models-tab] useEffect: no stored OpenRouter key found")
     }
-  // Only re-run when the key itself changes, not on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storedOpenRouterKey])
+  }, [])
 
   const filteredOpenRouterModels = useMemo(() => {
-    if (!openRouterFreeOnly) return openRouterModels
-    return openRouterModels.filter((m) => m.isFree)
-  }, [openRouterModels, openRouterFreeOnly])
+    let models = openRouterModels
+    if (openRouterFreeOnly) {
+      models = models.filter((m) => m.isFree)
+    }
+    if (openRouterModelSearch.trim()) {
+      const q = openRouterModelSearch.toLowerCase().trim()
+      models = models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
+    }
+    return models
+  }, [openRouterModels, openRouterFreeOnly, openRouterModelSearch])
+
+  const toggleOpenRouterModel = useCallback((modelId: string) => {
+    setEnabledOpenRouterModels((prev) => {
+      if (prev.includes(modelId)) {
+        return prev.filter((id) => id !== modelId)
+      }
+      return [...prev, modelId]
+    })
+  }, [setEnabledOpenRouterModels])
+
+  const enabledCountInView = useMemo(() => {
+    return filteredOpenRouterModels.filter((m) => enabledOpenRouterModels.includes(m.id)).length
+  }, [filteredOpenRouterModels, enabledOpenRouterModels])
+
+  const handleEnableAllVisible = useCallback(() => {
+    setEnabledOpenRouterModels((prev) => {
+      const newIds = filteredOpenRouterModels.map((m) => m.id).filter((id) => !prev.includes(id))
+      return [...prev, ...newIds]
+    })
+  }, [filteredOpenRouterModels, setEnabledOpenRouterModels])
+
+  const handleDisableAllVisible = useCallback(() => {
+    const visibleIds = new Set(filteredOpenRouterModels.map((m) => m.id))
+    setEnabledOpenRouterModels((prev) => prev.filter((id) => !visibleIds.has(id)))
+  }, [filteredOpenRouterModels, setEnabledOpenRouterModels])
 
   const [isApiKeysOpen, setIsApiKeysOpen] = useState(false)
 
@@ -639,22 +616,63 @@ export function AgentsModelsTab() {
                   <span className="text-xs font-medium text-muted-foreground">
                     OpenRouter Models
                   </span>
-                  {isFetchingOpenRouterModels ? (
-                    <span className="text-xs text-muted-foreground">Loading…</span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      {filteredOpenRouterModels.length} model{filteredOpenRouterModels.length !== 1 ? "s" : ""}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {isFetchingOpenRouterModels ? (
+                      <span className="text-xs text-muted-foreground">Loading…</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        {enabledCountInView} / {filteredOpenRouterModels.length} enabled
+                      </span>
+                    )}
+                    {filteredOpenRouterModels.length > 0 && (
+                      enabledCountInView < filteredOpenRouterModels.length ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={handleEnableAllVisible}
+                          className="h-5 px-1.5 text-xs text-muted-foreground"
+                        >
+                          Enable all
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={handleDisableAllVisible}
+                          className="h-5 px-1.5 text-xs text-muted-foreground"
+                        >
+                          Disable all
+                        </Button>
+                      )
+                    )}
+                  </div>
                 </div>
+
+                {/* Search within OpenRouter models */}
+                <div className="px-1.5 pt-1.5 pb-0.5 border-b border-border">
+                  <div className="flex items-center gap-1.5 h-7 px-1.5 rounded-md bg-muted/50">
+                    <SearchIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <input
+                      value={openRouterModelSearch}
+                      onChange={(e) => setOpenRouterModelSearch(e.target.value)}
+                      placeholder="Search OpenRouter models..."
+                      className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                    />
+                  </div>
+                </div>
+
                 <div className="divide-y divide-border max-h-64 overflow-y-auto">
                   {filteredOpenRouterModels.length === 0 && !isFetchingOpenRouterModels ? (
                     <div className="px-4 py-3 text-xs text-muted-foreground">
-                      {openRouterModels.length === 0 ? "No models loaded." : "No free models available."}
+                      {openRouterModels.length === 0
+                        ? "No models loaded."
+                        : openRouterModelSearch.trim()
+                          ? "No models match your search."
+                          : "No free models available."}
                     </div>
                   ) : (
                     filteredOpenRouterModels.map((m) => {
-                      const isEnabled = !hiddenModels.includes(m.id)
+                      const isEnabled = enabledOpenRouterModels.includes(m.id)
                       return (
                         <div key={m.id} className="flex items-center justify-between px-4 py-2.5">
                           <div className="flex items-center gap-2 min-w-0">
@@ -665,7 +683,7 @@ export function AgentsModelsTab() {
                           </div>
                           <Switch
                             checked={isEnabled}
-                            onCheckedChange={() => toggleModelVisibility(m.id)}
+                            onCheckedChange={() => toggleOpenRouterModel(m.id)}
                           />
                         </div>
                       )
