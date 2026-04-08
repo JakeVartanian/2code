@@ -630,5 +630,124 @@ export const createGitOperationsRouter = () => {
 				assertRegisteredWorktree(input.worktreePath);
 				return await fetchGitHubPRStatus(input.worktreePath);
 			}),
+
+		// Aggregate workflow state: uncommitted files, unpushed commits, ahead/behind counts.
+		// Fast local-only query (no network). Used by GitWorkflowPanel.
+		getWorkflowState: publicProcedure
+			.input(
+				z.object({
+					worktreePath: z.string(),
+					baseBranch: z.string().optional(),
+				}),
+			)
+			.query(async ({ input }) => {
+				assertRegisteredWorktree(input.worktreePath);
+
+				const git = createGit(input.worktreePath);
+
+				// Run all local queries in parallel for speed
+				const [status, repoState] = await Promise.all([
+					git.status(),
+					getRepositoryState(input.worktreePath),
+				]);
+
+				// Uncommitted files with their status character
+				const uncommittedFiles = [
+					...status.modified.map((f) => ({ path: f, status: "M" as const })),
+					...status.not_added.map((f) => ({ path: f, status: "?" as const })),
+					...status.created.map((f) => ({ path: f, status: "A" as const })),
+					...status.deleted.map((f) => ({ path: f, status: "D" as const })),
+					...status.renamed.map((f) => ({ path: f.to, status: "R" as const })),
+					...status.staged.filter(
+						(f) =>
+							!status.modified.includes(f) &&
+							!status.created.includes(f) &&
+							!status.deleted.includes(f),
+					).map((f) => ({ path: f, status: "M" as const })),
+				];
+
+				// Unique by path
+				const seen = new Set<string>();
+				const uniqueUncommitted = uncommittedFiles.filter((f) => {
+					if (seen.has(f.path)) return false;
+					seen.add(f.path);
+					return true;
+				});
+
+				// Unpushed commits (commits ahead of remote tracking branch)
+				let unpushedCommits: Array<{ sha: string; shortSha: string; message: string }> = [];
+				let aheadCount = 0;
+				try {
+					const aheadLog = await git.log({ from: "origin/HEAD", to: "HEAD" }).catch(async () => {
+						// Fallback: try to get commits since upstream
+						const upstream = await git.raw(["rev-parse", "--abbrev-ref", "@{upstream}"]).catch(() => null);
+						if (!upstream) return { all: [] };
+						return git.log({ from: upstream.trim(), to: "HEAD" });
+					});
+					unpushedCommits = (aheadLog.all || []).map((c) => ({
+						sha: c.hash,
+						shortSha: c.hash.slice(0, 7),
+						message: c.message,
+					}));
+					aheadCount = unpushedCommits.length;
+				} catch {
+					// Not fatal — branch may not have a remote yet
+				}
+
+				// How many commits the base branch is ahead of this branch
+				let behindCount = 0;
+				if (input.baseBranch) {
+					try {
+						const behindRaw = await git.raw([
+							"rev-list",
+							"--count",
+							`HEAD..origin/${input.baseBranch}`,
+						]);
+						behindCount = parseInt(behindRaw.trim(), 10) || 0;
+					} catch {
+						// Base branch may not exist on remote yet
+					}
+				}
+
+				// Whether the branch has been pushed at all (has a remote tracking branch)
+				let hasRemote = false;
+				try {
+					await git.raw(["rev-parse", "--abbrev-ref", "@{upstream}"]);
+					hasRemote = true;
+				} catch {
+					hasRemote = false;
+				}
+
+				return {
+					uncommittedFiles: uniqueUncommitted,
+					hasUncommittedChanges: uniqueUncommitted.length > 0,
+					unpushedCommits,
+					aheadCount,
+					behindCount,
+					hasRemote,
+					isClean: status.isClean(),
+					repoState,
+				};
+			}),
+
+		// Stage all changes (git add -A). Used by GitWorkflowPanel commit flow.
+		stageAll: publicProcedure
+			.input(
+				z.object({
+					worktreePath: z.string(),
+				}),
+			)
+			.mutation(async ({ input }): Promise<{ success: boolean; stagedCount: number }> => {
+				assertRegisteredWorktree(input.worktreePath);
+
+				return withGitLock(input.worktreePath, async () => {
+					const git = createGit(input.worktreePath);
+					await withLockRetry(input.worktreePath, () => git.add(["-A"]));
+
+					const status = await git.status();
+					invalidateGitStateCaches(input.worktreePath);
+					return { success: true, stagedCount: status.staged.length };
+				});
+			}),
 	});
 };

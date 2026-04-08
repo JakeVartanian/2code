@@ -226,6 +226,7 @@ import { AgentsHeaderControls } from "../ui/agents-header-controls"
 import { ChatTitleEditor } from "../ui/chat-title-editor"
 import { MobileChatHeader } from "../ui/mobile-chat-header"
 import { QuickCommentInput } from "../ui/quick-comment-input"
+import { GitWorkflowPanel } from "../ui/git-workflow/git-workflow-panel"
 import { SubChatSelector } from "../ui/sub-chat-selector"
 import { SubChatStatusCard } from "../ui/sub-chat-status-card"
 import { SplitViewContainer } from "../ui/split-view-container"
@@ -7353,6 +7354,16 @@ Make sure to preserve all functionality from both branches when resolving confli
               </div>
             </div>
           )}
+
+          {/* GitHub Workflow Panel — shows branch/stage/action for this chat */}
+          <GitWorkflowPanel
+            chatId={chatId}
+            worktreePath={worktreePath}
+            branch={(agentChat as any)?.branch ?? null}
+            baseBranch={(agentChat as any)?.baseBranch ?? null}
+            prNumber={agentChat?.prNumber ?? null}
+            prUrl={agentChat?.prUrl ?? null}
+          />
 
           {/* Chat Content - Keep-alive: render all open tabs, hide inactive with CSS */}
           {tabsToRender.length > 0 && agentChat ? (

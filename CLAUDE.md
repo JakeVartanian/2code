@@ -152,6 +152,9 @@ const projectChats = db.select().from(chats).where(eq(chats.projectId, id)).all(
 - `src/renderer/features/agents/atoms/index.ts` - Agent UI state atoms
 - `src/renderer/features/agents/main/active-chat.tsx` - Main chat component
 - `src/main/lib/trpc/routers/claude.ts` - Claude SDK integration
+- `src/renderer/features/agents/components/work-mode-selector.tsx` - Worktree vs Local mode selector at chat creation
+- `src/main/lib/git/git-operations.ts` - Git mutations (commit, push, createPR, getWorkflowState, etc.) — exposed as `trpc.changes`
+- `src/renderer/features/agents/ui/git-workflow/` - GitHub workflow panel components
 
 ## Debugging First Install Issues
 
@@ -235,20 +238,35 @@ npm version patch --no-git-tag-version  # 0.0.27 → 0.0.28
 3. User clicks Download → downloads ZIP in background
 4. User clicks "Restart Now" → installs update and restarts
 
+## Git Worktrees
+
+Each **Chat** (not tab/sub-chat) optionally has an isolated git worktree:
+
+- **Worktree mode** (`useWorktree: true`, the default): creates a `git worktree` on a new branch, fully isolated from other chats. `chats.worktreePath` and `chats.branch` are set.
+- **Local/direct mode** (`useWorktree: false`): Claude works directly in the project folder on whatever branch is currently checked out (e.g. `develop`). `chats.worktreePath` and `chats.branch` are null.
+
+**Sub-chats (tabs)** within a chat all share the same worktree — there is no separate worktree per tab.
+
+The user selects mode at chat creation time via `WorkModeSelector` (`src/renderer/features/agents/components/work-mode-selector.tsx`). Options: "Local" (direct) or "Worktree" (isolated).
+
+Key DB fields on the `chats` table: `worktreePath`, `branch`, `baseBranch`, `prUrl`, `prNumber`.
+
+The git router is registered as `trpc.changes` (not `trpc.git`) — see `src/main/lib/trpc/routers/index.ts`.
+
 ## Current Status (WIP)
 
 **Done:**
 - Drizzle ORM setup with schema (projects, chats, sub_chats)
 - Auto-migration on app startup
 - tRPC routers structure
+- Git worktree per chat (isolation) — see Git Worktrees section above
+- Claude Code execution in worktree path
 
 **In Progress:**
 - Replacing `mock-api.ts` with real tRPC calls in renderer
 - ProjectSelector component (local folder picker)
 
 **Planned:**
-- Git worktree per chat (isolation)
-- Claude Code execution in worktree path
 - Full feature parity with web app
 
 ## Debug Mode
