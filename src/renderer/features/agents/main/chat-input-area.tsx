@@ -84,7 +84,7 @@ import {
 import {
   CLAUDE_MODELS,
 } from "../lib/models"
-import { analyzeTask, type SettingsRecommendation } from "../lib/smart-router"
+import { analyzeTask, recordDismissal, type SettingsRecommendation } from "../lib/smart-router"
 import type { DiffTextContext, SelectedTextContext } from "../lib/queue-utils"
 import {
   AgentsFileMention,
@@ -1664,28 +1664,32 @@ export const ChatInputArea = memo(function ChatInputArea({
                   {/* Smart model suggestion */}
                   {!suggestionDismissed && (modelSuggestion || settingsRecommendations.length > 0) && (
                     <ModelSuggestionChip
-                      suggestion={modelSuggestion}
-                      currentModelId={selectedModel?.id}
+                      modelSuggestion={modelSuggestion}
                       settingsRecommendations={settingsRecommendations}
-                      onAccept={(modelId) => {
-                        const model = availableModels.models.find((m) => m.id === modelId)
-                        if (model) {
-                          setSelectedModel(model)
-                          setSelectedSubChatModelId(model.id)
-                          setLastSelectedModelId(model.id)
+                      onAccept={() => {
+                        if (modelSuggestion) {
+                          const model = availableModels.models.find((m) => m.id === modelSuggestion.model.id)
+                          if (model) {
+                            setSelectedModel(model)
+                            setSelectedSubChatModelId(model.id)
+                            setLastSelectedModelId(model.id)
+                          }
+                        }
+                        for (const rec of settingsRecommendations) {
+                          if (rec.type === "effort") {
+                            setEffortLevel(rec.suggested as typeof effortLevel)
+                          } else if (rec.type === "thinking" && rec.suggested === "adaptive") {
+                            setThinkingEnabled(true)
+                          }
                         }
                         setModelSuggestion(null)
+                        setSettingsRecommendations([])
                       }}
-                      onDismiss={() => setSuggestionDismissed(true)}
-                      onAcceptSettingsChange={(rec) => {
-                        if (rec.type === "effort") {
-                          setEffortLevel(rec.suggested as typeof effortLevel)
-                        } else if (rec.type === "thinking" && rec.suggested === "adaptive") {
-                          // Switch from "enabled" with fixed budget to "adaptive"
-                          setThinkingEnabled(true)
+                      onDismiss={() => {
+                        if (modelSuggestion && selectedModel?.id) {
+                          recordDismissal(selectedModel.id, modelSuggestion.model.id)
                         }
-                        // Remove the accepted recommendation from the list
-                        setSettingsRecommendations((prev) => prev.filter((r) => r !== rec))
+                        setSuggestionDismissed(true)
                       }}
                     />
                   )}
