@@ -62,7 +62,8 @@ export const AgentBashTool = memo(function AgentBashTool({
   partIndex,
   chatStatus,
 }: AgentBashToolProps) {
-  const [isOutputExpanded, setIsOutputExpanded] = useState(() => appStore.get(toolVerbosityAtom) === "expanded")
+  const verbosity = appStore.get(toolVerbosityAtom)
+  const [isOutputExpanded, setIsOutputExpanded] = useState(() => verbosity === "expanded")
   // Retroactively update expanded state when user changes verbosity in settings.
   // Uses appStore.sub() to avoid a Jotai hook subscription that re-renders during streaming.
   useEffect(() => {
