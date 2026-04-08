@@ -16,6 +16,7 @@ import {
   AgentIcon,
   AttachIcon,
   CheckIcon,
+  GlobeIcon,
   IconSpinner,
   OriginalMCPIcon,
   PlanIcon,
@@ -42,6 +43,7 @@ import {
   agentsSettingsDialogOpenAtom,
   anthropicOnboardingCompletedAtom,
   apiKeyOnboardingCompletedAtom,
+  browserAccessEnabledAtom,
   customClaudeConfigAtom,
   effortLevelAtom,
   enabledOpenRouterModelsAtom,
@@ -637,6 +639,9 @@ export const ChatInputArea = memo(function ChatInputArea({
   const toggleMode = useCallback(() => {
     updateMode(getNextMode(subChatMode))
   }, [subChatMode, updateMode])
+
+  // Browser access toggle
+  const [browserAccessEnabled, setBrowserAccessEnabled] = useAtom(browserAccessEnabledAtom)
 
   // Voice input state
   const {
@@ -1635,6 +1640,26 @@ export const ChatInputArea = memo(function ChatInputArea({
 
                   {/* Quick agent creation */}
                   <AgentQuickCreate />
+
+                  {/* Browser access toggle */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => setBrowserAccessEnabled(!browserAccessEnabled)}
+                        className={cn(
+                          "flex items-center gap-1 px-1.5 py-1 rounded-md transition-colors outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
+                          browserAccessEnabled
+                            ? "text-blue-500 hover:text-blue-400"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                        )}
+                      >
+                        <GlobeIcon className="h-3.5 w-3.5 shrink-0" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      {browserAccessEnabled ? "Browser access on" : "Browser access off"}
+                    </TooltipContent>
+                  </Tooltip>
 
                   {/* Smart model suggestion */}
                   {!suggestionDismissed && (modelSuggestion || settingsRecommendations.length > 0) && (

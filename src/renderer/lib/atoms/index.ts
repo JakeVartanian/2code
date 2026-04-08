@@ -289,6 +289,14 @@ export const openRouterFreeOnlyAtom = atomWithStorage<boolean>(
   { getOnInit: true },
 )
 
+// Whether the AI can browse the web using the browser MCP
+export const browserAccessEnabledAtom = atomWithStorage<boolean>(
+  "agents:browser-access-enabled",
+  false,
+  undefined,
+  { getOnInit: true },
+)
+
 // OpenRouter models fetched from API (persisted so they survive remounts)
 export const openRouterModelsAtom = atomWithStorage<{ id: string; name: string; isFree: boolean }[]>(
   "agents:openrouter-models",

@@ -1,6 +1,7 @@
 import { observable } from "@trpc/server/observable"
 import { eq } from "drizzle-orm"
 import { app, BrowserWindow, safeStorage } from "electron"
+import { existsSync } from "fs"
 import * as fs from "fs/promises"
 import * as os from "os"
 import path from "path"
@@ -61,6 +62,34 @@ import { getExistingClaudeCredentials, refreshClaudeToken, isTokenExpired } from
  * - @[file:owner/repo:path] - legacy web format (repo:path)
  * - @[folder:local:path] or @[folder:external:path] - folder mentions
  */
+function findBrowserExecutable(): string | undefined {
+  const platform = process.platform
+  const candidates: Record<string, string[]> = {
+    darwin: [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    ],
+    win32: [
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      "C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    ],
+    linux: [
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/brave-browser",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/chromium",
+    ],
+  }
+  for (const p of candidates[platform] ?? []) {
+    if (existsSync(p)) return p
+  }
+  return undefined
+}
+
 function parseMentions(prompt: string): {
   cleanedPrompt: string
   agentMentions: string[]
@@ -1082,6 +1111,7 @@ export const claudeRouter = router({
         historyEnabled: z.boolean().optional(),
         offlineModeEnabled: z.boolean().optional(), // Whether offline mode (Ollama) is enabled in settings
         enableTasks: z.boolean().optional(), // Enable task management tools (TodoWrite, Task agents)
+        browserAccessEnabled: z.boolean().optional(), // Inject browser MCP for web browsing
       }),
     )
     .subscription(({ input }) => {
@@ -1678,6 +1708,22 @@ export const claudeRouter = router({
               console.error(
                 `[claude] Failed to setup isolated config dir:`,
                 mkdirErr,
+              )
+            }
+
+            // Inject browser MCP when toggle is enabled
+            if (input.browserAccessEnabled) {
+              const browserPath = findBrowserExecutable()
+              mcpServersForSdk = {
+                ...(mcpServersForSdk ?? {}),
+                _browser: {
+                  command: "npx",
+                  args: ["-y", "@modelcontextprotocol/server-puppeteer"],
+                  ...(browserPath ? { env: { PUPPETEER_EXECUTABLE_PATH: browserPath } } : {}),
+                },
+              }
+              console.log(
+                `[claude] Browser MCP enabled${browserPath ? ` (executable: ${browserPath})` : " (bundled Chromium)"}`,
               )
             }
 

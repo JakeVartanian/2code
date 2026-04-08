@@ -4,6 +4,7 @@ import {
   claudeLoginModalConfigAtom,
   agentsLoginModalOpenAtom,
   autoOfflineModeAtom,
+  browserAccessEnabledAtom,
   type CustomClaudeConfig,
   customClaudeConfigAtom,
   effortLevelAtom,
@@ -176,6 +177,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     const historyEnabled = appStore.get(historyEnabledAtom)
     const enableTasks = appStore.get(enableTasksAtom)
+    const browserAccessEnabled = appStore.get(browserAccessEnabledAtom)
 
     // Read model selection dynamically per sub-chat (so split panes stay independent)
     const selectedModelId = appStore.get(subChatModelIdAtomFamily(this.config.subChatId))
@@ -466,6 +468,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             historyEnabled,
             offlineModeEnabled,
             enableTasks,
+            ...(browserAccessEnabled && { browserAccessEnabled: true }),
             ...(images.length > 0 && { images }),
           },
           {
