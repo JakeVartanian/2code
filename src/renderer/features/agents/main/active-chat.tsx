@@ -3119,12 +3119,13 @@ const ChatViewInner = memo(function ChatViewInner({
 
   // Handle pending "Build plan" from sidebar
   useEffect(() => {
-    // Only trigger if this is the target sub-chat and we're active
-    if (pendingBuildPlanSubChatId === subChatId && isActive) {
+    // Only trigger if this is the target sub-chat
+    // (isActive check removed - pendingBuildPlanSubChatId is already scoped to active subChatId)
+    if (pendingBuildPlanSubChatId === subChatId) {
       setPendingBuildPlanSubChatId(null) // Clear immediately to prevent double-trigger
       handleApprovePlan()
     }
-  }, [pendingBuildPlanSubChatId, subChatId, isActive, setPendingBuildPlanSubChatId, handleApprovePlan])
+  }, [pendingBuildPlanSubChatId, subChatId, setPendingBuildPlanSubChatId, handleApprovePlan])
 
   // Detect PR URLs in assistant messages and store them
   // Initialize with existing PR URL to prevent duplicate toast on re-mount
