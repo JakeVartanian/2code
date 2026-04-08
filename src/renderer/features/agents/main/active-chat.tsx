@@ -3571,14 +3571,20 @@ const ChatViewInner = memo(function ChatViewInner({
   // Auto-trigger AI response when we have initial message but no response yet
   // Also trigger auto-rename for initial sub-chat with pre-populated message
   // IMPORTANT: Skip if there's an active streamId (prevents double-generation on resume)
+  // IMPORTANT: Skip if mode just changed from plan to agent (message will come through normal flow)
   useEffect(() => {
     const msgs = messagesRef.current
     const activeStreamId = agentChatStore.getStreamId(subChatId)
+    const hasImplementPlanMessage = msgs.some((m: any) =>
+      (m.parts || []).some((p: any) => p.text === "Implement plan")
+    )
+
     if (
       msgs.length === 1 &&
       status === "ready" &&
       !activeStreamId &&
-      !hasTriggeredAutoGenerateRef.current
+      !hasTriggeredAutoGenerateRef.current &&
+      !hasImplementPlanMessage
     ) {
       hasTriggeredAutoGenerateRef.current = true
       // Trigger rename for pre-populated initial message (from createAgentChat)
@@ -3592,7 +3598,22 @@ const ChatViewInner = memo(function ChatViewInner({
           }
         }
       }
-      regenerateRef.current()
+      // Validate Chat object state before calling regenerate
+      // The @ai-sdk/react Chat SDK has a bug where state can be undefined
+      const chat = agentChatStore.get(subChatId)
+      if (chat && (chat as any).state) {
+        try {
+          regenerateRef.current()
+        } catch (error) {
+          console.error("[active-chat] Auto-regenerate failed:", error)
+          // Reset flag so user can manually retry
+          hasTriggeredAutoGenerateRef.current = false
+        }
+      } else {
+        // Chat not ready yet, will retry on next effect
+        hasTriggeredAutoGenerateRef.current = false
+        console.warn("[active-chat] Chat object not ready for auto-regenerate, will retry")
+      }
     }
   }, [
     status,
