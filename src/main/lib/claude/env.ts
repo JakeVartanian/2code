@@ -277,9 +277,7 @@ export function buildClaudeEnv(options?: {
     }
   }
 
-  // 5. Mark as SDK entry
-  env.CLAUDE_CODE_ENTRYPOINT = "sdk-ts"
-  // Enable/disable task management tools based on user preference (default: enabled)
+  // 5. Enable/disable task management tools based on user preference (default: enabled)
   env.CLAUDE_CODE_ENABLE_TASKS = options?.enableTasks !== false ? "true" : "false"
 
   return env
