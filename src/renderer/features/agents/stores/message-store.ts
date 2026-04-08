@@ -695,6 +695,8 @@ type TokenData = {
   lastMsgOutputTokens: number
   // Track last message parts signature to detect compact boundary updates
   lastMsgPartsKey: string
+  // Last-turn input tokens for context window display (not cumulative)
+  lastTurnInputTokens: number
 }
 const tokenDataCacheByChat = new Map<string, TokenData>()
 
@@ -763,6 +765,20 @@ export const messageTokenDataAtom = atom((get) => {
   }
   const messageCount = Math.max(0, ids.length - startIndex)
 
+  // Find the last-turn input tokens for context window display (not cumulative)
+  let lastTurnInputTokens = 0
+  for (let i = ids.length - 1; i >= startIndex; i--) {
+    const msg = get(messageAtomFamily(getPerChatMessageKey(subChatId, ids[i]!)))
+    const metadata = msg?.metadata as any
+    if (metadata?.inputTokens) {
+      lastTurnInputTokens =
+        (metadata.inputTokens || 0) +
+        (metadata.cacheReadInputTokens || 0) +
+        (metadata.cacheCreationInputTokens || 0)
+      break
+    }
+  }
+
   const newTokenData: TokenData = {
     inputTokens,
     outputTokens,
@@ -774,6 +790,7 @@ export const messageTokenDataAtom = atom((get) => {
     totalMessageCount: ids.length,
     lastMsgOutputTokens,
     lastMsgPartsKey,
+    lastTurnInputTokens,
   }
 
   tokenDataCacheByChat.set(subChatId, newTokenData)

@@ -2730,6 +2730,7 @@ const ChatViewInner = memo(function ChatViewInner({
     totalCostUsd: 0, // Not tracked in atom version
     messageCount: atomTokenData.messageCount,
     contextWindow: undefined as number | undefined, // Not tracked in atom version
+    contextInputTokens: atomTokenData.lastTurnInputTokens,
   }), [atomTokenData])
 
   // Track previous streaming state to detect stream stop
