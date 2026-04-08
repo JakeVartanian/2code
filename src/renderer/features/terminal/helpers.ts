@@ -381,7 +381,7 @@ function getTerminalCoordsFromEvent(
     }
   )._core?._renderService?.dimensions
 
-  if (!dimensions?.css?.cell) return null
+  if (!dimensions || !dimensions.css || !dimensions.css.cell) return null
 
   const cellWidth = dimensions.css.cell.width
   const cellHeight = dimensions.css.cell.height
