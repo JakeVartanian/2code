@@ -187,45 +187,60 @@ bun run dev
 
 ## Releasing a New Version
 
+### CDN
+
+- **Bucket:** `2code-releases` on Cloudflare R2 (account: hello@jakevartanian.me)
+- **Public URL:** `https://pub-b08cf2e8792d44d0a8f1eeb29d23dac0.r2.dev`
+- **Upload tool:** `wrangler` (already authenticated, run `wrangler whoami` to verify)
+- **TODO:** When `2code.dev` is registered, add it as a custom domain on the bucket and update `CDN_BASE` in `src/main/lib/auto-updater.ts`
+
 ### Prerequisites for Notarization
 
 - Keychain profile: `2code-notarize`
 - Create with: `xcrun notarytool store-credentials "2code-notarize" --apple-id YOUR_APPLE_ID --team-id YOUR_TEAM_ID`
 
-### Release Commands
+### Full Release Process
 
 ```bash
-# Full release (build, sign, submit notarization, upload to CDN)
-bun run release
+# 1. Bump version
+npm version patch --no-git-tag-version   # e.g. 0.0.80 → 0.0.81
 
-# Or step by step:
-bun run build              # Compile TypeScript
-bun run package:mac        # Build & sign macOS app
-bun run dist:manifest      # Generate latest-mac.yml manifests
-./scripts/upload-release-wrangler.sh  # Submit notarization & upload to R2 CDN
+# 2. Build, sign, package (takes ~5 min)
+bun run release    # runs: claude:download + build + package:mac + dist:manifest + upload
+
+# OR step by step:
+bun run claude:download          # update bundled Claude CLI binary
+bun run build                    # compile TypeScript
+bun run package:mac              # build + codesign arm64 & x64 DMGs/ZIPs
+
+# 3. Notarize (submit both DMGs, wait for Apple)
+xcrun notarytool submit release/2Code-$VERSION-arm64.dmg --keychain-profile "2code-notarize" --wait
+xcrun notarytool submit release/2Code-$VERSION.dmg       --keychain-profile "2code-notarize" --wait
+
+# 4. Staple notarization ticket to DMGs
+xcrun stapler staple release/2Code-$VERSION-arm64.dmg
+xcrun stapler staple release/2Code-$VERSION.dmg
+
+# 5. Generate latest-mac.yml manifests
+bun run dist:manifest
+
+# 6. Upload everything to R2 (ZIPs first, manifests last — manifests trigger auto-updates)
+./scripts/upload-release-wrangler.sh
+
+# 7. Generate release notes and create GitHub release
+# Run /release-notes in 2Code, then:
+gh release create v$VERSION --title "2Code v$VERSION" --notes "..."
+
+# 8. Sync code to public repo
+./scripts/sync-to-public.sh
 ```
-
-### Bump Version Before Release
-
-```bash
-npm version patch --no-git-tag-version  # 0.0.27 → 0.0.28
-```
-
-### After Release Script Completes
-
-1. Wait for notarization (2-5 min): `xcrun notarytool history --keychain-profile "2code-notarize"`
-2. Staple DMGs: `cd release && xcrun stapler staple *.dmg`
-3. Re-upload stapled DMGs to R2 and GitHub (see RELEASE.md for commands)
-4. Update changelog: `gh release edit v0.0.X --notes "..."`
-5. **Upload manifests (triggers auto-updates!)** — see RELEASE.md
-6. Sync to public: `./scripts/sync-to-public.sh`
 
 ### Files Uploaded to CDN
 
 | File | Purpose |
 |------|---------|
-| `latest-mac.yml` | Manifest for arm64 auto-updates |
-| `latest-mac-x64.yml` | Manifest for Intel auto-updates |
+| `latest-mac.yml` | Manifest for arm64 auto-updates — **upload last** |
+| `latest-mac-x64.yml` | Manifest for Intel auto-updates — **upload last** |
 | `2Code-{version}-arm64-mac.zip` | Auto-update payload (arm64) |
 | `2Code-{version}-mac.zip` | Auto-update payload (Intel) |
 | `2Code-{version}-arm64.dmg` | Manual download (arm64) |
@@ -233,7 +248,7 @@ npm version patch --no-git-tag-version  # 0.0.27 → 0.0.28
 
 ### Auto-Update Flow
 
-1. App checks `https://cdn.2code.dev/releases/desktop/latest-mac.yml` on startup and when window regains focus (with 1 min cooldown)
+1. App checks `{CDN_BASE}/latest-mac.yml` on startup and when window regains focus (1 min cooldown)
 2. If version in manifest > current version, shows "Update Available" banner
 3. User clicks Download → downloads ZIP in background
 4. User clicks "Restart Now" → installs update and restarts

@@ -25,8 +25,8 @@ function initAutoUpdaterConfig() {
   autoUpdater.autoRunAppAfterInstall = true // Restart app after install
 }
 
-// Update URL — R2 CDN for 2Code releases
-const CDN_BASE = "https://cdn.2code.dev/releases/desktop"
+// Update URL — R2 public bucket (swap for custom domain once 2code.dev is registered)
+const CDN_BASE = "https://pub-b08cf2e8792d44d0a8f1eeb29d23dac0.r2.dev"
 
 // Minimum interval between update checks (prevent spam on rapid focus/blur)
 const MIN_CHECK_INTERVAL = 60 * 1000 // 1 minute
