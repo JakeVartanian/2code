@@ -1,6 +1,6 @@
 {
   "name": "2code",
-  "version": "0.0.78",
+  "version": "0.0.79",
   "private": true,
   "description": "2Code - UI for parallel work with AI agents",
   "sideEffects": false,
@@ -32,7 +32,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "ts:check": "tsgo --noEmit",
-    "postinstall": "node -e \"if(!process.env.VERCEL){require('child_process').execSync('electron-rebuild -f -w better-sqlite3,node-pty',{stdio:'inherit'})}\" && node scripts/patch-electron-dev.mjs"
+    "postinstall": "node -e \"if(!process.env.VERCEL){const arch=process.platform==='darwin'?' --arch arm64':'';require('child_process').execSync('electron-rebuild -f -w better-sqlite3,node-pty'+arch,{stdio:'inherit'})}\" && node scripts/patch-electron-dev.mjs"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.14",
