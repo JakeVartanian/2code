@@ -101,13 +101,39 @@ export class GitWatcher extends EventEmitter {
 		// Dynamic import for ESM-only chokidar
 		const chokidar = await import("chokidar");
 		const path = await import("path");
+		const fs = await import("fs");
 
 		// Strategy: Watch ONLY .git/index and .git/HEAD
 		// - .git/index changes on ANY git operation (commit, stage, unstage, checkout, merge, etc.)
 		// - .git/HEAD changes on branch switches
 		// This uses only 2 file descriptors instead of thousands, avoiding EMFILE errors
-		const gitIndexPath = path.join(config.worktreePath, ".git", "index");
-		const gitHeadPath = path.join(config.worktreePath, ".git", "HEAD");
+		//
+		// For git worktrees, `.git` is a FILE (not a dir) containing e.g.:
+		//   gitdir: /path/to/main/.git/worktrees/branchname
+		// In that case we must resolve the actual git dir before building paths.
+		const dotGit = path.join(config.worktreePath, ".git");
+		let actualGitDir: string;
+		try {
+			const stat = fs.statSync(dotGit);
+			if (stat.isFile()) {
+				// Worktree — parse the gitdir pointer
+				const contents = fs.readFileSync(dotGit, "utf8").trim();
+				const match = contents.match(/^gitdir:\s*(.+)$/);
+				if (match) {
+					const resolved = path.resolve(config.worktreePath, match[1].trim());
+					actualGitDir = resolved;
+				} else {
+					actualGitDir = dotGit;
+				}
+			} else {
+				actualGitDir = dotGit;
+			}
+		} catch {
+			actualGitDir = dotGit;
+		}
+
+		const gitIndexPath = path.join(actualGitDir, "index");
+		const gitHeadPath = path.join(actualGitDir, "HEAD");
 
 		const watchPaths = [gitIndexPath, gitHeadPath];
 
@@ -165,7 +191,7 @@ export class GitWatcher extends EventEmitter {
 				this.emit("error", error);
 			});
 
-		console.log(`[GitWatcher] Watching: ${config.worktreePath}`);
+		console.log(`[GitWatcher] Watching: ${config.worktreePath} (git dir: ${actualGitDir})`);
 	}
 
 	/**
