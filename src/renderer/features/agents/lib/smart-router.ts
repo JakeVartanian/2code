@@ -283,8 +283,13 @@ export function recommendModel(
     }
 
     case "complex": {
-      // Never suggest upgrading -- let the user decide to use Opus
-      return null
+      if (currentModelId === "opus") return null
+      if (isSuppressed(currentModelId, "opus")) return null
+      const opus = CLAUDE_MODELS.find((m) => m.id === "opus")!
+      return {
+        model: opus,
+        reason: `This task needs Opus for best results`,
+      }
     }
   }
 }

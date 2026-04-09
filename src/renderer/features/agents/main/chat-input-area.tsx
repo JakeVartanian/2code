@@ -554,7 +554,8 @@ export const ChatInputArea = memo(function ChatInputArea({
       return "Select model"
     }
 
-    return `${selectedModel.name} ${selectedModel.version}`
+    const effortLabel = effortLevel.charAt(0).toUpperCase() + effortLevel.slice(1)
+    return `${selectedModel.name} ${effortLabel}`
   }, [
     availableModels.isOffline,
     availableModels.hasOllama,
@@ -563,6 +564,7 @@ export const ChatInputArea = memo(function ChatInputArea({
     selectedModel,
     selectedOpenRouterModelId,
     filteredOpenRouterModels,
+    effortLevel,
   ])
 
   // MCP status - from getAllMcpConfig query (provides global/local grouping)
