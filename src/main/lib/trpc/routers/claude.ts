@@ -1453,11 +1453,19 @@ export const claudeRouter = router({
             }
 
             // Build full environment for Claude SDK (includes HOME, PATH, etc.)
+            // Normalize OpenRouter base URL: ensure it ends with /v1 so the SDK hits the correct endpoint.
+            // Some users may have saved "https://openrouter.ai/api" (missing /v1) from an older onboarding flow.
+            const normalizeBaseUrl = (url: string) => {
+              if (url.includes("openrouter.ai") && !url.endsWith("/v1")) {
+                return url.replace(/\/?$/, "") + "/v1"
+              }
+              return url
+            }
             const claudeEnv = buildClaudeEnv({
               ...(finalCustomConfig && {
                 customEnv: {
                   ANTHROPIC_AUTH_TOKEN: finalCustomConfig.token,
-                  ANTHROPIC_BASE_URL: finalCustomConfig.baseUrl,
+                  ANTHROPIC_BASE_URL: normalizeBaseUrl(finalCustomConfig.baseUrl),
                 },
               }),
               enableTasks: input.enableTasks ?? true,

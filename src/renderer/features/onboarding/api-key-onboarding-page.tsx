@@ -34,7 +34,7 @@ export function ApiKeyOnboardingPage() {
   // Default values for API key mode (not custom model)
   const defaultModel = "claude-sonnet-4-6"
   const defaultBaseUrl = "https://api.anthropic.com"
-  const openRouterBaseUrl = "https://openrouter.ai/api"
+  const openRouterBaseUrl = "https://openrouter.ai/api/v1"
   const openRouterDefaultModel = "anthropic/claude-sonnet-4-6"
 
   const [apiKey, setApiKey] = useState(storedConfig.token)
@@ -287,7 +287,7 @@ export function ApiKeyOnboardingPage() {
             <Input
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder={isOpenRouter ? "https://openrouter.ai/api" : "https://api.anthropic.com"}
+              placeholder={isOpenRouter ? "https://openrouter.ai/api/v1" : "https://api.anthropic.com"}
               className="w-full"
               disabled={isOpenRouter}
             />

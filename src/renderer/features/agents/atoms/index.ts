@@ -286,6 +286,35 @@ export const subChatModelIdAtomFamily = atomFamily((subChatId: string) =>
   ),
 )
 
+// Storage for per-subChat OpenRouter model selection (separate from Claude model selection).
+// Stores the full OpenRouter model ID (e.g. "minimax/minimax-m2").
+const subChatOpenRouterModelStorageAtom = atomWithStorage<Record<string, string>>(
+  "agents:subChatOpenRouterModels",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
+export const subChatOpenRouterModelAtomFamily = atomFamily((subChatId: string) =>
+  atom(
+    (get): string | undefined => {
+      if (!subChatId) return undefined
+      return get(subChatOpenRouterModelStorageAtom)[subChatId] || undefined
+    },
+    (get, set, newModelId: string | undefined) => {
+      if (!subChatId) return
+      const current = get(subChatOpenRouterModelStorageAtom)
+      if (newModelId === undefined) {
+        const { [subChatId]: _removed, ...rest } = current
+        set(subChatOpenRouterModelStorageAtom, rest)
+      } else {
+        if (current[subChatId] === newModelId) return
+        set(subChatOpenRouterModelStorageAtom, { ...current, [subChatId]: newModelId })
+      }
+    },
+  ),
+)
+
 // Storage for all sub-chat modes (persisted per subChatId)
 const subChatModesStorageAtom = atomWithStorage<Record<string, AgentMode>>(
   "agents:subChatModes",
@@ -1143,6 +1172,7 @@ export function clearChatAtomCaches(chatId: string) {
  */
 export function clearSubChatAtomCaches(subChatId: string) {
   subChatModelIdAtomFamily.remove(subChatId)
+  subChatOpenRouterModelAtomFamily.remove(subChatId)
   subChatModeAtomFamily.remove(subChatId)
   currentTodosAtomFamily.remove(subChatId)
   currentTaskToolsAtomFamily.remove(subChatId)

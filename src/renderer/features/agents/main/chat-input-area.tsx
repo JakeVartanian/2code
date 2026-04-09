@@ -65,6 +65,7 @@ import {
   lastSelectedModelIdAtom,
   subChatModelIdAtomFamily,
   subChatModeAtomFamily,
+  subChatOpenRouterModelAtomFamily,
   getNextMode,
   type AgentMode,
   type SubChatFileChange,
@@ -488,7 +489,8 @@ export const ChatInputArea = memo(function ChatInputArea({
   const openRouterApiKey = useAtomValue(openRouterApiKeyAtom)
   const openRouterFreeOnly = useAtomValue(openRouterFreeOnlyAtom)
   const enabledOpenRouterModels = useAtomValue(enabledOpenRouterModelsAtom)
-  const [selectedOpenRouterModelId, setSelectedOpenRouterModelId] = useState<string | undefined>()
+  const subChatORModelAtom = useMemo(() => subChatOpenRouterModelAtomFamily(subChatId), [subChatId])
+  const [selectedOpenRouterModelId, setSelectedOpenRouterModelId] = useAtom(subChatORModelAtom)
 
   const filteredOpenRouterModels = useMemo(() => {
     let models = openRouterModels.filter((m) => enabledOpenRouterModels.includes(m.id))
@@ -538,16 +540,16 @@ export const ChatInputArea = memo(function ChatInputArea({
       return currentOllamaModel || "Ollama"
     }
 
-    if (hasCustomClaudeConfig) {
-      return "Custom Model"
-    }
-
-    // Check if an OpenRouter model is selected
+    // Check if an OpenRouter model is selected (takes priority over custom config label)
     if (selectedOpenRouterModelId && filteredOpenRouterModels.length > 0) {
       const orModel = filteredOpenRouterModels.find((m) => m.id === selectedOpenRouterModelId)
       if (orModel) {
         return orModel.name
       }
+    }
+
+    if (hasCustomClaudeConfig) {
+      return "Custom Model"
     }
 
     if (!selectedModel) {

@@ -11,6 +11,7 @@ import {
   enableTasksAtom,
   historyEnabledAtom,
   normalizeCustomClaudeConfig,
+  openRouterApiKeyAtom,
   selectedOllamaModelAtom,
   sessionInfoAtom,
   showOfflineModeFeaturesAtom,
@@ -27,6 +28,7 @@ import {
   pendingAuthRetryMessageAtom,
   pendingUserQuestionsAtom,
   subChatModelIdAtomFamily,
+  subChatOpenRouterModelAtomFamily,
 } from "../atoms"
 import { useAgentSubChatStore } from "../stores/sub-chat-store"
 import type { AgentMessageMetadata } from "../ui/agent-message-usage"
@@ -165,8 +167,16 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     // Read thinking config dynamically (so toggle applies to existing chats)
     const thinkingMode = appStore.get(thinkingModeAtom)
     const thinkingBudgetTokens = appStore.get(thinkingBudgetTokensAtom)
-    const thinkingConfig =
-      thinkingMode === "adaptive"
+    // Thinking is an Anthropic-only feature — disable it for non-Anthropic models to prevent crashes
+    const _selectedORModel = appStore.get(subChatOpenRouterModelAtomFamily(this.config.subChatId))
+    const _storedConfig = appStore.get(customClaudeConfigAtom) as CustomClaudeConfig
+    const _usingNonAnthropicConfig = Boolean(
+      _selectedORModel ||
+      (_storedConfig?.baseUrl && !_storedConfig.baseUrl.includes("api.anthropic.com"))
+    )
+    const thinkingConfig = _usingNonAnthropicConfig
+      ? ({ type: "disabled" as const })
+      : thinkingMode === "adaptive"
         ? ({ type: "adaptive" as const })
         : thinkingMode === "enabled"
           ? ({ type: "enabled" as const, budgetTokens: thinkingBudgetTokens })
@@ -187,10 +197,35 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     }
     const finalModelString = modelString || MODEL_ID_MAP["sonnet"]
 
+    // Check if user selected an OpenRouter model for this sub-chat
+    const selectedOpenRouterModelId = appStore.get(subChatOpenRouterModelAtomFamily(this.config.subChatId))
+
     const storedCustomConfig = appStore.get(
       customClaudeConfigAtom,
     ) as CustomClaudeConfig
-    const customConfig = normalizeCustomClaudeConfig(storedCustomConfig)
+
+    let customConfig: CustomClaudeConfig | undefined
+
+    if (selectedOpenRouterModelId) {
+      // Build OpenRouter customConfig using the selected model.
+      // Prefer the API key stored during onboarding (customClaudeConfigAtom.token when its baseUrl
+      // points at openrouter.ai), otherwise fall back to the separately-stored openRouterApiKeyAtom.
+      const isStoredConfigOpenRouter = storedCustomConfig?.baseUrl?.includes("openrouter.ai")
+      const openRouterToken =
+        (isStoredConfigOpenRouter ? storedCustomConfig.token : undefined) ||
+        appStore.get(openRouterApiKeyAtom) ||
+        ""
+
+      if (openRouterToken) {
+        customConfig = {
+          model: selectedOpenRouterModelId,
+          token: openRouterToken,
+          baseUrl: "https://openrouter.ai/api/v1",
+        }
+      }
+    } else {
+      customConfig = normalizeCustomClaudeConfig(storedCustomConfig)
+    }
 
     // Get selected Ollama model for offline mode
     const selectedOllamaModel = appStore.get(selectedOllamaModelAtom)
