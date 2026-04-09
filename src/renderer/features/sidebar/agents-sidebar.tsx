@@ -38,7 +38,7 @@ import {
 } from "../../lib/hooks/use-remote-chats"
 import { usePrefetchLocalChat } from "../../lib/hooks/use-prefetch-local-chat"
 import { ArchivePopover } from "../agents/ui/archive-popover"
-import { ChevronDown, MoreHorizontal, BarChart2, RefreshCw } from "lucide-react"
+import { ChevronDown, MoreHorizontal, BarChart2, RefreshCw, Boxes, CheckCircle2, Circle } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 // import { useRouter } from "next/navigation" // Desktop doesn't use next/navigation
 // import { useCombinedAuth } from "@/lib/hooks/use-combined-auth"
@@ -1103,6 +1103,129 @@ const ArchiveButton = memo(forwardRef<HTMLButtonElement, React.ButtonHTMLAttribu
     )
   }
 ))
+
+// Env Tools Button - shows CLI tools and API key presence for the current project
+const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPath?: string }) {
+  const [open, setOpen] = useState(false)
+  const [blockTooltip, setBlockTooltip] = useState(false)
+  const [tooltipOpen, setTooltipOpen] = useState(false)
+  const prevOpen = useRef(false)
+
+  const { data, isFetching, refetch } = trpc.envTools.check.useQuery(
+    { projectPath },
+    { enabled: open, staleTime: 5 * 60_000, retry: false }
+  )
+
+  useEffect(() => {
+    if (prevOpen.current && !open) {
+      setBlockTooltip(true)
+      const timer = setTimeout(() => setBlockTooltip(false), 300)
+      prevOpen.current = false
+      return () => clearTimeout(timer)
+    }
+    prevOpen.current = open
+  }, [open])
+
+  const presentCliTools = data?.cliTools.filter((t) => t.present) ?? []
+  const presentApiKeys = data?.apiKeys.filter((k) => k.present) ?? []
+  const totalPresent = presentCliTools.length + presentApiKeys.length
+
+  return (
+    <Tooltip open={open || blockTooltip ? false : tooltipOpen} onOpenChange={setTooltipOpen}>
+      <TooltipTrigger asChild>
+        <div>
+          <DropdownMenu open={open} onOpenChange={setOpen}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
+              >
+                <Boxes className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+
+            <DropdownMenuContent side="top" align="start" className="w-72 p-3" onCloseAutoFocus={(e) => e.preventDefault()}>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium text-foreground">Environment Tools</span>
+                <div className="flex items-center gap-2">
+                  {data && (
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {totalPresent} found
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => refetch()}
+                    disabled={isFetching}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <RefreshCw className={cn("h-3 w-3", isFetching && "animate-spin")} />
+                  </button>
+                </div>
+              </div>
+
+              {isFetching && !data && (
+                <div className="flex items-center justify-center py-4">
+                  <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+
+              {data && (
+                <div className="flex flex-col gap-3">
+                  {/* CLI Tools */}
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-1.5">CLI Tools</p>
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                      {data.cliTools.map((tool) => (
+                        <div key={tool.key} className="flex items-center gap-1.5 py-0.5">
+                          {tool.present ? (
+                            <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+                          ) : (
+                            <Circle className="h-3 w-3 shrink-0 text-muted-foreground/30" />
+                          )}
+                          <span className={cn("text-xs truncate", tool.present ? "text-foreground" : "text-muted-foreground/50")}>
+                            {tool.name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* API Keys */}
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-1.5">API Keys</p>
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                      {data.apiKeys.map((apiKey) => (
+                        <div key={apiKey.key} className="flex items-center gap-1.5 py-0.5">
+                          {apiKey.present ? (
+                            <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+                          ) : (
+                            <Circle className="h-3 w-3 shrink-0 text-muted-foreground/30" />
+                          )}
+                          <span className={cn("text-xs truncate", apiKey.present ? "text-foreground" : "text-muted-foreground/50")}>
+                            {apiKey.name}
+                          </span>
+                          {apiKey.present && apiKey.source === "project-env" && (
+                            <span className="text-[9px] text-muted-foreground/60 shrink-0">.env</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-muted-foreground/40 border-t border-border/50 pt-2">
+                    Values are never shown
+                  </p>
+                </div>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>Environment Tools</TooltipContent>
+    </Tooltip>
+  )
+})
 
 // Usage Button - shows Claude subscription usage popover
 const UsageButton = memo(function UsageButton() {
@@ -3302,6 +3425,9 @@ export function AgentsSidebar({
                   </TooltipTrigger>
                   <TooltipContent>Settings{settingsHotkey && <> <Kbd>{settingsHotkey}</Kbd></>}</TooltipContent>
                 </Tooltip>
+
+                {/* Env Tools Button - shows CLI tools and API key availability */}
+                <EnvToolsButton projectPath={selectedProject?.path ?? undefined} />
 
                 {/* Usage Button - shows Claude subscription usage */}
                 <UsageButton />
