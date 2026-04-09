@@ -3600,17 +3600,17 @@ const ChatViewInner = memo(function ChatViewInner({
           }
         }
       }
-      // Validate Chat object state before calling regenerate
-      // The @ai-sdk/react Chat SDK has a bug where state can be undefined
+      // Validate Chat object is ready before calling regenerate.
+      // @ai-sdk/react's Chat.makeRequest accesses internal store state that may be
+      // undefined if the Chat hasn't fully initialized. regenerate() is async so
+      // try-catch won't catch rejections — use .catch() instead.
       const chat = agentChatStore.get(subChatId)
-      if (chat && (chat as any).state) {
-        try {
-          regenerateRef.current()
-        } catch (error) {
+      if (chat) {
+        regenerateRef.current().catch((error: unknown) => {
           console.error("[active-chat] Auto-regenerate failed:", error)
           // Reset flag so user can manually retry
           hasTriggeredAutoGenerateRef.current = false
-        }
+        })
       } else {
         // Chat not ready yet, will retry on next effect
         hasTriggeredAutoGenerateRef.current = false
