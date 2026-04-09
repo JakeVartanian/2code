@@ -153,13 +153,6 @@ export function AgentModelSelector({
     [onOpenChange],
   )
 
-  const triggerIcon =
-    claude.isOffline && claude.ollamaModels.length > 0 ? (
-      <Zap className="h-4 w-4" />
-    ) : (
-      <ClaudeCodeIcon className="h-3.5 w-3.5" />
-    )
-
   const isItemSelected = (item: FlatModelItem): boolean => {
     switch (item.type) {
       case "claude":
@@ -240,12 +233,11 @@ export function AgentModelSelector({
       <PopoverTrigger asChild>
         <button
           className={cn(
-            "flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground transition-[background-color,color] duration-150 ease-out rounded-md outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
+            "flex items-center gap-1 px-1.5 py-0.5 text-xs text-muted-foreground transition-[background-color,color] duration-150 ease-out rounded outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
             "hover:text-foreground hover:bg-muted/50",
             triggerClassName,
           )}
         >
-          {triggerIcon}
           <span className="truncate">{selectedModelLabel}</span>
           <IconChevronDown className="h-3 w-3 shrink-0 opacity-50" />
         </button>

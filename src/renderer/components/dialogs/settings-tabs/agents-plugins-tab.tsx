@@ -5,7 +5,7 @@ import { settingsPluginsSidebarWidthAtom } from "../../../features/agents/atoms"
 import { agentsSettingsDialogActiveTabAtom, type SettingsTab } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
-import { Terminal, ChevronRight, Loader2 } from "lucide-react"
+import { Terminal, ChevronRight, Loader2, Download, Search } from "lucide-react"
 import { PluginFilledIcon, SkillIconFilled, CustomAgentIconFilled, OriginalMCPIcon } from "../../ui/icons"
 import { Button } from "../../ui/button"
 import { Label } from "../../ui/label"
@@ -285,8 +285,132 @@ function PluginListItem({
   )
 }
 
+// --- Discover Tab ---
+function DiscoverTab() {
+  const [searchQuery, setSearchQuery] = useState("")
+  const [installingSource, setInstallingSource] = useState<string | null>(null)
+
+  const { data: marketplacePlugins = [], isLoading, refetch } = trpc.plugins.listMarketplace.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+  })
+  const installMutation = trpc.plugins.install.useMutation()
+  const clearCacheMutation = trpc.plugins.clearCache.useMutation()
+
+  const filteredPlugins = useMemo(() => {
+    const uninstalled = marketplacePlugins.filter((p) => !p.isInstalled)
+    if (!searchQuery.trim()) return uninstalled
+    const q = searchQuery.toLowerCase()
+    return uninstalled.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.description?.toLowerCase().includes(q) ||
+        p.category?.toLowerCase().includes(q) ||
+        p.marketplace.toLowerCase().includes(q),
+    )
+  }, [marketplacePlugins, searchQuery])
+
+  const handleInstall = useCallback(async (source: string, name: string) => {
+    setInstallingSource(source)
+    try {
+      await installMutation.mutateAsync({ source })
+      await clearCacheMutation.mutateAsync()
+      toast.success(`${formatPluginName(name)} installed and enabled`)
+      await refetch()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Install failed")
+    } finally {
+      setInstallingSource(null)
+    }
+  }, [installMutation, clearCacheMutation, refetch])
+
+  // Group by marketplace
+  const grouped = useMemo(() => {
+    const groups = new Map<string, typeof filteredPlugins>()
+    for (const p of filteredPlugins) {
+      const existing = groups.get(p.marketplace) || []
+      existing.push(p)
+      groups.set(p.marketplace, existing)
+    }
+    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b))
+  }, [filteredPlugins])
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="px-4 pt-3 pb-2 flex-shrink-0">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50 pointer-events-none" />
+          <input
+            placeholder="Search plugins..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-8 w-full rounded-lg text-sm bg-muted border border-input pl-8 pr-3 placeholder:text-muted-foreground/40 outline-none"
+          />
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 pb-4">
+        {isLoading ? (
+          <div className="flex items-center justify-center h-32">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : filteredPlugins.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-32 text-center">
+            <p className="text-sm text-muted-foreground">
+              {searchQuery ? "No results found" : "All plugins are installed"}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {grouped.map(([marketplace, plugins]) => (
+              <div key={marketplace}>
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                  {marketplace}
+                </p>
+                <div className="space-y-1">
+                  {plugins.map((plugin) => (
+                    <div
+                      key={plugin.source}
+                      className="flex items-start gap-3 rounded-md border border-border bg-background px-3 py-2.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-foreground">{formatPluginName(plugin.name)}</p>
+                        {plugin.description && (
+                          <p className="text-[11px] text-muted-foreground/70 mt-0.5 line-clamp-2">{plugin.description}</p>
+                        )}
+                        {plugin.category && (
+                          <p className="text-[10px] text-muted-foreground/50 mt-1 capitalize">{plugin.category}</p>
+                        )}
+                      </div>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="h-7 px-2.5 text-xs shrink-0 mt-0.5"
+                        disabled={installingSource === plugin.source}
+                        onClick={() => handleInstall(plugin.source, plugin.name)}
+                      >
+                        {installingSource === plugin.source ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <>
+                            <Download className="h-3 w-3 mr-1" />
+                            Install
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // --- Main Component ---
 export function AgentsPluginsTab() {
+  const [activeView, setActiveView] = useState<"installed" | "discover">("installed")
   const [selectedPluginSource, setSelectedPluginSource] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -437,8 +561,67 @@ export function AgentsPluginsTab() {
     }
   }, [setPluginEnabledMutation, approveAllMutation, revokeAllMutation, refetch])
 
+  if (activeView === "discover") {
+    return (
+      <div className="flex flex-col h-full overflow-hidden">
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 px-3 pt-2 pb-1 border-b flex-shrink-0" style={{ borderBottomWidth: "0.5px" }}>
+          <button
+            onClick={() => setActiveView("installed")}
+            className={cn(
+              "px-2.5 py-1 text-xs rounded-md transition-colors",
+              activeView === "installed"
+                ? "bg-foreground/10 text-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+            )}
+          >
+            Installed
+          </button>
+          <button
+            onClick={() => setActiveView("discover")}
+            className={cn(
+              "px-2.5 py-1 text-xs rounded-md transition-colors",
+              activeView === "discover"
+                ? "bg-foreground/10 text-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+            )}
+          >
+            Discover
+          </button>
+        </div>
+        <DiscoverTab />
+      </div>
+    )
+  }
+
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 px-3 pt-2 pb-1 border-b flex-shrink-0" style={{ borderBottomWidth: "0.5px" }}>
+        <button
+          onClick={() => setActiveView("installed")}
+          className={cn(
+            "px-2.5 py-1 text-xs rounded-md transition-colors",
+            activeView === "installed"
+              ? "bg-foreground/10 text-foreground font-medium"
+              : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+          )}
+        >
+          Installed
+        </button>
+        <button
+          onClick={() => setActiveView("discover")}
+          className={cn(
+            "px-2.5 py-1 text-xs rounded-md transition-colors",
+            activeView === "discover"
+              ? "bg-foreground/10 text-foreground font-medium"
+              : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+          )}
+        >
+          Discover
+        </button>
+      </div>
+    <div className="flex flex-1 overflow-hidden">
       {/* Left sidebar - plugin list */}
       <ResizableSidebar
         isOpen={true}
@@ -555,6 +738,7 @@ export function AgentsPluginsTab() {
           </div>
         )}
       </div>
+    </div>
     </div>
   )
 }

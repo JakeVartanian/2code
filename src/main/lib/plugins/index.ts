@@ -37,6 +37,28 @@ export interface PluginMcpConfig {
   mcpServers: Record<string, McpServerConfig>
 }
 
+interface InstalledPluginEntry {
+  scope: string
+  installPath: string
+  version: string
+  installedAt: string
+  lastUpdated: string
+  gitCommitSha?: string
+}
+
+export interface InstalledPluginsJson {
+  version: number
+  plugins: Record<string, InstalledPluginEntry[]>
+}
+
+interface MarketplacePluginSource {
+  source: string
+  url?: string
+  path?: string
+  ref?: string
+  sha?: string
+}
+
 // Cache for plugin discovery results
 let pluginCache: { plugins: PluginInfo[]; timestamp: number } | null = null
 let mcpCache: { configs: PluginMcpConfig[]; timestamp: number } | null = null
@@ -51,8 +73,69 @@ export function clearPluginCache() {
 }
 
 /**
- * Discover all installed plugins from ~/.claude/plugins/marketplaces/
- * Returns array of plugin info with paths to their component directories
+ * Read the installed_plugins.json file from ~/.claude/plugins/
+ */
+async function readInstalledPluginsJson(): Promise<InstalledPluginsJson | null> {
+  const jsonPath = path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json")
+  try {
+    const content = await fs.readFile(jsonPath, "utf-8")
+    return JSON.parse(content) as InstalledPluginsJson
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Write the installed_plugins.json file
+ */
+export async function writeInstalledPluginsJson(data: InstalledPluginsJson): Promise<void> {
+  const jsonPath = path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json")
+  await fs.mkdir(path.dirname(jsonPath), { recursive: true })
+  await fs.writeFile(jsonPath, JSON.stringify(data, null, 2), "utf-8")
+}
+
+/**
+ * Build a map of marketplace name -> plugin definitions from marketplace.json files
+ */
+async function buildMarketplacePluginMap(): Promise<Map<string, { marketplaceName: string; plugin: MarketplacePlugin }>> {
+  const map = new Map<string, { marketplaceName: string; plugin: MarketplacePlugin }>()
+  const marketplacesDir = path.join(os.homedir(), ".claude", "plugins", "marketplaces")
+
+  let marketplaces: Dirent[]
+  try {
+    marketplaces = await fs.readdir(marketplacesDir, { withFileTypes: true })
+  } catch {
+    return map
+  }
+
+  for (const marketplace of marketplaces) {
+    if (marketplace.name.startsWith(".")) continue
+    const isDir = await isDirentDirectory(marketplacesDir, marketplace)
+    if (!isDir) continue
+
+    const marketplaceJsonPath = path.join(marketplacesDir, marketplace.name, ".claude-plugin", "marketplace.json")
+    try {
+      const content = await fs.readFile(marketplaceJsonPath, "utf-8")
+      const marketplaceJson: MarketplaceJson = JSON.parse(content)
+      if (!Array.isArray(marketplaceJson.plugins)) continue
+
+      for (const plugin of marketplaceJson.plugins) {
+        const key = `${marketplaceJson.name}:${plugin.name}`
+        map.set(key, { marketplaceName: marketplaceJson.name, plugin })
+      }
+    } catch {
+      // skip
+    }
+  }
+
+  return map
+}
+
+/**
+ * Discover all installed plugins from:
+ * 1. ~/.claude/plugins/marketplaces/ (path-based plugins, local subdirs)
+ * 2. ~/.claude/plugins/installed_plugins.json (URL-based plugins cloned to cache)
+ *
  * Results are cached for 30 seconds to avoid repeated filesystem scans
  */
 export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
@@ -62,30 +145,22 @@ export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
   }
 
   const plugins: PluginInfo[] = []
+  const discoveredSources = new Set<string>()
   const marketplacesDir = path.join(os.homedir(), ".claude", "plugins", "marketplaces")
 
+  // --- Pass 1: Path-based plugins from marketplace subdirectories ---
+  let marketplaces: Dirent[] = []
   try {
     await fs.access(marketplacesDir)
-  } catch {
-    pluginCache = { plugins, timestamp: Date.now() }
-    return plugins
-  }
-
-  let marketplaces: Dirent[]
-  try {
     marketplaces = await fs.readdir(marketplacesDir, { withFileTypes: true })
   } catch {
-    pluginCache = { plugins, timestamp: Date.now() }
-    return plugins
+    // marketplaces dir doesn't exist, skip
   }
 
   for (const marketplace of marketplaces) {
     if (marketplace.name.startsWith(".")) continue
 
-    const isMarketplaceDir = await isDirentDirectory(
-      marketplacesDir,
-      marketplace,
-    )
+    const isMarketplaceDir = await isDirentDirectory(marketplacesDir, marketplace)
     if (!isMarketplaceDir) continue
 
     const marketplacePath = path.join(marketplacesDir, marketplace.name)
@@ -93,7 +168,6 @@ export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
 
     try {
       const content = await fs.readFile(marketplaceJsonPath, "utf-8")
-
       let marketplaceJson: MarketplaceJson
       try {
         marketplaceJson = JSON.parse(content)
@@ -101,15 +175,11 @@ export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
         continue
       }
 
-      if (!Array.isArray(marketplaceJson.plugins)) {
-        continue
-      }
+      if (!Array.isArray(marketplaceJson.plugins)) continue
 
       for (const plugin of marketplaceJson.plugins) {
-        // Validate plugin.source exists
         if (!plugin.source) continue
-
-        // source can be a string path or an object { source: "url", url: "..." }
+        // Only handle string-path sources here (URL-based handled below)
         const sourcePath = typeof plugin.source === "string" ? plugin.source : null
         if (!sourcePath) continue
 
@@ -117,12 +187,14 @@ export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
         try {
           const pluginStat = await fs.stat(pluginPath)
           if (!pluginStat.isDirectory()) continue
+          const source = `${marketplaceJson.name}:${plugin.name}`
+          discoveredSources.add(source)
           plugins.push({
             name: plugin.name,
             version: plugin.version || "0.0.0",
             description: plugin.description,
             path: pluginPath,
-            source: `${marketplaceJson.name}:${plugin.name}`,
+            source,
             marketplace: marketplaceJson.name,
             category: plugin.category,
             homepage: plugin.homepage,
@@ -133,7 +205,54 @@ export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
         }
       }
     } catch {
-      // No marketplace.json, skip silently (expected for non-plugin directories)
+      // No marketplace.json, skip silently
+    }
+  }
+
+  // --- Pass 2: URL-based plugins from installed_plugins.json ---
+  const installedJson = await readInstalledPluginsJson()
+  if (installedJson?.plugins) {
+    const marketplaceMap = await buildMarketplacePluginMap()
+
+    for (const [key, entries] of Object.entries(installedJson.plugins)) {
+      // Skip if already discovered via path scan
+      if (discoveredSources.has(key)) continue
+
+      // Get the most recent install (last entry in array)
+      const entry = entries[entries.length - 1]
+      if (!entry?.installPath) continue
+
+      // Verify the install directory exists
+      try {
+        const stat = await fs.stat(entry.installPath)
+        if (!stat.isDirectory()) continue
+      } catch {
+        continue // not installed / path missing
+      }
+
+      // Parse marketplace and plugin name from key (e.g., "superpowers@claude-plugins-official")
+      const atIdx = key.lastIndexOf("@")
+      if (atIdx === -1) continue
+      const pluginName = key.slice(0, atIdx)
+      const marketplaceName = key.slice(atIdx + 1)
+      const canonicalSource = `${marketplaceName}:${pluginName}`
+
+      // Look up metadata from marketplace
+      const marketplaceEntry = marketplaceMap.get(canonicalSource)
+      const pluginMeta = marketplaceEntry?.plugin
+
+      plugins.push({
+        name: pluginName,
+        version: entry.gitCommitSha ? entry.gitCommitSha.slice(0, 7) : entry.version || "0.0.0",
+        description: pluginMeta?.description,
+        path: entry.installPath,
+        source: canonicalSource,
+        marketplace: marketplaceName,
+        category: pluginMeta?.category,
+        homepage: pluginMeta?.homepage,
+        tags: pluginMeta?.tags,
+      })
+      discoveredSources.add(canonicalSource)
     }
   }
 

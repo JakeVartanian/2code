@@ -1012,7 +1012,7 @@ type UsageSuccess = {
 type UsageError = { error: "not_authenticated" | "rate_limited" | "fetch_failed" }
 type UsageResult = UsageSuccess | UsageError
 
-async function callUsageApi(token: string): Promise<{ status: number; data?: unknown }> {
+async function callUsageApi(token: string): Promise<{ status: number; data?: unknown; errorBody?: string }> {
   const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
     method: "GET",
     headers: {
@@ -1022,8 +1022,10 @@ async function callUsageApi(token: string): Promise<{ status: number; data?: unk
     },
   })
   if (!response.ok) {
-    console.log(`[usage] API returned ${response.status}`)
-    return { status: response.status }
+    let errorBody = ""
+    try { errorBody = await response.text() } catch { /* ignore */ }
+    console.log(`[usage] API returned ${response.status}: ${errorBody}`)
+    return { status: response.status, errorBody }
   }
   return { status: response.status, data: await response.json() }
 }
@@ -1052,6 +1054,9 @@ async function fetchUsageWithRetry(
 
     if (first.data) return parseUsageResponse(first.data)
 
+    // 401 without a refresh token means we can't recover — not authenticated
+    if (first.status === 401 && !refreshToken) return { error: "not_authenticated" }
+
     // On 401 or 429, try refreshing (rate limits are per-access-token)
     if ((first.status === 401 || first.status === 429) && refreshToken) {
       try {
@@ -1059,9 +1064,11 @@ async function fetchUsageWithRetry(
         const refreshed = await refreshClaudeToken(refreshToken)
         const retry = await callUsageApi(refreshed.accessToken)
         if (retry.data) return parseUsageResponse(retry.data)
+        if (retry.status === 401) return { error: "not_authenticated" }
         if (retry.status === 429) return { error: "rate_limited" }
       } catch (e) {
         console.log("[usage] Token refresh failed:", e)
+        if (first.status === 401) return { error: "not_authenticated" }
       }
     }
 
@@ -2279,11 +2286,28 @@ ${prompt}
               messageCount = 0
               pendingFinishChunk = null
 
+              // Guard: if aborted during async setup (env build, symlinks, etc.) bail silently
+              if (abortController.signal.aborted) {
+                console.log(
+                  `[SD] M:END sub=${subId} reason=aborted_before_query`,
+                )
+                safeComplete()
+                return
+              }
+
               // 5. Run Claude SDK
               let stream
               try {
                 stream = claudeQuery(queryOptions)
               } catch (queryError) {
+                // If the signal was aborted, this is expected — bail silently
+                if (abortController.signal.aborted) {
+                  console.log(
+                    `[SD] M:END sub=${subId} reason=aborted_during_query_start`,
+                  )
+                  safeComplete()
+                  return
+                }
                 console.error(
                   "[CLAUDE] ✗ Failed to create SDK query:",
                   queryError,
@@ -3512,6 +3536,10 @@ ${prompt}
     if (!accessToken) {
       return { error: "not_authenticated" as const }
     }
+
+    const tokenSource = keychainCreds?.accessToken ? "keychain" : "app-db"
+    const tokenScopes = keychainCreds?.scopes ?? []
+    console.log(`[usage] token source=${tokenSource} scopes=[${tokenScopes.join(",")}] hasRefresh=${!!(keychainCreds?.refreshToken ?? getStoredRefreshToken())}`)
 
     // Resolve refresh token: keychain first, then app DB (stored during OAuth exchange)
     const refreshToken = keychainCreds?.refreshToken ?? getStoredRefreshToken() ?? undefined
