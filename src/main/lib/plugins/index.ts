@@ -215,9 +215,6 @@ export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
     const marketplaceMap = await buildMarketplacePluginMap()
 
     for (const [key, entries] of Object.entries(installedJson.plugins)) {
-      // Skip if already discovered via path scan
-      if (discoveredSources.has(key)) continue
-
       // Get the most recent install (last entry in array)
       const entry = entries[entries.length - 1]
       if (!entry?.installPath) continue
@@ -236,6 +233,9 @@ export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
       const pluginName = key.slice(0, atIdx)
       const marketplaceName = key.slice(atIdx + 1)
       const canonicalSource = `${marketplaceName}:${pluginName}`
+
+      // Skip if already discovered via path scan (compare using canonical format)
+      if (discoveredSources.has(canonicalSource)) continue
 
       // Look up metadata from marketplace
       const marketplaceEntry = marketplaceMap.get(canonicalSource)
