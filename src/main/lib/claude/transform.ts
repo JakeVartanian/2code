@@ -457,6 +457,7 @@ export function createTransformer(options?: { isUsingOllama?: boolean }) {
             : undefined,
         totalCostUsd: msg.total_cost_usd,
         durationMs: startTime ? Date.now() - startTime : undefined,
+        startedAt: startTime ?? undefined,
         resultSubtype: msg.subtype || "success",
         // Include finalTextId for collapsing tools when there's a final response
         finalTextId: lastTextId || undefined,

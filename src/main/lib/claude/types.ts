@@ -78,6 +78,7 @@ export type MessageMetadata = {
   totalTokens?: number
   totalCostUsd?: number
   durationMs?: number
+  startedAt?: number
   resultSubtype?: string
   finalTextId?: string
 }

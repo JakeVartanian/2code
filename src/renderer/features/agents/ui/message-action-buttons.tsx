@@ -18,6 +18,7 @@ import {
   PLAYBACK_SPEEDS,
   type PlaybackSpeed,
 } from "../stores/message-store"
+import { formatDuration } from "./agent-message-usage"
 
 // ============================================================================
 // COPY BUTTON - Memoized component for copying text
@@ -412,3 +413,39 @@ export function getMessageTextContent(msg: any): string {
     .map((p: any) => p.text || "")
     .join("\n")
 }
+
+// ============================================================================
+// MESSAGE TIMESTAMP - shows start time + duration after streaming completes
+// ============================================================================
+
+interface MessageTimestampProps {
+  startedAt?: number
+  durationMs?: number
+}
+
+export const MessageTimestamp = memo(function MessageTimestamp({
+  startedAt,
+  durationMs,
+}: MessageTimestampProps) {
+  if (startedAt == null && durationMs == null) return null
+
+  const timeStr =
+    startedAt != null
+      ? new Date(startedAt).toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : null
+
+  const durationStr = durationMs != null && durationMs > 0 ? formatDuration(durationMs) : null
+
+  if (!timeStr && !durationStr) return null
+
+  return (
+    <span className="ml-1 text-[10px] text-muted-foreground/50 font-mono select-none tabular-nums">
+      {timeStr}
+      {timeStr && durationStr && <span className="mx-1 text-muted-foreground/30">·</span>}
+      {durationStr}
+    </span>
+  )
+})

@@ -20,6 +20,7 @@ export interface AgentMessageMetadata {
   cacheCreationInputTokens?: number
   finalTextId?: string
   durationMs?: number
+  startedAt?: number
   resultSubtype?: string
 }
 
@@ -36,7 +37,7 @@ function formatTokens(tokens: number): string {
   return tokens.toString()
 }
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms < 1000) {
     return `${ms}ms`
   }

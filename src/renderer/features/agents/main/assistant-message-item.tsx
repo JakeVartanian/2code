@@ -43,6 +43,7 @@ import { AgentWebSearchCollapsible } from "../ui/agent-web-search-collapsible"
 import {
   CopyButton,
   PlayButton,
+  MessageTimestamp,
   getMessageTextContent,
 } from "../ui/message-action-buttons"
 import { useFileOpen } from "../mentions"
@@ -841,6 +842,10 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
             <PlayButton
               text={getMessageTextContent(message)}
               isMobile={isMobile}
+            />
+            <MessageTimestamp
+              startedAt={msgMetadata?.startedAt}
+              durationMs={msgMetadata?.durationMs}
             />
           </div>
           <div className="flex items-center gap-0.5">
