@@ -225,6 +225,8 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
           token: openRouterToken,
           baseUrl: "https://openrouter.ai/api/v1",
         }
+      } else {
+        console.error(`[ipc-chat-transport] OpenRouter model "${selectedOpenRouterModelId}" selected but no API key found. The request will fail.`)
       }
     } else {
       customConfig = normalizeCustomClaudeConfig(storedCustomConfig)
