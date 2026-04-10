@@ -205,33 +205,22 @@ bun run dev
 # 1. Bump version
 npm version patch --no-git-tag-version   # e.g. 0.0.80 → 0.0.81
 
-# 2. Build, sign, package (takes ~5 min)
-bun run release    # runs: claude:download + build + package:mac + dist:manifest + upload
+# 2. Build, sign, notarize, generate manifests, and upload (takes ~10 min)
+bun run release    # runs: claude:download + build + package:mac + notarize + dist:manifest + upload
 
 # OR step by step:
 bun run claude:download          # update bundled Claude CLI binary
 bun run build                    # compile TypeScript
 bun run package:mac              # build + codesign arm64 & x64 DMGs/ZIPs
+./scripts/notarize-release.sh    # notarize + staple both DMGs (5-15 min)
+bun run dist:manifest            # generate latest-mac.yml manifests
+./scripts/upload-release-wrangler.sh  # upload to R2 CDN
 
-# 3. Notarize (submit both DMGs, wait for Apple)
-xcrun notarytool submit release/2Code-$VERSION-arm64.dmg --keychain-profile "2code-notarize" --wait
-xcrun notarytool submit release/2Code-$VERSION.dmg       --keychain-profile "2code-notarize" --wait
-
-# 4. Staple notarization ticket to DMGs
-xcrun stapler staple release/2Code-$VERSION-arm64.dmg
-xcrun stapler staple release/2Code-$VERSION.dmg
-
-# 5. Generate latest-mac.yml manifests
-bun run dist:manifest
-
-# 6. Upload everything to R2 (ZIPs first, manifests last — manifests trigger auto-updates)
-./scripts/upload-release-wrangler.sh
-
-# 7. Generate release notes and create GitHub release
+# 3. Generate release notes and create GitHub release
 # Run /release-notes in 2Code, then:
 gh release create v$VERSION --title "2Code v$VERSION" --notes "..."
 
-# 8. Sync code to public repo
+# 4. Sync code to public repo
 ./scripts/sync-to-public.sh
 ```
 

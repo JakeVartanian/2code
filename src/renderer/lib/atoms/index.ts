@@ -434,14 +434,6 @@ export const thinkingModeAtom = atomWithStorage<ThinkingMode>(
   { getOnInit: true },
 )
 
-// Token budget for "enabled" mode (only used when thinkingMode === "enabled")
-export const thinkingBudgetTokensAtom = atomWithStorage<number>(
-  "preferences:thinking-budget-tokens",
-  8_000,
-  undefined,
-  { getOnInit: true },
-)
-
 // Backwards-compatible derived atom for code that still reads the boolean
 export const extendedThinkingEnabledAtom = atom(
   (get) => get(thinkingModeAtom) !== "disabled",

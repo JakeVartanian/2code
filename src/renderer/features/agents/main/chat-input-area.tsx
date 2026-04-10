@@ -55,7 +55,6 @@ import {
   openRouterModelsAtom,
   selectedOllamaModelAtom,
   showOfflineModeFeaturesAtom,
-  thinkingBudgetTokensAtom,
   thinkingModeAtom,
   type EffortLevel,
 } from "../../../lib/atoms"
@@ -529,7 +528,6 @@ export const ChatInputArea = memo(function ChatInputArea({
   // Extended thinking (reasoning) toggle
   const [thinkingEnabled, setThinkingEnabled] = useAtom(extendedThinkingEnabledAtom)
   const thinkingMode = useAtomValue(thinkingModeAtom)
-  const [thinkingBudget, setThinkingBudget] = useAtom(thinkingBudgetTokensAtom)
 
   // Effort level control
   const [effortLevel, setEffortLevel] = useAtom(effortLevelAtom)
@@ -708,13 +706,12 @@ export const ChatInputArea = memo(function ChatInputArea({
         currentModelId: selectedModel?.id || "sonnet",
         currentEffort: effortLevel,
         currentThinkingMode: thinkingMode,
-        currentThinkingBudget: thinkingBudget,
       })
       setModelSuggestion(result.modelRecommendation)
       setSettingsRecommendations(result.settingsRecommendations)
       setSuggestionDismissed(false)
     }, 600)
-  }, [hasCustomClaudeConfig, availableModels.isOffline, subChatMode, messageTokenData.messageCount, selectedModel?.id, effortLevel, thinkingMode, thinkingBudget])
+  }, [hasCustomClaudeConfig, availableModels.isOffline, subChatMode, messageTokenData.messageCount, selectedModel?.id, effortLevel, thinkingMode])
 
   // Clean up debounce on unmount
   useEffect(() => {

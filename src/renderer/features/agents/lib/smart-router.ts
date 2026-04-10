@@ -306,7 +306,6 @@ export function recommendSettings(
   complexity: TaskComplexity,
   currentEffort: EffortLevel,
   currentThinkingMode: ThinkingMode,
-  currentThinkingBudget?: number,
 ): SettingsRecommendation[] {
   const suggestions: SettingsRecommendation[] = []
 
@@ -329,27 +328,6 @@ export function recommendSettings(
     })
   }
 
-  // Thinking budget adjustments (only when mode is "enabled" with explicit budget)
-  if (currentThinkingMode === "enabled" && currentThinkingBudget) {
-    if (complexity === "simple" && currentThinkingBudget > 8_000) {
-      suggestions.push({
-        type: "thinking",
-        current: `${Math.round(currentThinkingBudget / 1000)}k tokens`,
-        suggested: "adaptive",
-        reason: "Adaptive thinking auto-scales for simple tasks",
-      })
-    }
-
-    if (complexity === "complex" && currentThinkingBudget < 16_000) {
-      suggestions.push({
-        type: "thinking",
-        current: `${Math.round(currentThinkingBudget / 1000)}k tokens`,
-        suggested: "32k tokens",
-        reason: "Complex tasks benefit from deeper reasoning",
-      })
-    }
-  }
-
   return suggestions
 }
 
@@ -367,7 +345,6 @@ export function analyzeTask(
     currentModelId: string
     currentEffort: EffortLevel
     currentThinkingMode: ThinkingMode
-    currentThinkingBudget?: number
   },
 ): SmartRouterResult {
   const complexity = classifyTaskComplexity(prompt, context)
@@ -376,7 +353,6 @@ export function analyzeTask(
     complexity,
     context.currentEffort,
     context.currentThinkingMode,
-    context.currentThinkingBudget,
   )
 
   return {

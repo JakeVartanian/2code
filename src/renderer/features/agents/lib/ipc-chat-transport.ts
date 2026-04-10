@@ -15,7 +15,6 @@ import {
   selectedOllamaModelAtom,
   sessionInfoAtom,
   showOfflineModeFeaturesAtom,
-  thinkingBudgetTokensAtom,
   thinkingModeAtom,
 } from "../../../lib/atoms"
 import { appStore } from "../../../lib/jotai-store"
@@ -86,6 +85,11 @@ const ERROR_TOAST_CONFIG: Record<
     title: "Claude is busy",
     description:
       "The service is overloaded. Please try again in a few moments.",
+  },
+  CPU_INCOMPATIBLE: {
+    title: "CPU not supported",
+    description:
+      "Your Mac's Intel CPU lacks AVX instructions required by the Claude runtime. Please update 2Code to the latest version for improved compatibility.",
   },
   PROCESS_CRASH: {
     title: "Claude crashed",
@@ -166,7 +170,6 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     // Read thinking config dynamically (so toggle applies to existing chats)
     const thinkingMode = appStore.get(thinkingModeAtom)
-    const thinkingBudgetTokens = appStore.get(thinkingBudgetTokensAtom)
     // Thinking is an Anthropic-only feature — disable it for non-Anthropic models to prevent crashes
     const _selectedORModel = appStore.get(subChatOpenRouterModelAtomFamily(this.config.subChatId))
     const _storedConfig = appStore.get(customClaudeConfigAtom) as CustomClaudeConfig
@@ -179,7 +182,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
       : thinkingMode === "adaptive"
         ? ({ type: "adaptive" as const })
         : thinkingMode === "enabled"
-          ? ({ type: "enabled" as const, budgetTokens: thinkingBudgetTokens })
+          ? ({ type: "enabled" as const })
           : ({ type: "disabled" as const })
 
     // Read effort level dynamically

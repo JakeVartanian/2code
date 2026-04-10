@@ -1237,9 +1237,16 @@ const UsageButton = memo(function UsageButton() {
 
   const { data, isFetching, refetch } = trpc.claude.getUsage.useQuery(undefined, {
     enabled: open,
-    staleTime: 60_000,
-    retry: false,
+    staleTime: 0, // Always fetch fresh data when popover opens
+    retry: 1, // Retry once on failure
   })
+
+  // Auto-fetch when popover opens
+  useEffect(() => {
+    if (open && !isFetching && !data) {
+      refetch()
+    }
+  }, [open, isFetching, data, refetch])
 
   const handleRefetch = useCallback(() => {
     const now = Date.now()

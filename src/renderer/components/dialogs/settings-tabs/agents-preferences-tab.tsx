@@ -9,7 +9,6 @@ import {
   notifyWhenFocusedAtom,
   soundNotificationsEnabledAtom,
   preferredEditorAtom,
-  thinkingBudgetTokensAtom,
   thinkingModeAtom,
   toolVerbosityAtom,
   type AgentMode,
@@ -20,7 +19,6 @@ import {
   type ToolVerbosity,
 } from "../../../lib/atoms"
 import { APP_META, type ExternalApp } from "../../../../shared/external-apps"
-import { ThinkingBudgetVisualizer } from "../../../features/agents/components/thinking-budget-visualizer"
 
 // Editor icon imports
 import cursorIcon from "../../../assets/app-icons/cursor.png"
@@ -150,7 +148,6 @@ function useIsNarrowScreen(): boolean {
 
 export function AgentsPreferencesTab() {
   const [thinkingMode, setThinkingMode] = useAtom(thinkingModeAtom)
-  const [thinkingBudget, setThinkingBudget] = useAtom(thinkingBudgetTokensAtom)
   const [effortLevel, setEffortLevel] = useAtom(effortLevelAtom)
   const [soundEnabled, setSoundEnabled] = useAtom(soundNotificationsEnabledAtom)
   const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useAtom(desktopNotificationsEnabledAtom)
@@ -221,22 +218,6 @@ export function AgentsPreferencesTab() {
             ))}
           </div>
         </div>
-        {thinkingMode === "enabled" && (
-          <div className="p-4 border-t border-border space-y-2">
-            <div className="flex flex-col space-y-1">
-              <span className="text-sm font-medium text-foreground">
-                Thinking Budget
-              </span>
-              <span className="text-xs text-muted-foreground">
-                Max tokens for thinking ({(thinkingBudget / 1000).toFixed(0)}k)
-              </span>
-            </div>
-            <ThinkingBudgetVisualizer
-              budget={thinkingBudget}
-              onBudgetChange={setThinkingBudget}
-            />
-          </div>
-        )}
         <div className="flex items-center justify-between p-4 border-t border-border">
           <div className="flex flex-col space-y-1">
             <span className="text-sm font-medium text-foreground">
