@@ -639,9 +639,6 @@ export const ChatInputArea = memo(function ChatInputArea({
     updateMode(getNextMode(subChatMode))
   }, [subChatMode, updateMode])
 
-  // Browser access toggle
-  const [browserAccessEnabled, setBrowserAccessEnabled] = useAtom(browserAccessEnabledAtom)
-
   // Voice input state
   const {
     isRecording: isVoiceRecording,

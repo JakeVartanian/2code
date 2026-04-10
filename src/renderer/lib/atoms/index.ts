@@ -198,6 +198,7 @@ export type SettingsTab =
   | "debug"
   | "beta"
   | "keyboard"
+  | "sections"
 export const agentsSettingsDialogActiveTabAtom = atom<SettingsTab>("preferences")
 // Derived atom: maps settings open/close to desktopView navigation
 export const agentsSettingsDialogOpenAtom = atom(

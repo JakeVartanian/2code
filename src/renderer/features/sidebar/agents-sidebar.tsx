@@ -26,6 +26,7 @@ import {
   selectedTeamIdAtom,
   type ChatSourceMode,
   showWorkspaceIconAtom,
+  browserAccessEnabledAtom,
 } from "../../lib/atoms"
 import {
   useRemoteChats,
@@ -90,6 +91,7 @@ import {
   QuestionIcon,
   TicketIcon,
   CloudIcon,
+  GlobeIcon,
 } from "../../components/ui/icons"
 import { Logo } from "../../components/ui/logo"
 import { Button } from "../../components/ui/button"
@@ -1223,6 +1225,33 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
         </div>
       </TooltipTrigger>
       <TooltipContent>Environment Tools</TooltipContent>
+    </Tooltip>
+  )
+})
+
+// Browser Access Button - toggles global browser/web access for the AI
+const BrowserAccessButton = memo(function BrowserAccessButton() {
+  const [browserAccessEnabled, setBrowserAccessEnabled] = useAtom(browserAccessEnabledAtom)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={() => setBrowserAccessEnabled(!browserAccessEnabled)}
+          className={cn(
+            "flex items-center justify-center h-7 w-7 rounded-md transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
+            browserAccessEnabled
+              ? "text-blue-500 hover:text-blue-400 hover:bg-muted/50"
+              : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+          )}
+        >
+          <GlobeIcon className="h-4 w-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {browserAccessEnabled ? "Browser access on — click to disable" : "Browser access off — click to enable"}
+      </TooltipContent>
     </Tooltip>
   )
 })
@@ -3432,6 +3461,9 @@ export function AgentsSidebar({
                   </TooltipTrigger>
                   <TooltipContent>Settings{settingsHotkey && <> <Kbd>{settingsHotkey}</Kbd></>}</TooltipContent>
                 </Tooltip>
+
+                {/* Browser Access Button - global web access toggle */}
+                <BrowserAccessButton />
 
                 {/* Env Tools Button - shows CLI tools and API key availability */}
                 <EnvToolsButton projectPath={selectedProject?.path ?? undefined} />
