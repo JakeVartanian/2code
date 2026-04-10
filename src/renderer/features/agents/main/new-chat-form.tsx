@@ -17,6 +17,7 @@ import {
   AttachIcon,
   BranchIcon,
   CheckIcon,
+  FolderPlusIcon,
   IconChevronDown,
   PlanIcon,
   SearchIcon,
@@ -38,6 +39,7 @@ import {
   selectedChatIsRemoteAtom,
   selectedDraftIdAtom,
   selectedProjectAtom,
+  subChatOpenRouterModelAtomFamily,
   getNextMode,
   type AgentMode,
 } from "../atoms"
@@ -65,6 +67,7 @@ import {
   openRouterFreeOnlyAtom,
   enabledOpenRouterModelsAtom,
 } from "../../../lib/atoms"
+import { appStore } from "../../../lib/jotai-store"
 // Desktop uses real tRPC
 import { toast } from "sonner"
 import { trpc } from "../../../lib/trpc"
@@ -962,6 +965,13 @@ export function NewChatForm({
       const ids = [data.id]
       if (data.subChats?.[0]?.id) {
         ids.push(data.subChats[0].id)
+        // Persist OpenRouter model selection to the first sub-chat's atom
+        if (selectedOpenRouterModelId) {
+          appStore.set(
+            subChatOpenRouterModelAtomFamily(data.subChats[0].id),
+            selectedOpenRouterModelId,
+          )
+        }
       }
       setJustCreatedIds((prev) => new Set([...prev, ...ids]))
     },
@@ -1007,9 +1017,76 @@ export function NewChatForm({
     },
   })
 
+  // Create project from a folder path (used by drag-drop)
+  const createProject = trpc.projects.create.useMutation({
+    onSuccess: (project) => {
+      if (project) {
+        utils.projects.list.setData(undefined, (oldData) => {
+          if (!oldData) return [project]
+          const exists = oldData.some((p) => p.id === project.id)
+          if (exists) {
+            return oldData.map((p) =>
+              p.id === project.id ? { ...p, updatedAt: project.updatedAt } : p,
+            )
+          }
+          return [project, ...oldData]
+        })
+
+        setSelectedProject({
+          id: project.id,
+          name: project.name,
+          path: project.path,
+          gitRemoteUrl: project.gitRemoteUrl,
+          gitProvider: project.gitProvider as
+            | "github"
+            | "gitlab"
+            | "bitbucket"
+            | null,
+          gitOwner: project.gitOwner,
+          gitRepo: project.gitRepo,
+        })
+      }
+    },
+  })
+
   const handleOpenFolder = async () => {
     await openFolder.mutateAsync()
   }
+
+  // Drag-drop folder handlers for the "no project" state
+  const [isFolderDragOver, setIsFolderDragOver] = useState(false)
+
+  const handleFolderDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = "copy"
+    setIsFolderDragOver(true)
+  }, [])
+
+  const handleFolderDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsFolderDragOver(false)
+  }, [])
+
+  const handleFolderDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault()
+      setIsFolderDragOver(false)
+
+      const items = Array.from(e.dataTransfer.files)
+      if (items.length === 0) return
+
+      // Get the path of the first dropped item
+      const firstItem = items[0]!
+      const folderPath: string | undefined =
+        window.webUtils?.getPathForFile?.(firstItem) ||
+        (firstItem as File & { path?: string }).path
+
+      if (!folderPath) return
+
+      await createProject.mutateAsync({ path: folderPath })
+    },
+    [createProject],
+  )
 
   const trpcUtils = trpc.useUtils()
 
@@ -1561,14 +1638,41 @@ export function NewChatForm({
 
           {/* Input Area or Select Repo State */}
           {!validatedProject ? (
-            // No project selected - show select repo button (like Sign in button)
-            <div className="flex justify-center">
+            // No project selected - show drop zone + select repo button
+            <div
+              className={cn(
+                "flex flex-col items-center gap-3 rounded-xl border-2 border-dashed p-8 transition-colors duration-150",
+                isFolderDragOver
+                  ? "border-primary/60 bg-primary/5"
+                  : "border-border/50 hover:border-border",
+              )}
+              onDragOver={handleFolderDragOver}
+              onDragLeave={handleFolderDragLeave}
+              onDrop={handleFolderDrop}
+            >
+              <FolderPlusIcon className={cn(
+                "h-8 w-8 transition-colors duration-150",
+                isFolderDragOver ? "text-primary" : "text-muted-foreground/50",
+              )} />
+              <div className="text-center space-y-1">
+                <p className={cn(
+                  "text-sm font-medium transition-colors duration-150",
+                  isFolderDragOver ? "text-primary" : "text-muted-foreground",
+                )}>
+                  {createProject.isPending
+                    ? "Adding project..."
+                    : isFolderDragOver
+                      ? "Drop folder to open project"
+                      : "Drop a folder here"}
+                </p>
+                <p className="text-xs text-muted-foreground/60">or</p>
+              </div>
               <button
                 onClick={handleOpenFolder}
-                disabled={openFolder.isPending}
+                disabled={openFolder.isPending || createProject.isPending}
                 className="h-8 px-3 bg-primary text-primary-foreground rounded-lg text-sm font-medium transition-[background-color,transform] duration-150 hover:bg-primary/90 active:scale-[0.97] shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {openFolder.isPending ? "Opening..." : "Select repo"}
+                {openFolder.isPending ? "Opening..." : "Browse for folder"}
               </button>
             </div>
           ) : (
