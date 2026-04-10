@@ -1395,6 +1395,8 @@ export const claudeRouter = router({
               return
             }
 
+            const resolvedModel = finalCustomConfig?.model || input.model
+
             const transform = createTransformer({
               emitSdkMessageUuid: historyEnabled,
               isUsingOllama,
@@ -1846,8 +1848,6 @@ export const claudeRouter = router({
                 )
               }
             }
-
-            const resolvedModel = finalCustomConfig?.model || input.model
 
             // DEBUG: If using Ollama, test if it's actually responding
             if (isUsingOllama && finalCustomConfig) {
