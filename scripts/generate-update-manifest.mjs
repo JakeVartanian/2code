@@ -231,7 +231,7 @@ console.log(`Release dir: ${releaseDir}`)
 console.log()
 
 const arm64Manifest = generateManifest("arm64")
-const x64Manifest = generateManifest("x64")
+const x64Manifest = null // x64 builds disabled — arm64 only for now
 const linuxManifest = generateLinuxManifest()
 
 if (!arm64Manifest && !x64Manifest && !linuxManifest) {

@@ -105,13 +105,9 @@ notarize_and_staple() {
   echo ""
 }
 
-# Notarize both DMGs
+# Notarize arm64 DMG only
 echo "--- arm64 DMG ---"
 notarize_and_staple "$RELEASE_DIR/2Code-$VERSION-arm64.dmg" || true
-
-echo ""
-echo "--- x64 DMG ---"
-notarize_and_staple "$RELEASE_DIR/2Code-$VERSION.dmg" || true
 
 echo ""
 echo "========================================"

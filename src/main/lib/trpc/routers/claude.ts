@@ -1466,6 +1466,9 @@ export const claudeRouter = router({
                 customEnv: {
                   ANTHROPIC_AUTH_TOKEN: finalCustomConfig.token,
                   ANTHROPIC_BASE_URL: normalizeBaseUrl(finalCustomConfig.baseUrl),
+                  // Strip ANTHROPIC_API_KEY when using a custom provider (OpenRouter, etc.)
+                  // to prevent the SDK from using a Claude API key against a non-Anthropic endpoint
+                  ANTHROPIC_API_KEY: "",
                 },
               }),
               enableTasks: input.enableTasks ?? true,
@@ -2470,6 +2473,7 @@ ${prompt}
                     let errorCategory = "SDK_ERROR"
                     // Default errorContext to the full error text (which may include detailed message)
                     let errorContext = sdkError
+                    const isOpenRouter = finalCustomConfig?.baseUrl?.includes("openrouter.ai")
 
                     if (
                       rawErrorCode === "authentication_failed" ||
@@ -2482,8 +2486,9 @@ ${prompt}
                       )
                       if (isApiKeyAuthMode) {
                         errorCategory = "AUTH_FAILURE"
-                        errorContext =
-                          "Authentication failed - check your API key"
+                        errorContext = isOpenRouter
+                          ? "OpenRouter authentication failed - check your API key in Settings → Models"
+                          : "Authentication failed - check your API key"
                       } else {
                         errorCategory = "AUTH_FAILED_SDK"
                         errorContext =
@@ -2500,7 +2505,9 @@ ${prompt}
                       sdkError.includes("api_key")
                     ) {
                       errorCategory = "INVALID_API_KEY_SDK"
-                      errorContext = sdkError
+                      errorContext = isOpenRouter
+                        ? "Invalid OpenRouter API key - update it in Settings → Models"
+                        : sdkError
                     } else if (
                       rawErrorCode === "rate_limit_exceeded" ||
                       sdkError.includes("rate")
