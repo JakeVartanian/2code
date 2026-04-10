@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { trpc } from "../../../../lib/trpc"
@@ -73,6 +73,9 @@ export function useGitWorkflow({
   const queryClient = useQueryClient()
   const mode: WorkflowMode = worktreePath ? "worktree" : "direct"
 
+  // Whether base branch dropdown is open — gates the getBranches fetch
+  const [isBranchDropdownOpen, setIsBranchDropdownOpen] = useState(false)
+
   // Subscribe to the git watcher so state updates within ~100ms of any git op
   useGitWatcher(worktreePath, {
     onChange: () => {
@@ -81,16 +84,15 @@ export function useGitWorkflow({
   })
 
   // Aggregate local git state — fast, no network
-  const workflowPath = worktreePath || ""
   const {
     data: workflowData,
     isLoading: isWorkflowLoading,
     isRefetching: isWorkflowRefetching,
     refetch: refetchWorkflow,
   } = trpc.changes.getWorkflowState.useQuery(
-    { worktreePath: workflowPath, baseBranch: baseBranch ?? undefined },
+    { worktreePath: worktreePath || "", baseBranch: baseBranch ?? undefined },
     {
-      enabled: !!workflowPath,
+      enabled: !!worktreePath,
       refetchInterval: 30_000,
       staleTime: 5_000,
     },
@@ -102,6 +104,15 @@ export function useGitWorkflow({
     {
       enabled: !!prNumber,
       refetchInterval: 60_000,
+    },
+  )
+
+  // Remote branches — fetched lazily when the base branch dropdown opens
+  const { data: branchesData } = trpc.branches.getBranches.useQuery(
+    { worktreePath: worktreePath || "" },
+    {
+      enabled: !!worktreePath && isBranchDropdownOpen,
+      staleTime: 30_000,
     },
   )
 
@@ -146,6 +157,8 @@ export function useGitWorkflow({
   const pushMutation = trpc.changes.push.useMutation()
   const createPrMutation = trpc.changes.createPR.useMutation()
   const mergeFromDefaultMutation = trpc.changes.mergeFromDefault.useMutation()
+  const renameBranchMutation = trpc.branches.renameBranch.useMutation()
+  const updateBaseBranchMutation = trpc.chats.updateBaseBranch.useMutation()
 
   const preflight = useCallback(async () => {
     await refetchWorkflow()
@@ -200,12 +213,44 @@ export function useGitWorkflow({
     }
   }, [worktreePath, preflight, mergeFromDefaultMutation, queryClient])
 
+  const handleRenameBranch = useCallback(
+    async (newBranchName: string) => {
+      if (!worktreePath) return
+      try {
+        await renameBranchMutation.mutateAsync({ worktreePath, newBranchName })
+        queryClient.invalidateQueries({ queryKey: [["changes", "getWorkflowState"]] })
+        queryClient.invalidateQueries({ queryKey: [["chats"]] })
+        toast.success(`Branch renamed to ${newBranchName}`, { position: "top-center" })
+      } catch (err) {
+        toast.error((err as Error).message || "Rename failed", { position: "top-center" })
+        throw err
+      }
+    },
+    [worktreePath, renameBranchMutation, queryClient],
+  )
+
+  const handleUpdateBaseBranch = useCallback(
+    async (newBaseBranch: string) => {
+      try {
+        await updateBaseBranchMutation.mutateAsync({ id: chatId, baseBranch: newBaseBranch })
+        queryClient.invalidateQueries({ queryKey: [["changes", "getWorkflowState"]] })
+        queryClient.invalidateQueries({ queryKey: [["chats"]] })
+      } catch (err) {
+        toast.error((err as Error).message || "Failed to update base branch", { position: "top-center" })
+        throw err
+      }
+    },
+    [chatId, updateBaseBranchMutation, queryClient],
+  )
+
   const isMutating =
     stageAllMutation.isPending ||
     commitMutation.isPending ||
     pushMutation.isPending ||
     createPrMutation.isPending ||
-    mergeFromDefaultMutation.isPending
+    mergeFromDefaultMutation.isPending ||
+    renameBranchMutation.isPending ||
+    updateBaseBranchMutation.isPending
 
   return {
     state,
@@ -213,11 +258,16 @@ export function useGitWorkflow({
     mode,
     branch,
     baseBranch,
+    remoteBranches: branchesData?.remote ?? [],
+    isBranchDropdownOpen,
+    setIsBranchDropdownOpen,
     isMutating,
     handleCommit,
     handlePush,
     handleOpenPR,
     handleRebase,
+    handleRenameBranch,
+    handleUpdateBaseBranch,
     refetch: preflight,
   }
 }

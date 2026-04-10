@@ -469,6 +469,21 @@ export const chatsRouter = router({
     }),
 
   /**
+   * Update the base/target branch for a chat's PR workflow
+   */
+  updateBaseBranch: publicProcedure
+    .input(z.object({ id: z.string(), baseBranch: z.string().min(1) }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      return db
+        .update(chats)
+        .set({ baseBranch: input.baseBranch, updatedAt: new Date() })
+        .where(eq(chats.id, input.id))
+        .returning()
+        .get()
+    }),
+
+  /**
    * Archive a chat (also kills any terminal processes in the workspace)
    * Optionally deletes the worktree to free disk space
    */

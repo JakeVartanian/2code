@@ -263,6 +263,78 @@ export const createBranchesRouter = () => {
 					return { success: true };
 				});
 			}),
+
+		renameBranch: publicProcedure
+			.input(
+				z.object({
+					worktreePath: z.string(),
+					newBranchName: z.string(),
+				}),
+			)
+			.mutation(
+				async ({ input }): Promise<{ success: boolean; newBranchName: string; deletedRemote: boolean }> => {
+					assertRegisteredWorktree(input.worktreePath);
+
+					if (!BRANCH_NAME_REGEX.test(input.newBranchName)) {
+						throw new Error(
+							"Branch name can only contain letters, numbers, dots, hyphens, underscores, and slashes"
+						);
+					}
+					for (const pattern of INVALID_BRANCH_PATTERNS) {
+						if (pattern.test(input.newBranchName)) {
+							throw new Error(`Invalid branch name: '${input.newBranchName}'`);
+						}
+					}
+					if (input.newBranchName.length > 250) {
+						throw new Error("Branch name too long (max 250 characters)");
+					}
+
+					return withGitLock(input.worktreePath, async () => {
+						const git = createGit(input.worktreePath);
+						const oldBranchName = (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
+
+						if (oldBranchName === input.newBranchName) {
+							return { success: true, newBranchName: input.newBranchName, deletedRemote: false };
+						}
+
+						const branchSummary = await git.branch(["-a"]);
+						if (Object.keys(branchSummary.branches).includes(input.newBranchName)) {
+							throw new Error(`Branch '${input.newBranchName}' already exists`);
+						}
+
+						await withLockRetry(input.worktreePath, () =>
+							git.branch(["-m", oldBranchName, input.newBranchName])
+						);
+
+						let deletedRemote = false;
+						try {
+							await git.raw(["rev-parse", "--verify", `refs/remotes/origin/${oldBranchName}`]);
+							const networkGit = createGitForNetwork(input.worktreePath);
+							try {
+								await withLockRetry(input.worktreePath, () =>
+									networkGit.push(["origin", "--delete", oldBranchName])
+								);
+								deletedRemote = true;
+							} catch {
+								// Remote delete failed — continue
+							}
+							await withLockRetry(input.worktreePath, () =>
+								networkGit.push(["--set-upstream", "origin", input.newBranchName])
+							);
+						} catch {
+							// No remote tracking branch — local rename only
+						}
+
+						const db = getDatabase();
+						db.update(chats)
+							.set({ branch: input.newBranchName, updatedAt: new Date() })
+							.where(eq(chats.worktreePath, input.worktreePath))
+							.run();
+
+						return { success: true, newBranchName: input.newBranchName, deletedRemote };
+					});
+				},
+			),
 	});
 };
 

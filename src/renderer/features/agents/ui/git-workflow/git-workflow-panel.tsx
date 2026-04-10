@@ -35,10 +35,15 @@ export function GitWorkflowPanel({
     stage,
     mode,
     isMutating,
+    remoteBranches,
+    isBranchDropdownOpen,
+    setIsBranchDropdownOpen,
     handleCommit,
     handlePush,
     handleOpenPR,
     handleRebase,
+    handleRenameBranch,
+    handleUpdateBaseBranch,
   } = useGitWorkflow({
     chatId,
     worktreePath,
@@ -77,6 +82,14 @@ export function GitWorkflowPanel({
           baseBranch={baseBranch}
           worktreePath={worktreePath}
           behindCount={state.behindCount}
+          hasRemote={state.hasRemote}
+          prState={state.prState}
+          remoteBranches={remoteBranches}
+          isMutating={isMutating}
+          isBranchDropdownOpen={isBranchDropdownOpen}
+          onRenameBranch={handleRenameBranch}
+          onUpdateBaseBranch={handleUpdateBaseBranch}
+          onBranchDropdownOpen={setIsBranchDropdownOpen}
         />
         <button
           onClick={() => setIsExpanded(false)}
