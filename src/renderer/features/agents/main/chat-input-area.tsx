@@ -540,7 +540,9 @@ export const ChatInputArea = memo(function ChatInputArea({
     if (selectedOpenRouterModelId && filteredOpenRouterModels.length > 0) {
       const orModel = filteredOpenRouterModels.find((m) => m.id === selectedOpenRouterModelId)
       if (orModel) {
-        return orModel.name
+        // Strip provider prefix: "Z.ai: GLM 4.5 Air" → "GLM 4.5 Air"
+        const colonIdx = orModel.name.indexOf(": ")
+        return colonIdx > -1 ? orModel.name.slice(colonIdx + 2) : orModel.name
       }
     }
 
@@ -1550,8 +1552,8 @@ export const ChatInputArea = memo(function ChatInputArea({
                       )}
                   </DropdownMenu>
 
-                  {/* Effort level selector */}
-                  <DropdownMenu
+                  {/* Effort level selector — hidden for OpenRouter models (effort is Anthropic-only) */}
+                  {!selectedOpenRouterModelId && <DropdownMenu
                     open={effortDropdownOpen}
                     onOpenChange={setEffortDropdownOpen}
                   >
@@ -1586,7 +1588,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                         </DropdownMenuItem>
                       ))}
                     </DropdownMenuContent>
-                  </DropdownMenu>
+                  </DropdownMenu>}
 
                   <div className="group/model-controls flex items-center gap-0.5">
                     <AgentModelSelector

@@ -338,7 +338,9 @@ export function NewChatForm({
     if (selectedOpenRouterModelId && filteredOpenRouterModels.length > 0) {
       const orModel = filteredOpenRouterModels.find((m) => m.id === selectedOpenRouterModelId)
       if (orModel) {
-        return orModel.name
+        // Strip provider prefix: "Z.ai: GLM 4.5 Air" → "GLM 4.5 Air"
+        const colonIdx = orModel.name.indexOf(": ")
+        return colonIdx > -1 ? orModel.name.slice(colonIdx + 2) : orModel.name
       }
     }
 

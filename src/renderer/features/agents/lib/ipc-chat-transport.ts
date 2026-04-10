@@ -185,8 +185,10 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
           ? ({ type: "enabled" as const })
           : ({ type: "disabled" as const })
 
-    // Read effort level dynamically
-    const effort = appStore.get(effortLevelAtom)
+    // Read effort level dynamically — undefined for non-Anthropic providers (effort is Claude-specific)
+    // The actual stripping also happens backend-side, but skipping here avoids unnecessary data transfer
+    const _rawEffort = appStore.get(effortLevelAtom)
+    const effort = _usingNonAnthropicConfig ? undefined : _rawEffort
 
     const historyEnabled = appStore.get(historyEnabledAtom)
     const enableTasks = appStore.get(enableTasksAtom)

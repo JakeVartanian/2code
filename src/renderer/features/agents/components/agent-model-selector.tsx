@@ -208,8 +208,11 @@ export function AgentModelSelector({
           : `${item.model.name} ${item.model.version}`
       case "ollama":
         return item.modelName + (item.isRecommended ? " (recommended)" : "")
-      case "openrouter":
-        return item.model.name
+      case "openrouter": {
+        // Strip provider prefix: "Z.ai: GLM 4.5 Air" → "GLM 4.5 Air"
+        const colonIdx = item.model.name.indexOf(": ")
+        return colonIdx > -1 ? item.model.name.slice(colonIdx + 2) : item.model.name
+      }
       case "custom":
         return "Custom Model"
     }

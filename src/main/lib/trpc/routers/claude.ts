@@ -1504,24 +1504,18 @@ export const claudeRouter = router({
               finalCustomConfig?.baseUrl &&
               !finalCustomConfig.baseUrl.includes("api.anthropic.com")
             )
-            const isOpenRouterEndpoint = Boolean(finalCustomConfig?.baseUrl?.includes("openrouter.ai"))
 
             const claudeEnv = buildClaudeEnv({
               ...(finalCustomConfig && {
-                customEnv: isOpenRouterEndpoint
-                  ? {
-                      // OpenRouter requires ANTHROPIC_API_KEY (sends as x-api-key header)
-                      // per CLAUDE.md recommendation for OpenRouter integration
-                      ANTHROPIC_API_KEY: finalCustomConfig.token,
-                      ANTHROPIC_BASE_URL: normalizeBaseUrl(finalCustomConfig.baseUrl),
-                      ANTHROPIC_AUTH_TOKEN: "",
-                    }
-                  : {
-                      // Other custom providers (Ollama, etc.) use Bearer token style
-                      ANTHROPIC_AUTH_TOKEN: finalCustomConfig.token,
-                      ANTHROPIC_BASE_URL: normalizeBaseUrl(finalCustomConfig.baseUrl),
-                      ANTHROPIC_API_KEY: "",
-                    },
+                customEnv: {
+                  // ANTHROPIC_AUTH_TOKEN sends Authorization: Bearer header — accepted by
+                  // OpenRouter, Ollama, and other OpenAI-compatible providers.
+                  ANTHROPIC_AUTH_TOKEN: finalCustomConfig.token,
+                  ANTHROPIC_BASE_URL: normalizeBaseUrl(finalCustomConfig.baseUrl),
+                  // Strip ANTHROPIC_API_KEY to prevent the SDK from using a stale Claude
+                  // API key against a non-Anthropic endpoint.
+                  ANTHROPIC_API_KEY: "",
+                },
               }),
               enableTasks: input.enableTasks ?? true,
             })
