@@ -1,6 +1,7 @@
 import { useSetAtom } from "jotai"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { subChatFilesAtom, subChatToChatMapAtom, type SubChatFileChange } from "../atoms"
+import { describeFile } from "../utils/file-descriptions"
 // import { REPO_ROOT_PATH } from "@/lib/codesandbox-constants"
 const REPO_ROOT_PATH = "/workspace" // Desktop mock
 
@@ -168,11 +169,15 @@ export function useChangedFilesTracking(
         }
 
         const stats = calculateDiffStats(originalContent, state.currentContent)
+        const desc = describeFile(state.displayPath, stats.additions, stats.deletions)
         result.push({
           filePath,
           displayPath: state.displayPath,
           additions: stats.additions,
           deletions: stats.deletions,
+          humanReadable: desc.humanReadable,
+          isCritical: desc.isCritical,
+          criticalReason: desc.criticalReason,
         })
       }
 

@@ -22,6 +22,7 @@ import {
   KeyboardFilledIcon,
   OriginalMCPIcon,
   PluginFilledIcon,
+  SectionsFilledIcon,
   SkillIconFilled,
 } from "../../components/ui/icons"
 import { desktopViewAtom } from "../agents/atoms"
@@ -92,6 +93,11 @@ const ADVANCED_TABS_BASE = [
     id: "plugins" as SettingsTab,
     label: "Plugins",
     icon: PluginFilledIcon,
+  },
+  {
+    id: "sections" as SettingsTab,
+    label: "Sections",
+    icon: SectionsFilledIcon,
   },
 ]
 

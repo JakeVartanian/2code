@@ -277,14 +277,26 @@ export const SubChatStatusCard = memo(function SubChatStatusCard({
                     onClick={handleFileClick}
                     onKeyDown={handleKeyDown}
                     aria-label={`View diff for ${file.displayPath}`}
+                    title={file.isCritical ? `${file.criticalReason} — ${file.displayPath}` : file.displayPath}
                     className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors cursor-pointer focus:outline-none rounded-sm"
                   >
                     {FileIcon && (
-                      <FileIcon className="w-4 h-4 flex-shrink-0 text-muted-foreground" />
+                      <FileIcon className={cn(
+                        "w-4 h-4 flex-shrink-0",
+                        file.isCritical ? "text-red-500" : "text-muted-foreground"
+                      )} />
                     )}
-                    <span className="truncate flex-1 text-foreground">
-                      {file.displayPath}
-                    </span>
+                    <div className="truncate flex-1 min-w-0">
+                      <span className={cn(
+                        "block truncate",
+                        file.isCritical ? "text-red-500 font-medium" : "text-foreground"
+                      )}>
+                        {file.humanReadable || file.displayPath}
+                      </span>
+                      <span className="block truncate text-[10px] text-muted-foreground/60">
+                        {file.displayPath}
+                      </span>
+                    </div>
                     <span className="flex-shrink-0 text-green-600 dark:text-green-400">
                       +{file.additions}
                     </span>
