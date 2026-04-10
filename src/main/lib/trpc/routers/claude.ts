@@ -1345,7 +1345,6 @@ export const claudeRouter = router({
             // Only check if offline mode is enabled in settings
             // Use async version that auto-refreshes expired tokens
             const claudeCodeToken = await getClaudeCodeTokenFresh()
-            console.log(`[auth-debug] claudeCodeToken=${claudeCodeToken ? `present(${claudeCodeToken.slice(0,8)}...)` : "NULL"} customConfig=${!!input.customConfig}`)
             const offlineResult = await checkOfflineFallback(
               input.customConfig,
               claudeCodeToken,
@@ -2646,11 +2645,13 @@ ${prompt}
                     } else if (
                       rawErrorCode === "invalid_request" &&
                       isOpenRouter &&
-                      (sdkError.includes("model") || sdkError.includes("selected model"))
+                      (sdkError.includes("model") || sdkError.includes("selected model") ||
+                        sdkError.includes("rate-limited") || sdkError.includes("temporarily"))
                     ) {
-                      // OpenRouter: model not found or no access
-                      errorCategory = "USAGE_POLICY_VIOLATION"
-                      errorContext = sdkError // Show the actual error (e.g. "There's an issue with the selected model...")
+                      // OpenRouter: model not found, no access, or temporarily rate-limited upstream.
+                      // Use a dedicated category so the retry logic is skipped (retrying won't help).
+                      errorCategory = "OPENROUTER_MODEL_ERROR"
+                      errorContext = sdkError
                     } else if (
                       rawErrorCode === "invalid_request" ||
                       sdkError.includes("Usage Policy") ||

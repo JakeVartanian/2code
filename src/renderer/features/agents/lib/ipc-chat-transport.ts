@@ -125,6 +125,10 @@ const ERROR_TOAST_CONFIG: Record<
     title: "Anthropic API hiccup",
     description: "The request was rejected by Anthropic's servers. Please try again shortly.",
   },
+  OPENROUTER_MODEL_ERROR: {
+    title: "OpenRouter model unavailable",
+    description: "This model is currently unavailable or rate-limited. Try a different model in Settings → Models.",
+  },
   // SDK_ERROR and other unknown errors use chunk.errorText for description
 }
 

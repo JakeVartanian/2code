@@ -620,9 +620,20 @@ export function AgentsModelsTab() {
                     {isFetchingOpenRouterModels ? (
                       <span className="text-xs text-muted-foreground">Loading…</span>
                     ) : (
-                      <span className="text-xs text-muted-foreground">
-                        {enabledCountInView} / {filteredOpenRouterModels.length} enabled
-                      </span>
+                      <>
+                        <span className="text-xs text-muted-foreground">
+                          {enabledCountInView} / {filteredOpenRouterModels.length} enabled
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => fetchOpenRouterModels(storedOpenRouterKey)}
+                          className="h-5 px-1.5 text-xs text-muted-foreground"
+                          title="Refresh model list"
+                        >
+                          Refresh
+                        </Button>
+                      </>
                     )}
                     {filteredOpenRouterModels.length > 0 && (
                       enabledCountInView < filteredOpenRouterModels.length ? (
@@ -646,6 +657,11 @@ export function AgentsModelsTab() {
                       )
                     )}
                   </div>
+                </div>
+
+                {/* Note: only models with tool support are shown — Claude Code requires tool use */}
+                <div className="px-4 py-1.5 text-xs text-muted-foreground border-b border-border">
+                  Only showing models that support tool use (required by Claude Code)
                 </div>
 
                 {/* Search within OpenRouter models */}

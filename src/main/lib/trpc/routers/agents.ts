@@ -434,14 +434,24 @@ Make the system prompt specific and actionable, not generic. Include concrete ex
         throw new Error(`OpenRouter API error: ${res.status}`)
       }
       const data = (await res.json()) as {
-        data: { id: string; name: string; pricing?: { prompt: string } }[]
+        data: { id: string; name: string; pricing?: { prompt: string }; supported_parameters?: string[] }[]
       }
       console.log("[agents-router] OpenRouter API returned", data.data.length, "models")
-      const models = data.data.map((m) => ({
-        id: m.id,
-        name: m.name,
-        isFree: m.pricing?.prompt === "0" || m.id.endsWith(":free"),
-      }))
+      // Claude Code requires tool_use (bash, file read/write, etc.).
+      // Exclude models that explicitly declare supported_parameters without "tools" —
+      // those are confirmed incompatible (e.g. Gemma). Models with no supported_parameters
+      // declaration are kept (benefit of the doubt — they may work).
+      const models = data.data
+        .filter((m) => {
+          const params = m.supported_parameters
+          return !params || params.includes("tools")
+        })
+        .map((m) => ({
+          id: m.id,
+          name: m.name,
+          isFree: m.pricing?.prompt === "0" || m.id.endsWith(":free"),
+        }))
+      console.log(`[agents-router] Returning ${models.length} / ${data.data.length} models (tool-capable or unknown)`)
       console.log("[agents-router] Returning", models.length, "models to client")
       return models
     }),
