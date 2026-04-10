@@ -1345,6 +1345,7 @@ export const claudeRouter = router({
             // Only check if offline mode is enabled in settings
             // Use async version that auto-refreshes expired tokens
             const claudeCodeToken = await getClaudeCodeTokenFresh()
+            console.log(`[auth-debug] claudeCodeToken=${claudeCodeToken ? `present(${claudeCodeToken.slice(0,8)}...)` : "NULL"} customConfig=${!!input.customConfig}`)
             const offlineResult = await checkOfflineFallback(
               input.customConfig,
               claudeCodeToken,
