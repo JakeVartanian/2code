@@ -150,6 +150,7 @@ import {
   agentsSidebarOpenAtom,
   subChatModelIdAtomFamily,
   subChatModeAtomFamily,
+  subChatOpenRouterModelAtomFamily,
   suppressInputFocusAtom,
   undoStackAtom,
   workspaceDiffCacheAtomFamily,
@@ -3464,6 +3465,11 @@ const ChatViewInner = memo(function ChatViewInner({
           subChatModelIdAtomFamily(newSubChat.id),
           appStore.get(subChatModelIdAtomFamily(subChatId)),
         )
+        // Inherit OpenRouter model selection so forked tabs use the same provider
+        const sourceORModel = appStore.get(subChatOpenRouterModelAtomFamily(subChatId))
+        if (sourceORModel) {
+          appStore.set(subChatOpenRouterModelAtomFamily(newSubChat.id), sourceORModel)
+        }
 
         // Open the forked sub-chat tab and switch to it
         store.addToOpenSubChats(newSubChat.id)
@@ -4480,6 +4486,11 @@ const ChatViewInner = memo(function ChatViewInner({
           subChatModelIdAtomFamily(newId),
           appStore.get(subChatModelIdAtomFamily(subChatId)),
         )
+        // Inherit OpenRouter model selection so cleared tabs keep the same provider
+        const sourceORModel = appStore.get(subChatOpenRouterModelAtomFamily(subChatId))
+        if (sourceORModel) {
+          appStore.set(subChatOpenRouterModelAtomFamily(newId), sourceORModel)
+        }
 
         // 4. Store pending chat history for the new sub-chat to consume on mount
         const historyFile: PendingChatHistory["file"] = {
@@ -6627,6 +6638,11 @@ Make sure to preserve all functionality from both branches when resolving confli
       subChatModelIdAtomFamily(newId),
       appStore.get(subChatModelIdAtomFamily(sourceSubChatId)),
     )
+    // Inherit OpenRouter model selection so new tabs use the same provider
+    const sourceORModel = appStore.get(subChatOpenRouterModelAtomFamily(sourceSubChatId))
+    if (sourceORModel) {
+      appStore.set(subChatOpenRouterModelAtomFamily(newId), sourceORModel)
+    }
 
     // Add to open tabs and set as active
     store.addToOpenSubChats(newId)
