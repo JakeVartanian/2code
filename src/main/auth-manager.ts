@@ -173,15 +173,22 @@ export class AuthManager {
     const authData = this.store.load()
     if (!authData) return
 
+    // Fixed: skip scheduling when no refresh token is available
+    if (!authData.refreshToken) return
+
     const expiresAt = new Date(authData.expiresAt).getTime()
     const now = Date.now()
 
     // Refresh 5 minutes before expiration
     const refreshIn = Math.max(0, expiresAt - now - 5 * 60 * 1000)
 
+    // Fixed: cap delay at 24 days to avoid 32-bit signed integer overflow in setTimeout
+    const MAX_TIMEOUT = 24 * 24 * 60 * 60 * 1000 // ~24 days
+    const safeRefreshIn = Math.min(refreshIn, MAX_TIMEOUT)
+
     this.refreshTimer = setTimeout(() => {
       this.refresh()
-    }, refreshIn)
+    }, safeRefreshIn)
 
     console.log(`Scheduled token refresh in ${Math.round(refreshIn / 1000 / 60)} minutes`)
   }
@@ -263,8 +270,11 @@ export class AuthManager {
    */
   startAuthFlow(mainWindow: BrowserWindow | null): void {
     const { shell } = require("electron")
+    const { generateAuthNonce } = require("./index")
 
+    const nonce = generateAuthNonce()
     let authUrl = `${this.getApiUrl()}/auth/desktop?auto=true`
+    authUrl += `&state=${encodeURIComponent(nonce)}`
 
     // In dev mode, use localhost callback (we run HTTP server on AUTH_SERVER_PORT)
     // Also pass the protocol so web knows which deep link to use as fallback

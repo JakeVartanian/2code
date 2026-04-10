@@ -1,5 +1,5 @@
 import { app } from "electron"
-import { execSync, execFile } from "node:child_process"
+import { execSync, execFileSync, execFile } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -249,7 +249,7 @@ export function getClaudeShellEnvironment(): Record<string, string> {
   const command = `echo -n "${DELIMITER}"; env; echo -n "${DELIMITER}"; exit`
 
   try {
-    const output = execSync(`${shell} -ilc '${command}'`, {
+    const output = execFileSync(shell, ["-ilc", command], {
       encoding: "utf8",
       timeout: 5000,
       env: {

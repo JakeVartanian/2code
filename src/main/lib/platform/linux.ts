@@ -2,7 +2,7 @@
  * Linux Platform Provider
  */
 
-import { exec } from "node:child_process"
+import { execFile } from "node:child_process"
 import { existsSync, lstatSync, readlinkSync } from "node:fs"
 import * as path from "node:path"
 import { promisify } from "node:util"
@@ -14,7 +14,7 @@ import type {
   EnvironmentConfig,
 } from "./types"
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 export class LinuxPlatformProvider extends BasePlatformProvider {
   readonly platform = "linux" as const
@@ -159,17 +159,17 @@ export class LinuxPlatformProvider extends BasePlatformProvider {
       // Remove existing if present
       if (existsSync(installPath)) {
         try {
-          await execAsync(`rm -f ${installPath}`)
+          await execFileAsync("rm", ["-f", installPath])
         } catch {
-          await execAsync(`sudo rm -f ${installPath}`)
+          await execFileAsync("sudo", ["rm", "-f", installPath])
         }
       }
 
       // Create symlink - try without sudo first
       try {
-        await execAsync(`ln -s "${sourcePath}" ${installPath}`)
+        await execFileAsync("ln", ["-s", sourcePath, installPath])
       } catch {
-        await execAsync(`sudo ln -s "${sourcePath}" ${installPath}`)
+        await execFileAsync("sudo", ["ln", "-s", sourcePath, installPath])
       }
 
       console.log("[CLI] Installed 2code command to", installPath)
@@ -194,9 +194,9 @@ export class LinuxPlatformProvider extends BasePlatformProvider {
 
       // Try without sudo first
       try {
-        await execAsync(`rm -f ${installPath}`)
+        await execFileAsync("rm", ["-f", installPath])
       } catch {
-        await execAsync(`sudo rm -f ${installPath}`)
+        await execFileAsync("sudo", ["rm", "-f", installPath])
       }
 
       console.log("[CLI] Uninstalled 2code command")

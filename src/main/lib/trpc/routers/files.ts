@@ -316,6 +316,7 @@ export const filesRouter = router({
     .input(z.object({ filePath: z.string() }))
     .query(async ({ input }) => {
       const { filePath } = input
+      validatePathSafe(filePath)
 
       try {
         const content = await readFile(filePath, "utf-8")
@@ -334,6 +335,7 @@ export const filesRouter = router({
     .input(z.object({ filePath: z.string() }))
     .query(async ({ input }) => {
       const { filePath } = input
+      validatePathSafe(filePath)
       const MAX_SIZE = 2 * 1024 * 1024 // 2 MB
 
       try {
@@ -369,6 +371,7 @@ export const filesRouter = router({
     .input(z.object({ filePath: z.string() }))
     .query(async ({ input }) => {
       const { filePath } = input
+      validatePathSafe(filePath)
       const MAX_SIZE = 20 * 1024 * 1024 // 20 MB
 
       try {

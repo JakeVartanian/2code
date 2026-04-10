@@ -200,10 +200,10 @@ export async function refreshClaudeToken(refreshToken: string): Promise<{
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
-    client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e', // FIX: match PKCE flow client_id
+    client_id: 'claude-desktop', // Fixed: use correct client_id for Claude OAuth refresh
   });
 
-  const response = await fetch('https://platform.claude.com/v1/oauth/token', { // FIX: match PKCE flow endpoint
+  const response = await fetch('https://api.anthropic.com/v1/oauth/token', { // Fixed: use correct Anthropic API endpoint
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString(),
@@ -293,7 +293,6 @@ export function runClaudeSetupToken(
       // Don't use 'inherit' - it causes hang in non-TTY environments
       // Use 'ignore' for stdin and 'pipe' for stdout/stderr
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: true,
       env: { ...process.env, PATH: fullPath },
     });
 

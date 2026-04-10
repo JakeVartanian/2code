@@ -255,32 +255,20 @@ export const OFFLINE_PROFILE: ModelProfile = {
 }
 
 // Legacy single config (deprecated, kept for backwards compatibility)
-export const customClaudeConfigAtom = atomWithStorage<CustomClaudeConfig>(
-  "agents:claude-custom-config",
-  {
-    model: "",
-    token: "",
-    baseUrl: "",
-  },
-  undefined,
-  { getOnInit: true },
-)
+// Stored securely via safeStorage (main process) — synced by SecureApiKeysSyncer in App.tsx
+export const customClaudeConfigAtom = atom<CustomClaudeConfig>({
+  model: "",
+  token: "",
+  baseUrl: "",
+})
 
-// OpenAI API key for voice transcription (for users without paid subscription)
-export const openaiApiKeyAtom = atomWithStorage<string>(
-  "agents:openai-api-key",
-  "",
-  undefined,
-  { getOnInit: true },
-)
+// OpenAI API key for voice transcription
+// Stored securely via safeStorage (main process) — synced by SecureApiKeysSyncer in App.tsx
+export const openaiApiKeyAtom = atom<string>("")
 
 // OpenRouter API key for fetching and using OpenRouter models
-export const openRouterApiKeyAtom = atomWithStorage<string>(
-  "agents:openrouter-api-key",
-  "",
-  undefined,
-  { getOnInit: true },
-)
+// Stored securely via safeStorage (main process) — synced by SecureApiKeysSyncer in App.tsx
+export const openRouterApiKeyAtom = atom<string>("")
 
 // Whether to show only free OpenRouter models
 export const openRouterFreeOnlyAtom = atomWithStorage<boolean>(

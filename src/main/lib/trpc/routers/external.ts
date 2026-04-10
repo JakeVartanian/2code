@@ -120,6 +120,10 @@ export const externalRouter = router({
 	openExternal: publicProcedure
 		.input(z.string())
 		.mutation(async ({ input: url }) => {
+			const parsed = new URL(url);
+			if (!["https:", "http:"].includes(parsed.protocol)) {
+				throw new Error(`Blocked URL scheme: ${parsed.protocol}`);
+			}
 			await shell.openExternal(url);
 			return { success: true };
 		}),

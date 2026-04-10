@@ -21,6 +21,15 @@ const getMermaid = () => {
   return mermaidPromise
 }
 
+// Lazy load DOMPurify for SVG sanitization
+let domPurifyPromise: Promise<typeof import("dompurify")> | null = null
+const getDOMPurify = () => {
+  if (!domPurifyPromise) {
+    domPurifyPromise = import("dompurify")
+  }
+  return domPurifyPromise
+}
+
 // Clean up mermaid error SVGs that get added to the DOM
 const cleanupMermaidErrors = () => {
   // Mermaid adds error SVGs with id starting with 'd' or 'mermaid-' to the body
@@ -230,10 +239,16 @@ const MermaidBlockInner = memo(function MermaidBlockInner({
       // Generate unique ID for this render
       const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 
-      const { svg } = await mermaid.render(id, code)
+      const { svg: rawSvg } = await mermaid.render(id, code)
 
       // Check again if this render is still current
       if (currentRenderId !== renderIdRef.current) return
+
+      // Sanitize SVG to prevent embedded script/event-handler injection
+      const DOMPurify = await getDOMPurify()
+      const svg = DOMPurify.default.sanitize(rawSvg, {
+        USE_PROFILES: { svg: true, svgFilters: true },
+      })
 
       // Cache the result for future remounts
       const cacheKey = `${code}-${isDark ? 'dark' : 'light'}`

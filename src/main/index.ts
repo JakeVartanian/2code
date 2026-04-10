@@ -65,6 +65,21 @@ export function getAppUrl(): string {
   return process.env.ELECTRON_RENDERER_URL || "https://github.com/JakeVartanian/2code"
 }
 
+// CSRF nonce for the legacy /auth/callback flow — set when auth is started, cleared on use
+let pendingAuthNonce: string | null = null
+
+export function generateAuthNonce(): string {
+  const { randomBytes } = require("node:crypto")
+  pendingAuthNonce = randomBytes(32).toString("hex")
+  return pendingAuthNonce
+}
+
+export function consumeAuthNonce(state: string): boolean {
+  if (!pendingAuthNonce || pendingAuthNonce !== state) return false
+  pendingAuthNonce = null
+  return true
+}
+
 // Auth manager singleton (use the one from auth-manager module)
 let authManager: AuthManager
 
@@ -153,10 +168,16 @@ function handleDeepLink(url: string): void {
   try {
     const parsed = new URL(url)
 
-    // Handle auth callback: 2code://auth?code=xxx
+    // Handle auth callback: 2code://auth?code=xxx&state=yyy
     if (parsed.pathname === "/auth" || parsed.host === "auth") {
       const code = parsed.searchParams.get("code")
+      const state = parsed.searchParams.get("state")
       if (code) {
+        // Validate CSRF state if present (state may be absent for legacy flows)
+        if (state && !consumeAuthNonce(state)) {
+          console.error("[Auth] Deep link auth: invalid or expired state parameter — ignoring")
+          return
+        }
         handleAuthCode(code).catch((err) => console.error("[Auth] handleAuthCode failed:", err))
         return
       }
@@ -263,10 +284,16 @@ const server = createServer((req, res) => {
 
     if (url.pathname === "/auth/callback") {
       const code = url.searchParams.get("code")
-      console.log(
-        "[Auth Server] Received callback with code:",
-        code?.slice(0, 8) + "...",
-      )
+      const state = url.searchParams.get("state")
+      console.log("[Auth Server] Received /auth/callback")
+
+      // Validate CSRF state if present
+      if (state && !consumeAuthNonce(state)) {
+        console.error("[Auth Server] /auth/callback: invalid or expired state — rejecting")
+        res.writeHead(403, { "Content-Type": "text/plain" })
+        res.end("Invalid state parameter")
+        return
+      }
 
       if (code) {
         // Handle the auth code
@@ -455,8 +482,8 @@ server.on("error", (err: NodeJS.ErrnoException) => {
   }
 })
 
-server.listen(AUTH_SERVER_PORT, () => {
-  console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
+server.listen(AUTH_SERVER_PORT, "127.0.0.1", () => {
+  console.log(`[Auth Server] Listening on http://127.0.0.1:${AUTH_SERVER_PORT}`)
 })
 
 // Clean up stale lock files from crashed instances

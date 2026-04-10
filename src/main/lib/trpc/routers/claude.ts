@@ -314,7 +314,12 @@ function updateStoredAccessToken(newAccessToken: string, newRefreshToken?: strin
  * Get a fresh Claude Code OAuth token, auto-refreshing if expired.
  * Uses in-memory cache with 45-min TTL to avoid refreshing on every message.
  * Falls back to stored token if refresh fails.
+ *
+ * Concurrent callers share a single in-flight refresh promise to avoid
+ * double-refresh races that can invalidate single-use refresh tokens.
  */
+let _refreshInFlight: Promise<string | null> | null = null
+
 export async function getClaudeCodeTokenFresh(): Promise<string | null> {
   // Check in-memory cache first
   if (tokenRefreshCache && Date.now() - tokenRefreshCache.refreshedAt < TOKEN_REFRESH_TTL_MS) {
@@ -345,27 +350,37 @@ export async function getClaudeCodeTokenFresh(): Promise<string | null> {
     return storedToken
   }
 
-  // Try to refresh using the best available refresh token
+  // Try to refresh using the best available refresh token.
+  // Deduplicate concurrent refresh calls so single-use refresh tokens aren't raced.
   const bestRefreshToken = appRefreshToken ?? keychainCreds?.refreshToken
   if (bestRefreshToken) {
-    try {
-      const refreshed = await refreshClaudeToken(bestRefreshToken)
-      console.log("[claude-auth] Token refreshed successfully")
-      const expiresAt = refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined
-      updateStoredAccessToken(refreshed.accessToken, refreshed.refreshToken, expiresAt)
-      tokenRefreshCache = { token: refreshed.accessToken, refreshedAt: Date.now() }
-      return refreshed.accessToken
-    } catch (e) {
-      console.log("[claude-auth] Token refresh failed, using stored token:", e)
-      // Invalidate cache so we retry next time
-      tokenRefreshCache = null
-    }
+    if (_refreshInFlight) return _refreshInFlight
+
+    _refreshInFlight = (async () => {
+      try {
+        const refreshed = await refreshClaudeToken(bestRefreshToken)
+        console.log("[claude-auth] Token refreshed successfully")
+        const expiresAt = refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined
+        updateStoredAccessToken(refreshed.accessToken, refreshed.refreshToken, expiresAt)
+        tokenRefreshCache = { token: refreshed.accessToken, refreshedAt: Date.now() }
+        return refreshed.accessToken
+      } catch (e) {
+        console.log("[claude-auth] Token refresh failed, using stored token:", e)
+        tokenRefreshCache = null
+        return storedToken ?? keychainCreds?.accessToken ?? null
+      } finally {
+        _refreshInFlight = null
+      }
+    })()
+
+    return _refreshInFlight
   }
 
   // Fall back to stored token or keychain token
   const fallback = storedToken ?? keychainCreds?.accessToken ?? null
-  if (fallback) {
-    // Cache even the fallback so we don't spam refresh attempts
+  const fallbackExpiry = storedToken ? dbTokenExpiry : keychainCreds?.expiresAt
+  if (fallback && !isTokenExpired(fallbackExpiry ?? undefined)) {
+    // Fixed: only cache fallback if it is not expired, to avoid masking refresh failures
     tokenRefreshCache = { token: fallback, refreshedAt: Date.now() }
   }
   return fallback
@@ -2631,7 +2646,8 @@ ${prompt}
                         authRetryNeeded = true
                         // Update env for retry
                         if (!hasExistingApiConfig && queryOptions.options?.env) {
-                          (queryOptions.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN = refreshedToken
+                          // Fixed: use ANTHROPIC_AUTH_TOKEN (CLAUDE_CODE_OAUTH_TOKEN is not recognized by the subprocess)
+                          (queryOptions.options.env as Record<string, string>).ANTHROPIC_AUTH_TOKEN = refreshedToken
                         }
                         console.log("[claude] Auth failed but token refreshed - retrying")
                         break // break for-await loop to retry

@@ -99,14 +99,6 @@ export async function handleClaudeCodeOAuthCallback(code: string, state: string)
   }
 
   console.log("[ClaudeCode] Callback received on auth server, exchanging token...")
-  console.log("[ClaudeCode] Token exchange body:", JSON.stringify({
-    grant_type: "authorization_code",
-    code: code.slice(0, 8) + "...",
-    redirect_uri: matchedSession.redirectUri,
-    client_id: CLAUDE_CLIENT_ID,
-    code_verifier: matchedSession.codeVerifier.slice(0, 8) + "...",
-    state: matchedSession.state.slice(0, 8) + "...",
-  }))
 
   try {
     const tokenRes = await fetch(ANTHROPIC_TOKEN_ENDPOINT, {
@@ -338,8 +330,7 @@ export const claudeCodeRouter = router({
     }, 15 * 60 * 1000)
 
     // Open the auto URL in the browser
-    console.log("[ClaudeCode] Opening OAuth URL:", autoUrl)
-    console.log("[ClaudeCode] Redirect URI:", redirectUri)
+    console.log("[ClaudeCode] Opening OAuth URL in browser")
     shell.openExternal(autoUrl).catch(console.error)
 
     return { sandboxId: sessionId, sandboxUrl: "local", sessionId, autoUrl, manualUrl }

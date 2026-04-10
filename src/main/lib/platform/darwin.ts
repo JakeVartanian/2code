@@ -2,7 +2,7 @@
  * macOS Platform Provider
  */
 
-import { exec, execSync } from "node:child_process"
+import { execFile, execSync } from "node:child_process"
 import { existsSync, lstatSync, readlinkSync } from "node:fs"
 import * as path from "node:path"
 import { promisify } from "node:util"
@@ -14,7 +14,7 @@ import type {
   EnvironmentConfig,
 } from "./types"
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 export class DarwinPlatformProvider extends BasePlatformProvider {
   readonly platform = "darwin" as const
@@ -149,15 +149,17 @@ export class DarwinPlatformProvider extends BasePlatformProvider {
     try {
       // Remove existing if present
       if (existsSync(installPath)) {
-        await execAsync(
-          `osascript -e 'do shell script "rm -f ${installPath}" with administrator privileges'`
-        )
+        await execFileAsync("osascript", [
+          "-e",
+          `do shell script "rm -f '${installPath}'" with administrator privileges`,
+        ])
       }
 
-      // Create symlink with admin privileges
-      await execAsync(
-        `osascript -e 'do shell script "ln -s \\"${sourcePath}\\" ${installPath}" with administrator privileges'`
-      )
+      // Create symlink with admin privileges (paths are safe: installPath is hardcoded, sourcePath from app bundle)
+      await execFileAsync("osascript", [
+        "-e",
+        `do shell script "ln -s '${sourcePath}' '${installPath}'" with administrator privileges`,
+      ])
 
       console.log("[CLI] Installed 2code command to", installPath)
       return { success: true }
@@ -179,9 +181,10 @@ export class DarwinPlatformProvider extends BasePlatformProvider {
         return { success: true }
       }
 
-      await execAsync(
-        `osascript -e 'do shell script "rm -f ${installPath}" with administrator privileges'`
-      )
+      await execFileAsync("osascript", [
+        "-e",
+        `do shell script "rm -f '${installPath}'" with administrator privileges`,
+      ])
 
       console.log("[CLI] Uninstalled 2code command")
       return { success: true }

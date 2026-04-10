@@ -1,11 +1,18 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { isAbsolute, resolve } from "node:path"
 import { z } from "zod"
 import { router, publicProcedure } from "../index"
 import { observable } from "@trpc/server/observable"
 import { terminalManager } from "../../terminal/manager"
 import type { TerminalEvent } from "../../terminal/types"
 import { TRPCError } from "@trpc/server"
+
+function validateTerminalPath(p: string): void {
+  if (p.includes("\0")) throw new TRPCError({ code: "BAD_REQUEST", message: "Path contains invalid characters" })
+  if (!isAbsolute(p)) throw new TRPCError({ code: "BAD_REQUEST", message: "Path must be absolute" })
+  resolve(p) // normalizes — throws on malformed paths
+}
 
 export const terminalRouter = router({
 	/**
@@ -26,6 +33,7 @@ export const terminalRouter = router({
 			}),
 		)
 		.mutation(async ({ input }) => {
+			if (input.cwd) validateTerminalPath(input.cwd)
 			try {
 				const result = await terminalManager.createOrAttach(input)
 				return {
@@ -158,6 +166,7 @@ export const terminalRouter = router({
 		.input(z.object({ dirPath: z.string() }))
 		.query(async ({ input }) => {
 			const { dirPath } = input
+			validateTerminalPath(dirPath)
 
 			try {
 				const entries = await fs.readdir(dirPath, { withFileTypes: true })

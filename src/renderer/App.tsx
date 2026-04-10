@@ -25,6 +25,7 @@ import { Logo } from "./components/ui/logo"
 import { appStore } from "./lib/jotai-store"
 import { VSCodeThemeProvider } from "./lib/themes/theme-provider"
 import { trpc } from "./lib/trpc"
+import { SecureApiKeysSyncer } from "./lib/secure-api-keys-syncer"
 
 /**
  * Top-level error boundary to prevent white-screen crashes.
@@ -253,7 +254,12 @@ function AppContent() {
     return <SelectRepoPage />
   }
 
-  return <AgentsLayout />
+  return (
+    <>
+      <SecureApiKeysSyncer />
+      <AgentsLayout />
+    </>
+  )
 }
 
 export function App() {

@@ -277,10 +277,14 @@ function registerIpcHandlers(): void {
     }
   })
 
-  // Shell
-  ipcMain.handle("shell:open-external", (_event, url: string) =>
-    shell.openExternal(url),
-  )
+  // Shell — only allow http/https to prevent file:// and protocol handler abuse
+  ipcMain.handle("shell:open-external", (_event, url: string) => {
+    const parsed = new URL(url)
+    if (!["https:", "http:"].includes(parsed.protocol)) {
+      throw new Error(`Blocked URL scheme: ${parsed.protocol}`)
+    }
+    return shell.openExternal(url)
+  })
 
   // Clipboard
   ipcMain.handle("clipboard:write", (_event, text: string) =>
@@ -639,6 +643,40 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     },
   })
 
+  // Deny all permission requests except safe ones — prevents silent camera/mic/geo grants
+  window.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    const allowed = ["notifications", "clipboard-read", "clipboard-sanitized-write"]
+    callback(allowed.includes(permission))
+  })
+
+  // Content Security Policy — restrict what the renderer can load and connect to.
+  // unsafe-eval is required by Monaco Editor (code syntax highlighting workers).
+  // unsafe-inline is required by Tailwind/Radix inline styles.
+  // All external API calls go through tRPC (main process IPC), not renderer fetch.
+  window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [
+          [
+            "default-src 'self'",
+            // 'unsafe-inline' required: index.html has inline <script> blocks (theme detection, error handler)
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data: blob: filesystem: https:",
+            "font-src 'self' data:",
+            "worker-src 'self' blob:",
+            // ws://localhost:* needed for Vite HMR in dev; https://openrouter.ai for model fetching
+            "connect-src 'self' ws://localhost:* http://localhost:* https://openrouter.ai",
+            "media-src 'self' blob:",
+            "object-src 'none'",
+            "frame-src 'self' http://localhost:* https://localhost:*",
+          ].join("; "),
+        ],
+      },
+    })
+  })
+
   // Register window with manager and get stable ID for localStorage namespacing
   const stableWindowId = windowManager.register(window)
   console.log(
@@ -727,9 +765,24 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     }
   })
 
-  // Handle external links
+  // Block renderer navigation away from the app's own origin
+  window.webContents.on("will-navigate", (event, url) => {
+    const appOrigin = process.env.ELECTRON_RENDERER_URL
+    if (appOrigin && url.startsWith(appOrigin)) return
+    if (url.startsWith("file://")) return
+    event.preventDefault()
+  })
+
+  // Handle external links — only allow http/https
   window.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    try {
+      const parsed = new URL(url)
+      if (["https:", "http:"].includes(parsed.protocol)) {
+        shell.openExternal(url)
+      }
+    } catch {
+      // ignore invalid URLs
+    }
     return { action: "deny" }
   })
 

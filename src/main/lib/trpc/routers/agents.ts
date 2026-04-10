@@ -424,7 +424,7 @@ Make the system prompt specific and actionable, not generic. Include concrete ex
   fetchOpenRouterModels: publicProcedure
     .input(z.object({ apiKey: z.string() }))
     .mutation(async ({ input }) => {
-      console.log("[agents-router] fetchOpenRouterModels called with key:", input.apiKey.slice(0, 10) + "...")
+      console.log("[agents-router] fetchOpenRouterModels called, key present:", !!input.apiKey)
       const res = await fetch("https://openrouter.ai/api/v1/models", {
         headers: { Authorization: `Bearer ${input.apiKey}` },
       })
