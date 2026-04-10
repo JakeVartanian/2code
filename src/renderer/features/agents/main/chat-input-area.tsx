@@ -16,7 +16,6 @@ import {
   AgentIcon,
   AttachIcon,
   CheckIcon,
-  GlobeIcon,
   IconSpinner,
   OriginalMCPIcon,
   PlanIcon,
@@ -43,7 +42,6 @@ import {
   agentsSettingsDialogOpenAtom,
   anthropicOnboardingCompletedAtom,
   apiKeyOnboardingCompletedAtom,
-  browserAccessEnabledAtom,
   customClaudeConfigAtom,
   effortLevelAtom,
   enabledOpenRouterModelsAtom,
@@ -554,8 +552,7 @@ export const ChatInputArea = memo(function ChatInputArea({
       return "Select model"
     }
 
-    const effortLabel = effortLevel.charAt(0).toUpperCase() + effortLevel.slice(1)
-    return `${selectedModel.name} ${effortLabel}`
+    return selectedModel.name
   }, [
     availableModels.isOffline,
     availableModels.hasOllama,
@@ -1565,7 +1562,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                       <button className="flex items-center gap-1 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
                         <span className="text-[11px] opacity-60">E:</span>
                         <span className="truncate capitalize text-xs">
-                          {effortLevel === "medium" ? "Med" : effortLevel}
+                          {effortLevel}
                         </span>
                         <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                       </button>
@@ -1607,7 +1604,10 @@ export const ChatInputArea = memo(function ChatInputArea({
                         setSettingsOpen(true)
                       }}
                       claude={{
-                        models: availableModels.models.filter((m) => !hiddenModels.includes(m.id)),
+                        // Lock to current provider mid-conversation: hide Claude models if OpenRouter is active
+                        models: (messageTokenData.messageCount > 0 && selectedOpenRouterModelId)
+                          ? []
+                          : availableModels.models.filter((m) => !hiddenModels.includes(m.id)),
                         selectedModelId: selectedModel?.id,
                         onSelectModel: (modelId) => {
                           const model =
@@ -1617,6 +1617,8 @@ export const ChatInputArea = memo(function ChatInputArea({
                           setSelectedModel(model)
                           setSelectedSubChatModelId(model.id)
                           setLastSelectedModelId(model.id)
+                          // Clear OpenRouter selection — providers are mutually exclusive
+                          setSelectedOpenRouterModelId(undefined)
                         },
                         hasCustomModelConfig: hasCustomClaudeConfig,
                         isOffline: availableModels.isOffline && availableModels.hasOllama,
@@ -1627,40 +1629,21 @@ export const ChatInputArea = memo(function ChatInputArea({
                         isConnected: isClaudeConnected,
                         thinkingEnabled,
                         onThinkingChange: setThinkingEnabled,
-                        thinkingBudget,
-                        onThinkingBudgetChange: setThinkingBudget,
                         thinkingMode,
                       }}
-                      openRouter={openRouterApiKey ? {
+                      // Lock to current provider mid-conversation: hide OpenRouter if Claude is active
+                      openRouter={(openRouterApiKey && !(messageTokenData.messageCount > 0 && !selectedOpenRouterModelId)) ? {
                         models: filteredOpenRouterModels,
                         selectedModelId: selectedOpenRouterModelId,
-                        onSelectModel: setSelectedOpenRouterModelId,
+                        onSelectModel: (modelId) => {
+                          setSelectedOpenRouterModelId(modelId)
+                        },
                       } : undefined}
                     />
                   </div>
 
                   {/* Quick agent creation */}
                   <AgentQuickCreate />
-
-                  {/* Browser access toggle */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => setBrowserAccessEnabled(!browserAccessEnabled)}
-                        className={cn(
-                          "flex items-center gap-1 px-1.5 py-1 rounded-md transition-colors outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
-                          browserAccessEnabled
-                            ? "text-blue-500 hover:text-blue-400"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-                        )}
-                      >
-                        <GlobeIcon className="h-3.5 w-3.5 shrink-0" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">
-                      {browserAccessEnabled ? "Browser access on" : "Browser access off"}
-                    </TooltipContent>
-                  </Tooltip>
 
                   {/* Smart model suggestion */}
                   {!suggestionDismissed && (modelSuggestion || settingsRecommendations.length > 0) && (

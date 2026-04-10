@@ -209,7 +209,7 @@ export function AgentModelSelector({
       case "ollama":
         return item.modelName + (item.isRecommended ? " (recommended)" : "")
       case "openrouter":
-        return item.model.isFree ? `${item.model.name} (free)` : item.model.name
+        return item.model.name
       case "custom":
         return "Custom Model"
     }
@@ -253,8 +253,8 @@ export function AgentModelSelector({
             onValueChange={setSearch}
           />
 
-          {/* Claude thinking toggle */}
-          {!claude.isOffline && !claude.hasCustomModelConfig && (
+          {/* Claude thinking toggle — hide when no Claude models are visible (e.g. OpenRouter-locked conv) */}
+          {!claude.isOffline && !claude.hasCustomModelConfig && claude.models.length > 0 && (
             <>
               <div
                 className="flex items-center justify-between min-h-[32px] py-[5px] px-1.5 mx-1"
@@ -306,6 +306,9 @@ export function AgentModelSelector({
                         <span className={cn("text-[10px] font-mono shrink-0", getCostTierColor(item.model.costTier))}>
                           {item.model.costTier}
                         </span>
+                      )}
+                      {item.type === "openrouter" && item.model.isFree && (
+                        <span className="text-[10px] text-emerald-500 shrink-0">Free</span>
                       )}
                       {selected && (
                         <CheckIcon className="h-4 w-4 shrink-0" />
