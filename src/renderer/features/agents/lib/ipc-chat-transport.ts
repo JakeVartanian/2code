@@ -262,6 +262,17 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     // (e.g., remaining items in a batch after a finish chunk).
     let streamTerminated = false
 
+    // Clear compacting state for this sub-chat — called at every stream termination path
+    // so the UI never gets stuck showing "Compacting." after the stream ends.
+    const clearCompacting = () => {
+      const compacting = appStore.get(compactingSubChatsAtom)
+      if (compacting.has(this.config.subChatId)) {
+        const next = new Set(compacting)
+        next.delete(this.config.subChatId)
+        appStore.set(compactingSubChatsAtom, next)
+      }
+    }
+
     // Process a single chunk: handles side effects (atoms, toasts, modals) then enqueues.
     // Extracted to support batch unwrapping — the onData handler calls this for each chunk.
     const processChunk = (chunk: UIMessageChunk, controller: ReadableStreamDefaultController<UIMessageChunk>) => {
@@ -402,6 +413,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 // This allows user to retry sending messages after failed auth
                 console.log(`[SD] R:AUTH_ERR sub=${subId}`)
                 streamTerminated = true
+                clearCompacting()
                 controller.error(new Error("Authentication required"))
                 return
               }
@@ -487,6 +499,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               if (chunk.type === "finish") {
                 console.log(`[SD] R:FINISH sub=${subId} n=${chunkCount}`)
                 streamTerminated = true
+                clearCompacting()
                 try {
                   controller.close()
                 } catch {
@@ -533,10 +546,12 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             },
             onError: (err: Error) => {
               console.log(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
+              clearCompacting()
               controller.error(err)
             },
             onComplete: () => {
               console.log(`[SD] R:COMPLETE sub=${subId} n=${chunkCount} last=${lastChunkType}`)
+              clearCompacting()
               // Note: Don't clear pending questions here - let active-chat.tsx handle it
               // via the stream stop detection effect. Clearing here causes race conditions
               // where sync effect immediately restores from messages.
@@ -552,6 +567,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
         // Handle abort
         options.abortSignal?.addEventListener("abort", () => {
           console.log(`[SD] R:ABORT sub=${subId} n=${chunkCount} last=${lastChunkType}`)
+          clearCompacting()
           sub.unsubscribe()
           // trpcClient.claude.cancel.mutate({ subChatId: this.config.subChatId })
           try {
