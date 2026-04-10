@@ -91,23 +91,23 @@ export function AnthropicOnboardingPage() {
   // Track whether auth was started so integrationQuery keeps running even after error
   const [authStarted, setAuthStarted] = useState(false)
 
-  // Always poll getIntegration once auth has started — belt-and-suspenders for success detection.
-  // We intentionally keep polling even in error state in case the token was stored before the error fired.
+  // Always query getIntegration — even on initial mount.
+  // If the DB already has a connected account (e.g. localStorage was cleared but DB wasn't),
+  // we skip straight through onboarding without prompting the user to re-connect.
   const integrationQuery = trpc.claudeCode.getIntegration.useQuery(undefined, {
-    enabled: authStarted || isPolling,
     refetchInterval: isPolling || authStarted ? 1500 : false,
   })
 
   // Auth is NOT auto-started — user must click "Connect" to begin the flow.
   // This prevents unexpected browser popups on first load.
 
-  // Complete onboarding as soon as the token is stored in the DB — belt-and-suspenders.
-  // Only fires after auth has been started (so we don't complete on stale data from a previous session).
+  // Complete onboarding as soon as the token is stored in the DB.
+  // Fires on initial load too, so existing accounts auto-skip this screen.
   useEffect(() => {
-    if ((authStarted || isPolling) && integrationQuery.data?.isConnected) {
+    if (integrationQuery.data?.isConnected) {
       setAnthropicOnboardingCompleted(true)
     }
-  }, [authStarted, isPolling, integrationQuery.data?.isConnected, setAnthropicOnboardingCompleted])
+  }, [integrationQuery.data?.isConnected, setAnthropicOnboardingCompleted])
 
   // Show manual input after 12s as a safety net, in case user already has a code
   useEffect(() => {

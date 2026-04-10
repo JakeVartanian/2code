@@ -254,7 +254,7 @@ export const lastSelectedAgentIdAtom = atomWithStorage<string>(
 
 export const lastSelectedModelIdAtom = atomWithStorage<string>(
   "agents:lastSelectedModelId",
-  "opus",
+  "haiku",
   undefined,
   { getOnInit: true },
 )

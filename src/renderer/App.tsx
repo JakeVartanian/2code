@@ -194,6 +194,9 @@ function AppContent() {
   const { data: cliConfig, isLoading: isLoadingCliConfig } =
     trpc.claudeCode.hasExistingCliConfig.useQuery()
 
+  // Check if Claude Code is already connected in the DB (active account or legacy credentials)
+  const { data: claudeCodeIntegration } = trpc.claudeCode.getIntegration.useQuery()
+
   // Migration: If user already completed Anthropic onboarding but has no billing method set,
   // automatically set it to "claude-subscription" (legacy users before billing method was added)
   useEffect(() => {
@@ -211,6 +214,17 @@ function AppContent() {
       setApiKeyOnboardingCompleted(true)
     }
   }, [cliConfig?.hasConfig, billingMethod, setBillingMethod, setApiKeyOnboardingCompleted])
+
+  // Auto-skip onboarding if DB already has a connected Claude Code account.
+  // This handles cases where localStorage was cleared (new build, reset) but the DB wasn't —
+  // the user is already authenticated and shouldn't have to re-connect.
+  useEffect(() => {
+    if (claudeCodeIntegration?.isConnected && !anthropicOnboardingCompleted) {
+      console.log("[App] DB has active Claude Code account, auto-completing onboarding")
+      setBillingMethod("claude-subscription")
+      setAnthropicOnboardingCompleted(true)
+    }
+  }, [claudeCodeIntegration?.isConnected, anthropicOnboardingCompleted, setBillingMethod, setAnthropicOnboardingCompleted])
 
   // Fetch projects to validate selectedProject exists
   const { data: projects, isLoading: isLoadingProjects } =

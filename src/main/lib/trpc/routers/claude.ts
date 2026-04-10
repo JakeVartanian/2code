@@ -326,46 +326,70 @@ export async function getClaudeCodeTokenFresh(): Promise<string | null> {
     return tokenRefreshCache.token
   }
 
-  // Get the stored token (sync)
+  // Get the stored token and its expiry from the DB (no keychain prompt)
   const storedToken = getClaudeCodeToken()
-
-  // Get refresh tokens from both sources
-  const appRefreshToken = getStoredRefreshToken()
-  const keychainCreds = getExistingClaudeCredentials()
-
-  // Check if keychain token is expired
-  const keychainExpired = keychainCreds ? isTokenExpired(keychainCreds.expiresAt) : true
-
-  // If keychain has a non-expired token, use it directly
-  if (keychainCreds?.accessToken && !keychainExpired) {
-    tokenRefreshCache = { token: keychainCreds.accessToken, refreshedAt: Date.now() }
-    return keychainCreds.accessToken
-  }
-
-  // If the DB token has a known expiry and is still fresh, use it without refreshing
   const dbTokenExpiry = getStoredTokenExpiry()
   const dbTokenExpired = dbTokenExpiry !== null ? isTokenExpired(dbTokenExpiry) : true
+
+  // If the DB token is fresh, use it immediately without touching the keychain.
+  // This avoids the macOS keychain password prompt on every new build.
   if (storedToken && !dbTokenExpired) {
     tokenRefreshCache = { token: storedToken, refreshedAt: Date.now() }
     return storedToken
   }
 
-  // Try to refresh using the best available refresh token.
-  // Deduplicate concurrent refresh calls so single-use refresh tokens aren't raced.
-  const bestRefreshToken = appRefreshToken ?? keychainCreds?.refreshToken
-  if (bestRefreshToken) {
+  // DB token is absent or expired — now check app refresh token before keychain
+  const appRefreshToken = getStoredRefreshToken()
+
+  if (appRefreshToken) {
     if (_refreshInFlight) return _refreshInFlight
 
     _refreshInFlight = (async () => {
       try {
-        const refreshed = await refreshClaudeToken(bestRefreshToken)
+        const refreshed = await refreshClaudeToken(appRefreshToken)
         console.log("[claude-auth] Token refreshed successfully")
         const expiresAt = refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined
         updateStoredAccessToken(refreshed.accessToken, refreshed.refreshToken, expiresAt)
         tokenRefreshCache = { token: refreshed.accessToken, refreshedAt: Date.now() }
         return refreshed.accessToken
       } catch (e) {
-        console.log("[claude-auth] Token refresh failed, using stored token:", e)
+        console.log("[claude-auth] Token refresh failed, falling back to keychain:", e)
+        tokenRefreshCache = null
+        // Fall through to keychain below
+        return null
+      } finally {
+        _refreshInFlight = null
+      }
+    })()
+
+    const refreshed = await _refreshInFlight
+    if (refreshed) return refreshed
+  }
+
+  // Last resort: read from system keychain (triggers macOS password prompt if not granted)
+  const keychainCreds = getExistingClaudeCredentials()
+  const keychainExpired = keychainCreds ? isTokenExpired(keychainCreds.expiresAt) : true
+
+  if (keychainCreds?.accessToken && !keychainExpired) {
+    tokenRefreshCache = { token: keychainCreds.accessToken, refreshedAt: Date.now() }
+    return keychainCreds.accessToken
+  }
+
+  // Try refreshing with keychain refresh token
+  const keychainRefreshToken = keychainCreds?.refreshToken
+  if (keychainRefreshToken) {
+    if (_refreshInFlight) return _refreshInFlight
+
+    _refreshInFlight = (async () => {
+      try {
+        const refreshed = await refreshClaudeToken(keychainRefreshToken)
+        console.log("[claude-auth] Token refreshed via keychain refresh token")
+        const expiresAt = refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined
+        updateStoredAccessToken(refreshed.accessToken, refreshed.refreshToken, expiresAt)
+        tokenRefreshCache = { token: refreshed.accessToken, refreshedAt: Date.now() }
+        return refreshed.accessToken
+      } catch (e) {
+        console.log("[claude-auth] Keychain token refresh failed, using stored token:", e)
         tokenRefreshCache = null
         return storedToken ?? keychainCreds?.accessToken ?? null
       } finally {
@@ -376,11 +400,10 @@ export async function getClaudeCodeTokenFresh(): Promise<string | null> {
     return _refreshInFlight
   }
 
-  // Fall back to stored token or keychain token
+  // Fall back to whatever we have
   const fallback = storedToken ?? keychainCreds?.accessToken ?? null
   const fallbackExpiry = storedToken ? dbTokenExpiry : keychainCreds?.expiresAt
   if (fallback && !isTokenExpired(fallbackExpiry ?? undefined)) {
-    // Fixed: only cache fallback if it is not expired, to avoid masking refresh failures
     tokenRefreshCache = { token: fallback, refreshedAt: Date.now() }
   }
   return fallback
@@ -3687,26 +3710,39 @@ ${prompt}
       return usageCache.data
     }
 
-    // Resolve token: keychain first (has refresh token), then app DB
-    const keychainCreds = getExistingClaudeCredentials()
+    // Resolve token: prefer app DB first (avoids macOS keychain password prompt),
+    // fall back to keychain only if DB has no token.
     const appToken = getClaudeCodeToken()
-    let accessToken = keychainCreds?.accessToken ?? appToken
+    const appRefreshToken = getStoredRefreshToken()
+    const dbTokenExpiry = getStoredTokenExpiry()
+    const dbTokenExpired = dbTokenExpiry !== null ? isTokenExpired(dbTokenExpiry) : true
+
+    let accessToken: string | null = appToken
+    let refreshToken: string | undefined = appRefreshToken ?? undefined
+
+    // Only read keychain if DB has no token
+    let keychainCreds: ReturnType<typeof getExistingClaudeCredentials> = null
+    if (!accessToken) {
+      keychainCreds = getExistingClaudeCredentials()
+      accessToken = keychainCreds?.accessToken ?? null
+      refreshToken = refreshToken ?? keychainCreds?.refreshToken ?? undefined
+    }
+
     if (!accessToken) {
       return { error: "not_authenticated" as const }
     }
 
-    const tokenSource = keychainCreds?.accessToken ? "keychain" : "app-db"
+    const tokenSource = appToken ? "app-db" : "keychain"
     const tokenScopes = keychainCreds?.scopes ?? []
-    console.log(`[usage] token source=${tokenSource} scopes=[${tokenScopes.join(",")}] hasRefresh=${!!(keychainCreds?.refreshToken ?? getStoredRefreshToken())}`)
+    console.log(`[usage] token source=${tokenSource} scopes=[${tokenScopes.join(",")}] hasRefresh=${!!refreshToken}`)
 
-    // Resolve refresh token: keychain first, then app DB (stored during OAuth exchange)
-    const refreshToken = keychainCreds?.refreshToken ?? getStoredRefreshToken() ?? undefined
-
-    // If keychain token looks expired, proactively refresh before calling
-    if (keychainCreds && isTokenExpired(keychainCreds.expiresAt) && keychainCreds.refreshToken) {
+    // If DB token is expired, proactively refresh before calling
+    if (dbTokenExpired && refreshToken) {
       try {
-        const refreshed = await refreshClaudeToken(keychainCreds.refreshToken)
+        const refreshed = await refreshClaudeToken(refreshToken)
         accessToken = refreshed.accessToken
+        const expiresAt = refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined
+        updateStoredAccessToken(refreshed.accessToken, refreshed.refreshToken, expiresAt)
         console.log("[usage] Proactively refreshed expired token")
       } catch {
         // Continue with current token — it might still work
