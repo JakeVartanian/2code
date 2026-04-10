@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { useAtom } from "jotai"
 import { Button } from "../../../components/ui/button"
-import { RotateCw } from "lucide-react"
+import { RotateCw, Terminal, ClipboardList, SquareArrowOutUpRight } from "lucide-react"
 import {
   ExternalLinkIcon,
   IconDoubleChevronRight,
@@ -15,21 +15,74 @@ import {
   viewportModeAtomFamily,
   previewScaleAtomFamily,
   mobileDeviceAtomFamily,
+  previewViewModeAtomFamily,
 } from "../atoms"
 import { cn } from "../../../lib/utils"
 import { Logo } from "../../../components/ui/logo"
 import { ViewportToggle } from "./viewport-toggle"
 import { ScaleControl } from "./scale-control"
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "../../../components/ui/dropdown-menu"
+import { trpc } from "../../../lib/trpc"
 import { DevicePresetsBar } from "./device-presets-bar"
 import { ResizeHandle } from "./resize-handle"
 import { MobileCopyLinkButton } from "./mobile-copy-link-button"
+import { PreviewCompareView } from "./preview-compare-view"
+import { PreviewPageRegistry } from "./preview-page-registry"
 import { DEVICE_PRESETS, AGENTS_PREVIEW_CONSTANTS } from "../constants"
 // import { getSandboxPreviewUrl } from "@/app/(alpha)/canvas/{components}/settings-tabs/repositories/preview-url"
 const getSandboxPreviewUrl = (sandboxId: string, port: number, _type: string) => `https://${sandboxId}-${port}.csb.app` // Desktop mock
+
+/**
+ * Dropdown menu for opening preview in different modes:
+ * - In 2Code window (Electron)
+ * - In system browser
+ */
+function ExternalLinkDropdown({ url }: { url: string }) {
+  const externalMutation = trpc.external.openExternal.useMutation()
+
+  const handleOpenInBrowser = () => {
+    externalMutation.mutate(url)
+  }
+
+  const handleOpenIn2Code = () => {
+    window.open(url, "_blank")
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          className="h-7 w-7 p-0 hover:bg-muted transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] rounded-md"
+        >
+          <ExternalLinkIcon className="h-3.5 w-3.5 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onClick={handleOpenInBrowser} className="gap-2">
+          <SquareArrowOutUpRight className="h-4 w-4" />
+          <span>Open in browser</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={handleOpenIn2Code} className="gap-2">
+          <ExternalLinkIcon className="h-4 w-4" />
+          <span>Open in 2Code window</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 interface AgentPreviewProps {
   chatId: string
-  sandboxId: string
-  port: number
+  sandboxId?: string
+  port?: number
+  localhostUrl?: string
+  projectPath?: string
   repository?: string
   hideHeader?: boolean
   onClose?: () => void
@@ -40,6 +93,8 @@ export function AgentPreview({
   chatId,
   sandboxId,
   port,
+  localhostUrl,
+  projectPath,
   repository,
   hideHeader = false,
   onClose,
@@ -61,6 +116,9 @@ export function AgentPreview({
   )
   const [scale, setScale] = useAtom(previewScaleAtomFamily(chatId))
   const [device, setDevice] = useAtom(mobileDeviceAtomFamily(chatId))
+  const [previewViewMode, setPreviewViewMode] = useAtom(
+    previewViewModeAtomFamily(chatId),
+  )
 
   // Local state for resizing
   const [isResizing, setIsResizing] = useState(false)
@@ -132,18 +190,28 @@ export function AgentPreview({
     setCurrentPath(persistedPath)
   }, [persistedPath])
 
-  // Compute base host and preview URL
-  const previewBaseUrl = useMemo(
-    () => getSandboxPreviewUrl(sandboxId, port, "agents"),
-    [sandboxId, port],
-  )
+  // Compute base host and preview URL — localhost takes priority over sandbox
+  const previewBaseUrl = useMemo(() => {
+    if (localhostUrl) return localhostUrl
+    if (sandboxId && port) return getSandboxPreviewUrl(sandboxId, port, "agents")
+    return null
+  }, [localhostUrl, sandboxId, port])
+
   const baseHost = useMemo(() => {
-    return new URL(previewBaseUrl).host
+    if (!previewBaseUrl) return null
+    try {
+      return new URL(previewBaseUrl).host
+    } catch {
+      return null
+    }
   }, [previewBaseUrl])
 
   const previewUrl = useMemo(() => {
+    if (!previewBaseUrl) return null
     return `${previewBaseUrl}${loadedPath}`
   }, [previewBaseUrl, loadedPath])
+
+  const isLocalhost = !!localhostUrl
 
   // Handle path selection from URL bar
   const handlePathSelect = useCallback(
@@ -360,7 +428,7 @@ export function AgentPreview({
             {/* URL Input - centered, flexible */}
             <div className="flex-1 min-w-0 mx-1">
               <PreviewUrlInput
-                baseHost={baseHost}
+                baseHost={baseHost ?? ""}
                 currentPath={currentPath}
                 onPathChange={handlePathSelect}
                 isLoading={!isLoaded}
@@ -373,7 +441,7 @@ export function AgentPreview({
             <ScaleControl value={scale} onChange={setScale} />
 
             {/* Copy link button */}
-            <MobileCopyLinkButton url={previewUrl} />
+            {previewUrl && <MobileCopyLinkButton url={previewUrl} />}
           </div>
         </div>
       )}
@@ -413,15 +481,25 @@ export function AgentPreview({
             />
           </div>
 
-          {/* Right: External link + Mode toggle + Close */}
+          {/* Right: Registry + External link + Close */}
           <div className="flex items-center justify-end gap-1 flex-1">
-            <Button
-              variant="ghost"
-              className="h-7 w-7 p-0 hover:bg-muted transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] rounded-md"
-              onClick={() => window.open(previewUrl, "_blank")}
-            >
-              <ExternalLinkIcon className="h-3.5 w-3.5 text-muted-foreground" />
-            </Button>
+            {projectPath && (
+              <Button
+                variant="ghost"
+                className={cn(
+                  "h-7 w-7 p-0 hover:bg-muted transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] rounded-md",
+                  previewViewMode === "registry" && "bg-muted",
+                )}
+                onClick={() =>
+                  setPreviewViewMode(
+                    previewViewMode === "registry" ? "preview" : "registry",
+                  )
+                }
+              >
+                <ClipboardList className="h-3.5 w-3.5 text-muted-foreground" />
+              </Button>
+            )}
+            {previewUrl && <ExternalLinkDropdown url={previewUrl} />}
 
             {onClose && (
               <Button
@@ -448,14 +526,49 @@ export function AgentPreview({
         />
       )}
 
+      {/* Registry view */}
+      {previewViewMode === "registry" && projectPath && (
+        <PreviewPageRegistry
+          chatId={chatId}
+          projectPath={projectPath}
+          onBack={() => setPreviewViewMode("preview")}
+          onNavigate={(path, viewport) => {
+            handlePathSelect(path)
+            if (viewport === "mobile") setViewportMode("mobile")
+            else if (viewport === "desktop") setViewportMode("desktop")
+            setPreviewViewMode("preview")
+          }}
+        />
+      )}
+
       {/* Content area */}
-      <div
+      {previewViewMode !== "registry" && <div
         className={cn(
           "flex-1 relative flex items-center justify-center overflow-hidden",
           isMobile ? "w-full h-full" : "px-1 pb-1",
         )}
       >
-        {isMobile ? (
+        {!previewUrl ? (
+          // Empty state — no dev server detected
+          <div className="flex flex-col items-center justify-center h-full px-6 text-center gap-4">
+            <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-muted/50">
+              <Terminal className="h-6 w-6 text-muted-foreground" />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium text-foreground">No server detected</p>
+              <p className="text-xs text-muted-foreground leading-relaxed max-w-[240px]">
+                Start a dev server in your project and it will appear here automatically.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-muted-foreground font-mono">
+              <span className="px-1.5 py-0.5 bg-muted rounded">npm run dev</span>
+              <span>·</span>
+              <span className="px-1.5 py-0.5 bg-muted rounded">bun dev</span>
+              <span>·</span>
+              <span className="px-1.5 py-0.5 bg-muted rounded">yarn dev</span>
+            </div>
+          </div>
+        ) : isMobile ? (
           // Mobile: Fullscreen iframe with scale support
           <div className="relative overflow-hidden w-full h-full flex-shrink-0 bg-background">
             <div
@@ -492,6 +605,12 @@ export function AgentPreview({
               </div>
             )}
           </div>
+        ) : viewportMode === "compare" ? (
+          <PreviewCompareView
+            chatId={chatId}
+            previewUrl={previewUrl}
+            reloadKey={reloadKey}
+          />
         ) : (
           <>
             {/* Left resize handle - only in mobile viewport mode (not on actual mobile devices) */}
@@ -575,6 +694,7 @@ export function AgentPreview({
           </>
         )}
       </div>
+      }
     </div>
   )
 }

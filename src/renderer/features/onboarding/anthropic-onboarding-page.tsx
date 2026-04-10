@@ -260,14 +260,23 @@ export function AnthropicOnboardingPage() {
     }
   }
 
+  // Fixed: use ref to track and cancel auto-submit timer on input changes
+  const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const handleCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
     setAuthCode(value)
 
+    // Cancel any pending auto-submit from a previous keystroke
+    if (autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current)
+      autoSubmitTimerRef.current = null
+    }
+
     // Auto-submit if the pasted value looks like a valid auth code
     if (isValidCodeFormat(value) && flowState.step === "has_url") {
       // Small delay to let the UI update before submitting
-      setTimeout(() => submitCode(value), 100)
+      autoSubmitTimerRef.current = setTimeout(() => submitCode(value), 100)
     }
   }
 
@@ -285,11 +294,20 @@ export function AnthropicOnboardingPage() {
     setShowManualInput(true)
   }
 
+  const manualAutoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const handleManualCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
     setManualCode(value)
+
+    // Fixed: cancel pending auto-submit timer on input change
+    if (manualAutoSubmitTimerRef.current) {
+      clearTimeout(manualAutoSubmitTimerRef.current)
+      manualAutoSubmitTimerRef.current = null
+    }
+
     if (isValidCodeFormat(value) && flowState.step === "has_url") {
-      setTimeout(() => submitCode(value), 100)
+      manualAutoSubmitTimerRef.current = setTimeout(() => submitCode(value), 100)
     }
   }
 

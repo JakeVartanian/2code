@@ -5619,12 +5619,19 @@ export function ChatView({
   const isQuickSetup = meta?.isQuickSetup || !meta?.sandboxConfig?.port
   const previewPort = meta?.sandboxConfig?.port ?? 3000
 
-  // Check if preview can be opened (sandbox with port exists and not quick setup)
+  // Check if preview can be opened (sandbox with port, OR local project path)
+  const effectivePath = worktreePath || originalProjectPath || null
   const canOpenPreview = !!(
-    sandboxId &&
-    !isQuickSetup &&
-    meta?.sandboxConfig?.port
+    (sandboxId && !isQuickSetup && meta?.sandboxConfig?.port) ||
+    effectivePath
   )
+
+  // Detect running dev servers for local projects
+  const { data: detectedServers } = trpc.devServer.detectServers.useQuery(
+    { projectPath: effectivePath! },
+    { enabled: !!effectivePath && !sandboxId, refetchInterval: 10_000 },
+  )
+  const localhostUrl = detectedServers?.[0]?.url ?? null
 
   // Check if diff button can be shown (stats available)
   // This shows the Changes button with stats in header
@@ -7235,6 +7242,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                         onOpenTerminal={() => setIsTerminalSidebarOpen(true)}
                         canOpenTerminal={!!worktreePath}
                         isTerminalOpen={isTerminalSidebarOpen}
+                        isPreviewOpen={isPreviewSidebarOpen}
                         chatId={chatId}
                       />
                       {/* Open Locally button - desktop only, sandbox mode */}
@@ -7775,6 +7783,8 @@ Make sure to preserve all functionality from both branches when resolving confli
                 chatId={chatId}
                 sandboxId={sandboxId}
                 port={previewPort}
+                localhostUrl={localhostUrl ?? undefined}
+                projectPath={effectivePath ?? undefined}
                 repository={repository}
                 hideHeader={false}
                 onClose={() => setIsPreviewSidebarOpen(false)}

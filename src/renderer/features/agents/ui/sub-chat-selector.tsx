@@ -14,7 +14,7 @@ import {
 } from "../../details-sidebar/atoms"
 import { chatSourceModeAtom } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
-import { Plus, AlignJustify, Play, TerminalSquare, X } from "lucide-react"
+import { Plus, AlignJustify, Play, TerminalSquare, Globe, X } from "lucide-react"
 import {
   IconSpinner,
   PlanIcon,
@@ -178,6 +178,7 @@ interface SubChatSelectorProps {
   onOpenTerminal?: () => void
   canOpenTerminal?: boolean
   isTerminalOpen?: boolean
+  isPreviewOpen?: boolean
   chatId?: string
 }
 
@@ -194,6 +195,7 @@ export const SubChatSelector = memo(function SubChatSelector({
   onOpenTerminal,
   canOpenTerminal = false,
   isTerminalOpen = false,
+  isPreviewOpen = false,
   chatId,
 }: SubChatSelectorProps) {
   // Use shallow comparison to prevent re-renders when arrays have same content
@@ -1018,6 +1020,34 @@ export const SubChatSelector = memo(function SubChatSelector({
             <TooltipContent side="bottom">
               <span>Open terminal</span>
               {toggleTerminalHotkey && <Kbd>{toggleTerminalHotkey}</Kbd>}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
+      {/* Browser preview button - visible on desktop next to terminal */}
+      {!isMobile && canOpenPreview && !isPreviewOpen && (
+        <div
+          className="rounded-md bg-background/10 backdrop-blur-[10px] flex items-center justify-center"
+          style={{
+            // @ts-expect-error - WebKit-specific property
+            WebkitAppRegion: "no-drag",
+          }}
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => onOpenPreview?.()}
+                className="h-6 w-6 p-0 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] flex-shrink-0 rounded-md flex items-center justify-center hover:bg-foreground/10"
+              >
+                <Globe className="h-4 w-4" />
+                <span className="sr-only">Open browser preview</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <span>Browser preview</span>
             </TooltipContent>
           </Tooltip>
         </div>

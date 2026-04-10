@@ -73,14 +73,14 @@ export const previewPathAtomFamily = atomFamily((chatId: string) =>
 
 // Preview viewport modes storage - stores viewport mode per chatId
 const viewportModesStorageAtom = atomWithStorage<
-  Record<string, "desktop" | "mobile">
+  Record<string, ViewportMode>
 >("agents:viewportModes", {}, undefined, { getOnInit: true })
 
 // atomFamily to get/set viewport mode per chatId
 export const viewportModeAtomFamily = atomFamily((chatId: string) =>
   atom(
-    (get) => get(viewportModesStorageAtom)[chatId] ?? "desktop",
-    (get, set, newMode: "desktop" | "mobile") => {
+    (get) => get(viewportModesStorageAtom)[chatId] ?? ("desktop" as ViewportMode),
+    (get, set, newMode: ViewportMode) => {
       const current = get(viewportModesStorageAtom)
       set(viewportModesStorageAtom, { ...current, [chatId]: newMode })
     },
@@ -1167,6 +1167,123 @@ export const fileViewerOpenAtomFamily = atomFamily((chatId: string) =>
   ),
 )
 
+// ============================================================================
+// BROWSER PREVIEW ATOMS (dev server preview, route scanning, compare mode)
+// ============================================================================
+
+// Preview source config per chat — "sandbox" (legacy CodeSandbox) or "localhost" (local dev server)
+export type PreviewSourceMode = "sandbox" | "localhost"
+
+export type PreviewSourceConfig = {
+  mode: PreviewSourceMode
+  localhostPort?: number
+  localhostUrl?: string
+}
+
+const previewSourceStorageAtom = atomWithStorage<Record<string, PreviewSourceConfig>>(
+  "agents:previewSource",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
+export const previewSourceAtomFamily = atomFamily((chatId: string) =>
+  atom(
+    (get) => get(previewSourceStorageAtom)[chatId] ?? { mode: "localhost" as const },
+    (get, set, config: PreviewSourceConfig) => {
+      const current = get(previewSourceStorageAtom)
+      set(previewSourceStorageAtom, { ...current, [chatId]: config })
+    },
+  ),
+)
+
+// Extended viewport mode: "desktop" | "mobile" | "compare"
+export type ViewportMode = "desktop" | "mobile" | "compare"
+
+// Compare mode device selections per chat
+export type CompareDevice = { name: string; width: number; height: number }
+
+const compareDevicesStorageAtom = atomWithStorage<Record<string, CompareDevice[]>>(
+  "agents:compareDevices",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
+export const compareDevicesAtomFamily = atomFamily((chatId: string) =>
+  atom(
+    (get) => get(compareDevicesStorageAtom)[chatId] ?? [
+      { name: "iPhone 16", width: 393, height: 852 },
+      { name: "iPad Air", width: 820, height: 1180 },
+    ],
+    (get, set, devices: CompareDevice[]) => {
+      const current = get(compareDevicesStorageAtom)
+      set(compareDevicesStorageAtom, { ...current, [chatId]: devices })
+    },
+  ),
+)
+
+// Synchronized scrolling toggle for compare mode
+export const compareSyncScrollAtom = atomWithStorage<boolean>(
+  "agents:compareSyncScroll",
+  true,
+  undefined,
+  { getOnInit: true },
+)
+
+// Page review tracking per chat
+// Structure: { [routePath]: { desktop: boolean, tablet: boolean, mobile: boolean } }
+export type PageReviewStatus = {
+  desktop: boolean
+  tablet: boolean
+  mobile: boolean
+}
+
+const pageReviewStorageAtom = atomWithStorage<Record<string, Record<string, PageReviewStatus>>>(
+  "agents:pageReviews",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
+export const pageReviewAtomFamily = atomFamily((chatId: string) =>
+  atom(
+    (get) => get(pageReviewStorageAtom)[chatId] ?? {},
+    (get, set, reviews: Record<string, PageReviewStatus>) => {
+      const current = get(pageReviewStorageAtom)
+      set(pageReviewStorageAtom, { ...current, [chatId]: reviews })
+    },
+  ),
+)
+
+// Routes drawer open state
+export const previewRoutesDrawerOpenAtom = atomWithStorage<boolean>(
+  "agents:previewRoutesDrawer",
+  false,
+  undefined,
+  { getOnInit: true },
+)
+
+// Preview view mode: "preview" (iframe) or "registry" (page review table)
+export type PreviewViewMode = "preview" | "registry"
+
+const previewViewModeStorageAtom = atomWithStorage<Record<string, PreviewViewMode>>(
+  "agents:previewViewMode",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
+export const previewViewModeAtomFamily = atomFamily((chatId: string) =>
+  atom(
+    (get) => get(previewViewModeStorageAtom)[chatId] ?? "preview",
+    (get, set, mode: PreviewViewMode) => {
+      const current = get(previewViewModeStorageAtom)
+      set(previewViewModeStorageAtom, { ...current, [chatId]: mode })
+    },
+  ),
+)
+
 /**
  * Clean up all chat-level atomFamily entries for a given chatId.
  * Call this when a chat is archived or deleted to prevent memory leaks.
@@ -1185,6 +1302,10 @@ export function clearChatAtomCaches(chatId: string) {
   workspaceDiffCacheAtomFamily.remove(chatId)
   fileViewerOpenAtomFamily.remove(chatId)
   isChatLoadingAtomFamily.remove(chatId)
+  previewSourceAtomFamily.remove(chatId)
+  compareDevicesAtomFamily.remove(chatId)
+  pageReviewAtomFamily.remove(chatId)
+  previewViewModeAtomFamily.remove(chatId)
 }
 
 /**

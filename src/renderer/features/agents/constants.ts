@@ -40,3 +40,26 @@ export const AGENTS_PREVIEW_CONSTANTS = {
 
 export type AgentsPreviewConstants = typeof AGENTS_PREVIEW_CONSTANTS
 
+// Common dev server ports to probe
+export const COMMON_DEV_PORTS = [3000, 3001, 5173, 5174, 8080, 8000, 4200, 4321] as const
+
+// Framework → default dev server port mapping
+export const FRAMEWORK_PORT_MAP: Record<string, number> = {
+  vite: 5173,
+  next: 3000,
+  "react-scripts": 3000,
+  nuxt: 3000,
+  angular: 4200,
+  astro: 4321,
+  svelte: 5173,
+  remix: 5173,
+  gatsby: 8000,
+}
+
+// Compare mode viewport categories
+export const VIEWPORT_CATEGORIES = {
+  phone: ["iPhone 16", "iPhone SE", "Android Compact"],
+  tablet: ["iPad Mini", "iPad Air"],
+  desktop: ["Desktop"],
+} as const
+
