@@ -11,7 +11,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { z } from "zod"
 import { publicProcedure, router } from "../index"
-import { getClaudeShellEnvironment } from "../../claude/env"
+import { getClaudeShellEnvironmentAsync } from "../../claude/env"
 import { isWindows } from "../../platform"
 
 const execFileAsync = promisify(execFile)
@@ -87,7 +87,7 @@ const API_KEYS: ApiKeyDef[] = [
 async function isBinaryPresent(binary: string, shellEnv: Record<string, string>): Promise<boolean> {
   try {
     const whichCmd = isWindows() ? "where" : "which"
-    await execFileAsync(whichCmd, [binary], { env: shellEnv, timeout: 3000 })
+    await execFileAsync(whichCmd, [binary], { env: shellEnv, timeout: 1500 })
     return true
   } catch {
     return false
@@ -139,8 +139,15 @@ export const envToolsRouter = router({
       })
     )
     .query(async ({ input }) => {
-      // Load shell env (cached after first call)
-      const shellEnv = getClaudeShellEnvironment()
+      // Load shell env with a 3s timeout fallback to process.env.
+      // On first call (cache cold), spawning a login shell can take several seconds.
+      const shellEnvFallback = Object.fromEntries(
+        Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)
+      )
+      const shellEnv = await Promise.race([
+        getClaudeShellEnvironmentAsync(),
+        new Promise<Record<string, string>>((resolve) => setTimeout(() => resolve(shellEnvFallback), 3000)),
+      ])
 
       // Parse project .env files (no shell eval)
       const projectEnvKeys = new Set<string>()
@@ -153,12 +160,12 @@ export const envToolsRouter = router({
         }
       }
 
-      // Check CLI tools (run in parallel)
+      // Check CLI tools (run in parallel, 1.5s timeout per binary)
       const cliTools = await Promise.all(
         CLI_TOOLS.map(async (tool) => ({
           name: tool.name,
           key: tool.key,
-          present: isBinaryPresent(tool.binary, shellEnv),
+          present: await isBinaryPresent(tool.binary, shellEnv),
           hint: tool.hint,
         }))
       )

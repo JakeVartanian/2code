@@ -1113,7 +1113,7 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
   const [tooltipOpen, setTooltipOpen] = useState(false)
   const prevOpen = useRef(false)
 
-  const { data, isFetching, refetch } = trpc.envTools.check.useQuery(
+  const { data, isFetching, isError, refetch } = trpc.envTools.check.useQuery(
     { projectPath },
     { enabled: open, staleTime: 5 * 60_000, retry: false }
   )
@@ -1128,9 +1128,13 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
     prevOpen.current = open
   }, [open])
 
-  const presentCliTools = data?.cliTools.filter((t) => t.present) ?? []
-  const presentApiKeys = data?.apiKeys.filter((k) => k.present) ?? []
-  const totalPresent = presentCliTools.length + presentApiKeys.length
+  // Separate workspace-level (shell) keys from project-level (.env) keys
+  const shellApiKeys = data?.apiKeys.filter((k) => k.source === "shell") ?? []
+  const projectApiKeys = data?.apiKeys.filter((k) => k.source === "project-env") ?? []
+  const absentApiKeys = data?.apiKeys.filter((k) => !k.present) ?? []
+
+  // Project folder name for display
+  const projectFolderName = projectPath ? projectPath.split("/").filter(Boolean).pop() : null
 
   return (
     <Tooltip open={open || blockTooltip ? false : tooltipOpen} onOpenChange={setTooltipOpen}>
@@ -1148,22 +1152,15 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
 
             <DropdownMenuContent side="top" align="start" className="w-72 p-3" onCloseAutoFocus={(e) => e.preventDefault()}>
               <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-medium text-foreground">Environment Tools</span>
-                <div className="flex items-center gap-2">
-                  {data && (
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {totalPresent} found
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => refetch()}
-                    disabled={isFetching}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <RefreshCw className={cn("h-3 w-3", isFetching && "animate-spin")} />
-                  </button>
-                </div>
+                <span className="text-xs font-medium text-foreground">Environment</span>
+                <button
+                  type="button"
+                  onClick={() => refetch()}
+                  disabled={isFetching}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <RefreshCw className={cn("h-3 w-3", isFetching && "animate-spin")} />
+                </button>
               </div>
 
               {isFetching && !data && (
@@ -1172,50 +1169,101 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
                 </div>
               )}
 
+              {isError && !data && (
+                <div className="flex flex-col items-center gap-2 py-4">
+                  <p className="text-xs text-muted-foreground/60">Failed to load environment</p>
+                  <button
+                    type="button"
+                    onClick={() => refetch()}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
+
               {data && (
-                <div className="flex flex-col gap-3">
-                  {/* CLI Tools */}
+                <div className="flex flex-col gap-4">
+                  {/* ── Workspace section ── */}
                   <div>
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-1.5">CLI Tools</p>
-                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50 mb-2">Workspace</p>
+
+                    {/* CLI Tools */}
+                    <p className="text-[10px] text-muted-foreground/40 mb-1">CLI Tools</p>
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 mb-2.5">
                       {data.cliTools.map((tool) => (
                         <div key={tool.key} className="flex items-center gap-1.5 py-0.5">
                           {tool.present ? (
                             <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
                           ) : (
-                            <Circle className="h-3 w-3 shrink-0 text-muted-foreground/30" />
+                            <Circle className="h-3 w-3 shrink-0 text-muted-foreground/20" />
                           )}
-                          <span className={cn("text-xs truncate", tool.present ? "text-foreground" : "text-muted-foreground/50")}>
+                          <span className={cn("text-xs truncate", tool.present ? "text-foreground" : "text-muted-foreground/40")}>
                             {tool.name}
                           </span>
                         </div>
                       ))}
                     </div>
-                  </div>
 
-                  {/* API Keys */}
-                  <div>
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-1.5">API Keys</p>
-                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
-                      {data.apiKeys.map((apiKey) => (
-                        <div key={apiKey.key} className="flex items-center gap-1.5 py-0.5">
-                          {apiKey.present ? (
+                    {/* Shell API Keys */}
+                    <p className="text-[10px] text-muted-foreground/40 mb-1">API Keys — Shell</p>
+                    {shellApiKeys.length > 0 ? (
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                        {shellApiKeys.map((apiKey) => (
+                          <div key={apiKey.key} className="flex items-center gap-1.5 py-0.5">
                             <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
-                          ) : (
-                            <Circle className="h-3 w-3 shrink-0 text-muted-foreground/30" />
-                          )}
-                          <span className={cn("text-xs truncate", apiKey.present ? "text-foreground" : "text-muted-foreground/50")}>
-                            {apiKey.name}
-                          </span>
-                          {apiKey.present && apiKey.source === "project-env" && (
-                            <span className="text-[9px] text-muted-foreground/60 shrink-0">.env</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                            <span className="text-xs truncate text-foreground">{apiKey.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-muted-foreground/40 italic">None found in shell</p>
+                    )}
                   </div>
 
-                  <p className="text-[10px] text-muted-foreground/40 border-t border-border/50 pt-2">
+                  {/* ── Project section ── */}
+                  {projectPath && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+                          Project
+                        </p>
+                        <span className="text-[10px] text-muted-foreground/40 truncate max-w-[120px]" title={projectPath}>
+                          {projectFolderName}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground/40 mb-1">API Keys — .env</p>
+                      {projectApiKeys.length > 0 ? (
+                        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                          {projectApiKeys.map((apiKey) => (
+                            <div key={apiKey.key} className="flex items-center gap-1.5 py-0.5">
+                              <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+                              <span className="text-xs truncate text-foreground">{apiKey.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-muted-foreground/40 italic">No .env keys found</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Absent keys (collapsed into a subtle list) */}
+                  {absentApiKeys.length > 0 && (
+                    <div>
+                      <p className="text-[10px] text-muted-foreground/40 mb-1">Not configured</p>
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                        {absentApiKeys.map((apiKey) => (
+                          <div key={apiKey.key} className="flex items-center gap-1.5 py-0.5">
+                            <Circle className="h-3 w-3 shrink-0 text-muted-foreground/20" />
+                            <span className="text-xs truncate text-muted-foreground/40">{apiKey.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-muted-foreground/30 border-t border-border/50 pt-2">
                     Values are never shown
                   </p>
                 </div>
@@ -1224,7 +1272,7 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
           </DropdownMenu>
         </div>
       </TooltipTrigger>
-      <TooltipContent>Environment Tools</TooltipContent>
+      <TooltipContent>Environment</TooltipContent>
     </Tooltip>
   )
 })
