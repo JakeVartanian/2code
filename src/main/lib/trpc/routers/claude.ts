@@ -1814,6 +1814,14 @@ export const claudeRouter = router({
               CLAUDE_CONFIG_DIR: isolatedConfigDir,
             }
 
+            // Inject the freshly-resolved OAuth token so the subprocess receives
+            // the SQLite-stored 2Code token, not just the system keychain.
+            // Only for the native Anthropic path — custom configs (OpenRouter/Ollama)
+            // already inject their token via customEnv in buildClaudeEnv above.
+            if (!finalCustomConfig && claudeCodeToken) {
+              finalEnv.ANTHROPIC_AUTH_TOKEN = claudeCodeToken
+            }
+
             // Log auth method being used (single line)
             console.log(
               `[claude-auth] method=${finalEnv.ANTHROPIC_API_KEY ? "api-key" : finalEnv.ANTHROPIC_AUTH_TOKEN ? "auth-token" : "keychain/default"} customApiConfig=${hasExistingApiConfig} baseUrl=${finalEnv.ANTHROPIC_BASE_URL || "(default)"}`,
