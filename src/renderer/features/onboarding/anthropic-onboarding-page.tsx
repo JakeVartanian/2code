@@ -421,7 +421,7 @@ export function AnthropicOnboardingPage() {
             )}
 
           {/* Waiting for browser OAuth to complete */}
-          {(urlOpened || flowState.step === "has_url") && (
+          {(urlOpened || flowState.step === "has_url") && flowState.step !== "error" && (
             <div className="space-y-4 flex flex-col items-center w-full">
               {/* Always show spinner while waiting for auto-complete */}
               <div className="flex items-center gap-2 text-sm text-muted-foreground">

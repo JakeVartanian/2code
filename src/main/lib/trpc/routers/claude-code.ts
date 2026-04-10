@@ -306,8 +306,10 @@ export const claudeCodeRouter = router({
    * and return the manual URL to the UI as a fallback if the browser doesn't redirect.
    */
   startAuth: publicProcedure.mutation(async () => {
-    // Clean up any previous session
-    oauthSessions.clear()
+    // Previous sessions are cleaned up by their 15-min TTL.
+    // Clearing all sessions here would destroy in-flight OAuth flows
+    // from other windows. The state parameter in handleClaudeCodeOAuthCallback
+    // already ensures only the matching session processes the callback.
 
     const sessionId = base64url(randomBytes(16))
     const codeVerifier = generateCodeVerifier()
