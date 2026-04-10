@@ -1398,6 +1398,7 @@ export const claudeRouter = router({
             const transform = createTransformer({
               emitSdkMessageUuid: historyEnabled,
               isUsingOllama,
+              model: resolvedModel,
             })
 
             // 4. Setup accumulation state
@@ -1497,15 +1498,30 @@ export const claudeRouter = router({
               }
               return url
             }
+            // Detect if we're using a non-Anthropic endpoint (OpenRouter, Ollama, other custom providers)
+            // These providers don't support Claude-specific params like `effort` and `thinking`
+            const isNonAnthropicEndpoint = Boolean(
+              finalCustomConfig?.baseUrl &&
+              !finalCustomConfig.baseUrl.includes("api.anthropic.com")
+            )
+            const isOpenRouterEndpoint = Boolean(finalCustomConfig?.baseUrl?.includes("openrouter.ai"))
+
             const claudeEnv = buildClaudeEnv({
               ...(finalCustomConfig && {
-                customEnv: {
-                  ANTHROPIC_AUTH_TOKEN: finalCustomConfig.token,
-                  ANTHROPIC_BASE_URL: normalizeBaseUrl(finalCustomConfig.baseUrl),
-                  // Strip ANTHROPIC_API_KEY when using a custom provider (OpenRouter, etc.)
-                  // to prevent the SDK from using a Claude API key against a non-Anthropic endpoint
-                  ANTHROPIC_API_KEY: "",
-                },
+                customEnv: isOpenRouterEndpoint
+                  ? {
+                      // OpenRouter requires ANTHROPIC_API_KEY (sends as x-api-key header)
+                      // per CLAUDE.md recommendation for OpenRouter integration
+                      ANTHROPIC_API_KEY: finalCustomConfig.token,
+                      ANTHROPIC_BASE_URL: normalizeBaseUrl(finalCustomConfig.baseUrl),
+                      ANTHROPIC_AUTH_TOKEN: "",
+                    }
+                  : {
+                      // Other custom providers (Ollama, etc.) use Bearer token style
+                      ANTHROPIC_AUTH_TOKEN: finalCustomConfig.token,
+                      ANTHROPIC_BASE_URL: normalizeBaseUrl(finalCustomConfig.baseUrl),
+                      ANTHROPIC_API_KEY: "",
+                    },
               }),
               enableTasks: input.enableTasks ?? true,
             })
@@ -2062,7 +2078,16 @@ ${prompt}
             // Build system prompt appendix
             let systemAppend = ""
             if (agentsMdContent) {
-              systemAppend += `\n\n# AGENTS.md\nThe following are the project's AGENTS.md instructions:\n\n${agentsMdContent}`
+              if (isUsingOllama) {
+                // Ollama has no prompt caching — truncate to first 500 chars to save tokens
+                const truncated = agentsMdContent.slice(0, 500)
+                const isTruncated = agentsMdContent.length > 500
+                systemAppend += `\n\n# AGENTS.md (summary)\n${truncated}${isTruncated ? "\n...(truncated)" : ""}`
+              } else if (!isNonAnthropicEndpoint) {
+                // Anthropic API: include full AGENTS.md (gets cached after first turn)
+                systemAppend += `\n\n# AGENTS.md\nThe following are the project's AGENTS.md instructions:\n\n${agentsMdContent}`
+              }
+              // Non-Anthropic, non-Ollama (e.g. OpenRouter): skip AGENTS.md — no caching benefit
             }
             if (disabledSections.length > 0) {
               const sectionList = disabledSections
@@ -2363,14 +2388,15 @@ ${prompt}
                 ...(!resumeSessionId && { continue: true }),
                 ...(resolvedModel && { model: resolvedModel }),
                 // fallbackModel: "claude-opus-4-5-20251101",
-                // Thinking config (new SDK option, replaces deprecated maxThinkingTokens)
-                ...(input.thinkingConfig
+                // Thinking config and effort are Anthropic-only features.
+                // Don't send them to OpenRouter or other non-Anthropic endpoints — they cause invalid_request errors.
+                ...(!isNonAnthropicEndpoint && !isUsingOllama && input.thinkingConfig
                   ? { thinking: input.thinkingConfig }
-                  : input.maxThinkingTokens
+                  : !isNonAnthropicEndpoint && !isUsingOllama && input.maxThinkingTokens
                     ? { maxThinkingTokens: input.maxThinkingTokens }
                     : {}),
-                // Effort level (controls reasoning depth)
-                ...(input.effort && { effort: input.effort }),
+                // Effort level (controls reasoning depth) — Anthropic-only, skip for OpenRouter/Ollama
+                ...(!isNonAnthropicEndpoint && !isUsingOllama && input.effort ? { effort: input.effort } : {}),
               },
             }
 
@@ -2614,6 +2640,14 @@ ${prompt}
                     ) {
                       errorCategory = "OVERLOADED_SDK"
                       errorContext = "Claude is overloaded, try again later"
+                    } else if (
+                      rawErrorCode === "invalid_request" &&
+                      isOpenRouter &&
+                      (sdkError.includes("model") || sdkError.includes("selected model"))
+                    ) {
+                      // OpenRouter: model not found or no access
+                      errorCategory = "USAGE_POLICY_VIOLATION"
+                      errorContext = sdkError // Show the actual error (e.g. "There's an issue with the selected model...")
                     } else if (
                       rawErrorCode === "invalid_request" ||
                       sdkError.includes("Usage Policy") ||

@@ -1,7 +1,9 @@
 import type { MCPServer, MCPServerStatus, MessageMetadata, UIMessageChunk } from "./types";
 
-export function createTransformer(options?: { isUsingOllama?: boolean }) {
+export function createTransformer(options?: { isUsingOllama?: boolean; model?: string; emitSdkMessageUuid?: boolean }) {
   const isUsingOllama = options?.isUsingOllama === true
+  const model = options?.model
+  const emitSdkMessageUuid = options?.emitSdkMessageUuid === true
   let textId: string | null = null
   let textStarted = false
   let started = false
@@ -447,6 +449,7 @@ export function createTransformer(options?: { isUsingOllama?: boolean }) {
       const resolvedOutputTokens = resultOutputTokens ?? usage.output_tokens
       const metadata: MessageMetadata = {
         sessionId: msg.session_id,
+        model,
         inputTokens: resolvedInputTokens,
         cacheReadInputTokens: usage.cache_read_input_tokens,
         cacheCreationInputTokens: usage.cache_creation_input_tokens,

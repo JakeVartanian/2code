@@ -71,6 +71,7 @@ export type MCPServer = {
 export type MessageMetadata = {
   sessionId?: string
   sdkMessageUuid?: string // SDK's message UUID for resumeSessionAt (rollback support)
+  model?: string
   inputTokens?: number
   cacheReadInputTokens?: number
   cacheCreationInputTokens?: number

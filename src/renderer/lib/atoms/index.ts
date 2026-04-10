@@ -438,7 +438,24 @@ export type EffortLevel = "low" | "medium" | "high" | "max"
 
 export const effortLevelAtom = atomWithStorage<EffortLevel>(
   "preferences:effort-level",
-  "high",
+  "medium",
+  undefined,
+  { getOnInit: true },
+)
+
+// Preferences - Auto Compact
+// Automatically trigger /compact when context usage exceeds the threshold
+export const autoCompactEnabledAtom = atomWithStorage<boolean>(
+  "preferences:auto-compact-enabled",
+  true,
+  undefined,
+  { getOnInit: true },
+)
+
+// Threshold (0–1) at which auto-compact fires. Default 0.75 = 75% context used.
+export const autoCompactThresholdAtom = atomWithStorage<number>(
+  "preferences:auto-compact-threshold",
+  0.75,
   undefined,
   { getOnInit: true },
 )

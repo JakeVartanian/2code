@@ -72,7 +72,9 @@ import {
   normalizeCustomClaudeConfig,
   sessionInfoAtom,
   selectedOllamaModelAtom,
-  soundNotificationsEnabledAtom
+  soundNotificationsEnabledAtom,
+  autoCompactEnabledAtom,
+  autoCompactThresholdAtom,
 } from "../../../lib/atoms"
 import { useFileChangeListener, useGitWatcher } from "../../../lib/hooks/use-file-change-listener"
 import { useRemoteChat } from "../../../lib/hooks/use-remote-chats"
@@ -2777,6 +2779,24 @@ const ChatViewInner = memo(function ChatViewInner({
       return () => clearTimeout(flagTimeout)
     }
   }, [isStreaming, subChatId, pendingQuestions, setPendingQuestionsMap])
+
+  // Auto-compact: fire /compact when context exceeds threshold after stream completes
+  const autoCompactEnabled = useAtomValue(autoCompactEnabledAtom)
+  const autoCompactThreshold = useAtomValue(autoCompactThresholdAtom)
+  const prevIsStreamingForCompactRef = useRef(isStreaming)
+  useEffect(() => {
+    const wasStreaming = prevIsStreamingForCompactRef.current
+    prevIsStreamingForCompactRef.current = isStreaming
+
+    // Only trigger on stream stop, when auto-compact is on and we're not already compacting
+    if (!wasStreaming || isStreaming || !autoCompactEnabled || isCompacting) return
+
+    const contextTokens = messageTokenData.contextInputTokens ?? messageTokenData.totalInputTokens
+    const contextWindow = 200_000
+    if (contextTokens > 0 && contextTokens / contextWindow >= autoCompactThreshold) {
+      handleCompact()
+    }
+  }, [isStreaming, autoCompactEnabled, autoCompactThreshold, isCompacting, messageTokenData, handleCompact])
 
   // Sync pending questions with messages state
   // This handles: 1) restoring on chat switch, 2) clearing when question is answered/timed out

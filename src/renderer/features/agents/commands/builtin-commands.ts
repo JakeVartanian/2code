@@ -7,40 +7,24 @@ export const COMMAND_PROMPTS: Partial<
   Record<BuiltinCommandAction["type"], string>
 > = {
   review:
-    "Please review the code in the current context and provide feedback on code quality, potential bugs, and improvements.",
+    "Review the code in context: flag bugs, quality issues, and improvements. Be concise.",
   "pr-comments":
-    "Generate detailed PR review comments for the changes in the current context.",
+    "Generate PR review comments for the changes in context. Be specific and concise.",
   "release-notes":
-    "Generate release notes summarizing the changes in this codebase.",
+    "Generate concise release notes for the changes in this codebase.",
   "security-review":
-    "Perform a security audit of the code in the current context. Identify vulnerabilities, security risks, and suggest fixes.",
+    "Security audit the code in context. List vulnerabilities and fixes. Be concise.",
   commit:
-    "Закоммить это аккуратно, не трогая больше ничего. Сделай коммит только для staged изменений, не добавляй никакие другие файлы и не вноси дополнительных изменений.",
-  "worktree-setup": `Create a worktree setup script for this project.
-
-Your task:
-1. Analyze the project to understand what's needed to set up a working copy
-2. Create the file .2code/worktree.json with setup commands
-
-The goal is to reproduce the EXACT same working state as the original repo in the new worktree.
+    "Commit staged changes only. Do not modify or stage any other files.",
+  "worktree-setup": `Analyze this project and create .2code/worktree.json with setup commands.
 
 Rules:
-- Use only "setup-worktree" key (works on all platforms)
-- Install dependencies using the project's package manager (check for bun.lockb, pnpm-lock.yaml, yarn.lock, package-lock.json)
-- Copy ALL real env files that exist (.env, .env.local, .env.development, etc) - NOT example files
-- Use $ROOT_WORKTREE_PATH to reference the main repo path
-- Don't include build steps unless absolutely necessary for the project to work
+- Use only "setup-worktree" key
+- Use project's package manager (check bun.lockb, pnpm-lock.yaml, yarn.lock, package-lock.json)
+- Copy real env files (.env, .env.local, etc.) using $ROOT_WORKTREE_PATH — NOT example files
+- Skip build steps unless required to run the project
 
-Example output for .2code/worktree.json:
-{
-  "setup-worktree": [
-    "bun install",
-    "cp $ROOT_WORKTREE_PATH/.env .env",
-    "cp $ROOT_WORKTREE_PATH/.env.local .env.local"
-  ]
-}
-
-Now analyze this project and create .2code/worktree.json with the appropriate setup commands.`,
+Output .2code/worktree.json only.`,
 }
 
 /**
