@@ -1,12 +1,12 @@
 import { cn } from "../lib/utils"
-import { memo, useState, useCallback, useEffect, useMemo } from "react"
+import { memo, useState, useCallback, useEffect, useMemo, lazy, Suspense } from "react"
 import { Streamdown, parseMarkdownIntoBlocks } from "streamdown"
 import remarkBreaks from "remark-breaks"
 import remarkGfm from "remark-gfm"
 import { Copy, Check } from "lucide-react"
 import { useCodeTheme } from "../lib/hooks/use-code-theme"
 import { highlightCode } from "../lib/themes/shiki-theme-loader"
-import { MermaidBlock } from "./mermaid-block"
+const MermaidBlock = lazy(() => import("./mermaid-block").then(m => ({ default: m.MermaidBlock })))
 
 // Function to strip emojis from text (only common emojis, preserving markdown symbols)
 export function stripEmojis(text: string): string {
@@ -262,7 +262,7 @@ function createCodeComponent(codeTheme: string, size: MarkdownSize, styles: type
       if (language === "mermaid") {
         // Pass isStreaming to MermaidBlock
         // When streaming, MermaidBlock shows a placeholder instead of trying to render
-        return <MermaidBlock code={codeContent.replace(/\n$/, "")} size={size} isStreaming={isStreaming} />
+        return <Suspense fallback={<div className="rounded-[10px] bg-muted/50 px-4 py-3 text-sm text-muted-foreground">Loading diagram...</div>}><MermaidBlock code={codeContent.replace(/\n$/, "")} size={size} isStreaming={isStreaming} /></Suspense>
       }
 
       return (

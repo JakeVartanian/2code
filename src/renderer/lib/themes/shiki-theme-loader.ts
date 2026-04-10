@@ -1,4 +1,5 @@
-import * as shiki from "shiki"
+import { createHighlighterCore, type HighlighterCore } from "@shikijs/core"
+import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript"
 import { isBuiltinTheme } from "../vscode-themes"
 import { getBuiltinThemeById } from "./builtin-themes"
 import type { VSCodeFullTheme } from "../atoms"
@@ -6,8 +7,12 @@ import type { VSCodeFullTheme } from "../atoms"
 /**
  * Shared Shiki highlighter instance
  * Initialized with default themes, can load additional themes dynamically
+ * Uses @shikijs/core with explicit language imports to avoid bundling 300+ grammars
  */
-let highlighterPromise: Promise<shiki.Highlighter> | null = null
+let highlighterPromise: Promise<HighlighterCore> | null = null
+
+// Re-export the type so consumers don't need to import from shiki directly
+export type { HighlighterCore as Highlighter }
 
 // ============================================================================
 // LRU CACHE FOR HIGHLIGHT RESULTS
@@ -57,27 +62,40 @@ class LRUCache<K, V> {
 const highlightCache = new LRUCache<string, string>(HIGHLIGHT_CACHE_MAX_SIZE)
 
 /**
- * Languages supported by the highlighter
+ * Explicit language imports — only the 12 languages we need (~800KB vs ~8MB)
  */
-const SUPPORTED_LANGUAGES: shiki.BundledLanguage[] = [
-  "typescript",
-  "javascript",
-  "tsx",
-  "jsx",
-  "html",
-  "css",
-  "json",
-  "python",
-  "go",
-  "rust",
-  "bash",
-  "markdown",
+const LANGUAGE_IMPORTS = [
+  import("@shikijs/langs/typescript"),
+  import("@shikijs/langs/javascript"),
+  import("@shikijs/langs/tsx"),
+  import("@shikijs/langs/jsx"),
+  import("@shikijs/langs/html"),
+  import("@shikijs/langs/css"),
+  import("@shikijs/langs/json"),
+  import("@shikijs/langs/python"),
+  import("@shikijs/langs/go"),
+  import("@shikijs/langs/rust"),
+  import("@shikijs/langs/bash"),
+  import("@shikijs/langs/markdown"),
 ]
 
 /**
- * Default themes to load initially - include all shiki bundled themes we might need
+ * Explicit theme imports — only the 7 themes we need
  */
-const DEFAULT_THEMES: shiki.BundledTheme[] = [
+const THEME_IMPORTS = [
+  import("@shikijs/themes/github-dark"),
+  import("@shikijs/themes/github-light"),
+  import("@shikijs/themes/vitesse-dark"),
+  import("@shikijs/themes/vitesse-light"),
+  import("@shikijs/themes/min-dark"),
+  import("@shikijs/themes/min-light"),
+  import("@shikijs/themes/vesper"),
+]
+
+/**
+ * Names of the bundled themes we loaded
+ */
+const DEFAULT_THEME_NAMES = [
   "github-dark",
   "github-light",
   "vitesse-dark",
@@ -91,7 +109,7 @@ const DEFAULT_THEMES: shiki.BundledTheme[] = [
  * Map our custom theme IDs to Shiki bundled themes for syntax highlighting
  * Only themes WITHOUT tokenColors need mapping - themes with tokenColors use their own
  */
-const THEME_TO_SHIKI_MAP: Record<string, shiki.BundledTheme> = {
+const THEME_TO_SHIKI_MAP: Record<string, string> = {
   // 2Code themes use GitHub themes (no tokenColors)
   "2code-dark": "github-dark",
   "2code-light": "github-light",
@@ -113,12 +131,19 @@ const THEME_TO_SHIKI_MAP: Record<string, shiki.BundledTheme> = {
 /**
  * Get or create the Shiki highlighter instance
  */
-export async function getHighlighter(): Promise<shiki.Highlighter> {
+export async function getHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
-    highlighterPromise = shiki.createHighlighter({
-      themes: DEFAULT_THEMES,
-      langs: SUPPORTED_LANGUAGES,
-    })
+    highlighterPromise = (async () => {
+      const [langs, themes] = await Promise.all([
+        Promise.all(LANGUAGE_IMPORTS),
+        Promise.all(THEME_IMPORTS),
+      ])
+      return createHighlighterCore({
+        themes: themes.map((t) => t.default),
+        langs: langs.map((l) => l.default),
+        engine: createJavaScriptRegexEngine(),
+      })
+    })()
   }
   return highlighterPromise
 }
@@ -159,8 +184,7 @@ export async function loadFullTheme(theme: VSCodeFullTheme): Promise<void> {
  * Check if a theme is a Shiki bundled theme (not our custom builtin themes)
  */
 function isShikiBundledTheme(themeId: string): boolean {
-  // These are the Shiki bundled themes that we load
-  return DEFAULT_THEMES.includes(themeId as shiki.BundledTheme)
+  return DEFAULT_THEME_NAMES.includes(themeId)
 }
 
 /**
@@ -172,17 +196,17 @@ function getShikiThemeForHighlighting(themeId: string): string {
   if (themeId in THEME_TO_SHIKI_MAP) {
     return THEME_TO_SHIKI_MAP[themeId]
   }
-  
+
   // If it's already a shiki bundled theme, use it directly
   if (isShikiBundledTheme(themeId)) {
     return themeId
   }
-  
+
   // If the theme is loaded in our cache (has tokenColors), use it directly
   if (fullThemesCache.has(themeId)) {
     return themeId
   }
-  
+
   // Check the theme type and use appropriate default
   const builtinTheme = getBuiltinThemeById(themeId)
   if (builtinTheme) {
@@ -192,7 +216,7 @@ function getShikiThemeForHighlighting(themeId: string): string {
     }
     return builtinTheme.type === "light" ? "github-light" : "github-dark"
   }
-  
+
   // Default to github-dark
   return "github-dark"
 }
@@ -230,18 +254,6 @@ export async function ensureThemeLoaded(themeId: string): Promise<void> {
 }
 
 /**
- * Check if a theme is available (loaded or can be loaded)
- */
-function isThemeAvailable(themeId: string): boolean {
-  return (
-    isShikiBundledTheme(themeId) ||
-    fullThemesCache.has(themeId) ||
-    !!getBuiltinThemeById(themeId) ||
-    isBuiltinTheme(themeId)
-  )
-}
-
-/**
  * Highlight code with a specific theme
  * Uses custom themes with tokenColors when available, otherwise maps to bundled themes
  * Results are cached to prevent re-highlighting when switching tabs
@@ -267,8 +279,8 @@ export async function highlightCode(
   const shikiTheme = getShikiThemeForHighlighting(themeId)
 
   const loadedLangs = highlighter.getLoadedLanguages()
-  const lang = loadedLangs.includes(language as shiki.BundledLanguage)
-    ? (language as shiki.BundledLanguage)
+  const lang = loadedLangs.includes(language)
+    ? language
     : "plaintext"
 
   const html = highlighter.codeToHtml(code, {

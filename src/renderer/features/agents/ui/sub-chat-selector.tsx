@@ -252,10 +252,13 @@ export const SubChatSelector = memo(function SubChatSelector({
   const archiveAgentHotkey = useResolvedHotkeyDisplay("archive-agent")
   const newAgentHotkey = useResolvedHotkeyDisplay("new-agent")
 
+  // Poll faster when streaming (data changes frequently), slower when idle
+  const statsRefetchInterval = loadingSubChats.size > 0 ? 5000 : 30000
+
   // Pending plan approvals from DB - only for open sub-chats
   const { data: pendingPlanApprovalsData } = trpc.chats.getPendingPlanApprovals.useQuery(
     { openSubChatIds },
-    { refetchInterval: 5000, enabled: openSubChatIds.length > 0, placeholderData: (prev) => prev }
+    { refetchInterval: statsRefetchInterval, enabled: openSubChatIds.length > 0, placeholderData: (prev) => prev }
   )
   const pendingPlanApprovals = useMemo(() => {
     const set = new Set<string>()

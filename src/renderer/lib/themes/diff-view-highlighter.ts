@@ -6,11 +6,11 @@
  */
 
 import { getHighlighter } from "./shiki-theme-loader"
-import type { BundledTheme, Highlighter } from "shiki"
+import type { Highlighter } from "./shiki-theme-loader"
 import type { Root } from "hast"
 
 // Shiki themes we load
-const SHIKI_THEMES: BundledTheme[] = [
+const SHIKI_THEMES: string[] = [
   "github-dark",
   "github-light",
   "vitesse-dark",
@@ -23,7 +23,7 @@ const SHIKI_THEMES: BundledTheme[] = [
 /**
  * Map our custom theme IDs to Shiki bundled themes
  */
-const THEME_TO_SHIKI_MAP: Record<string, BundledTheme> = {
+const THEME_TO_SHIKI_MAP: Record<string, string> = {
   "2code-dark": "github-dark",
   "2code-light": "github-light",
   "claude-dark": "github-dark",
@@ -38,7 +38,7 @@ const THEME_TO_SHIKI_MAP: Record<string, BundledTheme> = {
 /**
  * Get the Shiki bundled theme for a given theme ID
  */
-export function getShikiTheme(themeId: string, isDark: boolean): BundledTheme {
+export function getShikiTheme(themeId: string, isDark: boolean): string {
   if (themeId in THEME_TO_SHIKI_MAP) {
     return THEME_TO_SHIKI_MAP[themeId]
   }

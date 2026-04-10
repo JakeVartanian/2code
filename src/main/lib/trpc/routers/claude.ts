@@ -388,6 +388,15 @@ const getClaudeQuery = async () => {
 // Active sessions for cancellation
 const activeSessions = new Map<string, AbortController>()
 
+// Track session completion promises for graceful shutdown
+const sessionCompletionPromises = new Map<string, Promise<void>>()
+
+/** Register a session completion promise for graceful shutdown tracking */
+export function registerSessionCompletion(subChatId: string, promise: Promise<void>): void {
+  sessionCompletionPromises.set(subChatId, promise)
+  promise.finally(() => sessionCompletionPromises.delete(subChatId))
+}
+
 /** Maximum number of concurrent Claude agent sessions */
 const MAX_CONCURRENT_AGENTS = 5
 
@@ -396,14 +405,26 @@ export function hasActiveClaudeSessions(): boolean {
   return activeSessions.size > 0
 }
 
-/** Abort all active Claude sessions so their cleanup saves partial state */
-export function abortAllClaudeSessions(): void {
+/** Abort all active Claude sessions and wait for their cleanup to complete */
+export async function abortAllClaudeSessions(): Promise<void> {
+  // Capture completion promises BEFORE aborting (abort triggers the catch blocks)
+  const pendingCompletions = [...sessionCompletionPromises.values()]
+
   for (const [subChatId, controller] of activeSessions) {
     console.log(`[claude] Aborting session ${subChatId} before reload`)
     controller.abort()
   }
   activeSessions.clear()
-  // Flush any debounced writes that haven't been persisted yet
+
+  // Wait for all session async functions to finish their catch/finally blocks
+  // This ensures flushPendingWrite() calls from abort handlers complete
+  if (pendingCompletions.length > 0) {
+    console.log(`[claude] Waiting for ${pendingCompletions.length} session(s) to finish cleanup...`)
+    await Promise.allSettled(pendingCompletions)
+    console.log(`[claude] All sessions cleaned up`)
+  }
+
+  // Flush any remaining debounced writes
   flushAllPendingWrites()
 }
 
@@ -1214,7 +1235,7 @@ export const claudeRouter = router({
           } as UIMessageChunk)
         }
 
-        ;(async () => {
+        const sessionPromise = (async () => {
           try {
             const db = getDatabase()
 
@@ -1883,6 +1904,22 @@ export const claudeRouter = router({
             // Read AGENTS.md from project root if it exists (cached to avoid re-reading on every message)
             const agentsMdContent = await readAgentsMdCached(input.cwd)
 
+            // Load workspace section guards (disabled sections block Edit/Write)
+            let disabledSections: import("../../../../shared/section-types").WorkspaceSection[] = []
+            try {
+              const { getOrDetectSections } = await import("../../sections/sections-config")
+              const sectionsCwd = input.projectPath || input.cwd
+              const sectionsConfig = await getOrDetectSections(sectionsCwd)
+              disabledSections = sectionsConfig.sections.filter((s) => !s.enabled)
+              if (disabledSections.length > 0) {
+                console.log(
+                  `[claude] Section guards: ${disabledSections.length} disabled (${disabledSections.map((s) => s.name).join(", ")})`,
+                )
+              }
+            } catch (err) {
+              console.warn("[claude] Failed to load sections config:", err)
+            }
+
             // For Ollama: embed context AND history directly in prompt
             // Ollama doesn't have server-side sessions, so we must include full history
             let finalQueryPrompt: string | AsyncIterable<any> = prompt
@@ -2007,11 +2044,22 @@ ${prompt}
 
             // System prompt config - use preset for both Claude and Ollama
             // If AGENTS.md exists, append its content to the system prompt
-            const systemPromptConfig = agentsMdContent
+            // Build system prompt appendix
+            let systemAppend = ""
+            if (agentsMdContent) {
+              systemAppend += `\n\n# AGENTS.md\nThe following are the project's AGENTS.md instructions:\n\n${agentsMdContent}`
+            }
+            if (disabledSections.length > 0) {
+              const sectionList = disabledSections
+                .map((s) => `- ${s.name} (${s.patterns.join(", ")})`)
+                .join("\n")
+              systemAppend += `\n\n# Section Guards\nThe following codebase sections are DISABLED. Do NOT read, modify, or create files in these areas:\n${sectionList}\nFocus your work on the enabled sections only.`
+            }
+            const systemPromptConfig = systemAppend
               ? {
                   type: "preset" as const,
                   preset: "claude_code" as const,
-                  append: `\n\n# AGENTS.md\nThe following are the project's AGENTS.md instructions:\n\n${agentsMdContent}`,
+                  append: systemAppend,
                 }
               : {
                   type: "preset" as const,
@@ -2156,6 +2204,37 @@ ${prompt}
                       }
                     }
                   }
+
+                  // Section guards: block Edit/Write to files in disabled sections
+                  if (
+                    disabledSections.length > 0 &&
+                    (toolName === "Edit" || toolName === "Write")
+                  ) {
+                    const filePath =
+                      typeof toolInput.file_path === "string"
+                        ? toolInput.file_path
+                        : ""
+                    if (filePath) {
+                      const { getBlockedSection } = await import(
+                        "../../sections/match-section"
+                      )
+                      const cwd = input.cwd
+                      const relativePath = filePath.startsWith(cwd)
+                        ? filePath.slice(cwd.length).replace(/^\//, "")
+                        : filePath
+                      const blocked = getBlockedSection(
+                        relativePath,
+                        disabledSections,
+                      )
+                      if (blocked) {
+                        return {
+                          behavior: "deny",
+                          message: `File "${relativePath}" is in the "${blocked.name}" section which is currently disabled. Enable it in Settings > Sections to allow modifications.`,
+                        }
+                      }
+                    }
+                  }
+
                   if (toolName === "AskUserQuestion") {
                     const { toolUseID } = options
                     // Emit to UI (safely in case observer is closed)
@@ -3038,6 +3117,9 @@ ${prompt}
             activeSessions.delete(input.subChatId)
           }
         })()
+
+        // Track session completion for graceful shutdown
+        registerSessionCompletion(input.subChatId, sessionPromise)
 
         // Cleanup on unsubscribe
         return () => {

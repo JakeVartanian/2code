@@ -79,6 +79,10 @@ export default defineConfig({
             if (id.includes("@pierre/diffs") || (id.includes("node_modules/diff") && !id.includes("diff-match-patch"))) {
               return "vendor-diff"
             }
+            // Motion/framer-motion (~150KB) - animations, can load async
+            if (id.includes("framer-motion") || id.includes("motion")) {
+              return "vendor-motion"
+            }
           },
         },
       },

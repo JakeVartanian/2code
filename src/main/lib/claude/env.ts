@@ -1,17 +1,22 @@
 import { app } from "electron"
-import { execSync } from "node:child_process"
+import { execSync, execFile } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { stripVTControlCharacters } from "node:util"
+import { stripVTControlCharacters, promisify } from "node:util"
 import {
   getDefaultShell,
   isWindows,
   platform
 } from "../platform"
 
+const execFileAsync = promisify(execFile)
+
 // Cache the shell environment
 let cachedShellEnv: Record<string, string> | null = null
+
+// Promise for async shell env loading (non-blocking startup)
+let shellEnvPromise: Promise<Record<string, string>> | null = null
 
 // Delimiter for parsing env output
 const DELIMITER = "_CLAUDE_ENV_DELIMITER_"
@@ -142,9 +147,76 @@ function stripSensitiveKeys(env: Record<string, string>): void {
 }
 
 /**
- * Load full shell environment.
- * - Windows: Derives PATH from process.env + common install locations (no shell spawn)
- * - macOS/Linux: Spawns interactive login shell to capture PATH from shell profiles
+ * Async shell environment loading (non-blocking).
+ * Called during startup to warm the cache in the background.
+ */
+async function loadShellEnvironmentAsync(): Promise<Record<string, string>> {
+  // Windows: use platform provider (already fast, no shell spawn)
+  if (isWindows()) {
+    console.log("[claude-env] Windows detected, deriving PATH without shell invocation")
+    const env = platform.buildEnvironment()
+    stripSensitiveKeys(env)
+    console.log(`[claude-env] Built Windows environment with ${Object.keys(env).length} vars`)
+    cachedShellEnv = env
+    return { ...env }
+  }
+
+  // macOS/Linux: spawn interactive login shell asynchronously
+  const shell = getDefaultShell()
+  const command = `echo -n "${DELIMITER}"; env; echo -n "${DELIMITER}"; exit`
+
+  try {
+    const { stdout } = await execFileAsync(shell, ["-ilc", command], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: {
+        DISABLE_AUTO_UPDATE: "true",
+        HOME: os.homedir(),
+        USER: os.userInfo().username,
+        SHELL: shell,
+      },
+    })
+
+    const env = parseEnvOutput(stdout)
+    stripSensitiveKeys(env)
+    console.log(`[claude-env] Loaded ${Object.keys(env).length} environment variables from shell (async)`)
+    cachedShellEnv = env
+    return { ...env }
+  } catch (error) {
+    console.error("[claude-env] Failed to load shell environment:", error)
+    const env = platform.buildEnvironment()
+    stripSensitiveKeys(env)
+    console.log("[claude-env] Using fallback environment from platform provider")
+    cachedShellEnv = env
+    return { ...env }
+  }
+}
+
+/**
+ * Start loading shell environment in the background.
+ * Call this during app startup so the cache is warm before first Claude session.
+ */
+export function warmupShellEnvironment(): void {
+  if (cachedShellEnv !== null || shellEnvPromise !== null) return
+  shellEnvPromise = loadShellEnvironmentAsync()
+  shellEnvPromise.catch(() => {}) // Prevent unhandled rejection
+}
+
+/**
+ * Get shell environment, awaiting the async load if in progress.
+ * Falls back to synchronous load if warmup wasn't called.
+ */
+export async function getClaudeShellEnvironmentAsync(): Promise<Record<string, string>> {
+  if (cachedShellEnv !== null) return { ...cachedShellEnv }
+  if (shellEnvPromise !== null) return { ...(await shellEnvPromise) }
+  // Fallback: start async load now
+  shellEnvPromise = loadShellEnvironmentAsync()
+  return { ...(await shellEnvPromise) }
+}
+
+/**
+ * Load full shell environment (synchronous, legacy).
+ * Prefers cached result from async warmup. Falls back to execSync if not warmed up.
  * Results are cached for the lifetime of the process.
  */
 export function getClaudeShellEnvironment(): Record<string, string> {
@@ -172,6 +244,7 @@ export function getClaudeShellEnvironment(): Record<string, string> {
   }
 
   // macOS/Linux: spawn interactive login shell to get full environment
+  console.log("[claude-env] Shell env not warmed up, falling back to sync load")
   const shell = getDefaultShell()
   const command = `echo -n "${DELIMITER}"; env; echo -n "${DELIMITER}"; exit`
 

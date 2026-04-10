@@ -578,6 +578,12 @@ export const agentsSubChatUnseenChangesAtom = atom<Set<string>>(
   new Set<string>(),
 )
 
+// Per-subchat unseen state: returns true if this specific subChat has unseen changes
+// Avoids re-rendering all sidebar cards when any subchat's unseen state changes
+export const isSubChatUnseenAtomFamily = atomFamily((subChatId: string) =>
+  atom((get) => get(agentsSubChatUnseenChangesAtom).has(subChatId))
+)
+
 // Archive popover open state
 export const archivePopoverOpenAtom = atom<boolean>(false)
 
@@ -639,11 +645,26 @@ export interface SubChatFileChange {
   displayPath: string
   additions: number
   deletions: number
+  /** Human-readable description, e.g. "Modified the main chat component" */
+  humanReadable?: string
+  /** Whether this is a critical file (shown in red) */
+  isCritical?: boolean
+  /** Why it's critical, e.g. "Database schema change" */
+  criticalReason?: string
 }
 
 export const subChatFilesAtom = atom<Map<string, SubChatFileChange[]>>(
   new Map(),
 )
+
+// Per-subchat file changes: returns the file list for a specific subChat
+// Avoids re-rendering all sidebar cards when any subchat's file list changes
+export const subChatFilesForIdAtomFamily = atomFamily((subChatId: string) =>
+  atom((get) => get(subChatFilesAtom).get(subChatId) || EMPTY_FILE_CHANGES)
+)
+
+// Shared empty array to prevent referential inequality
+const EMPTY_FILE_CHANGES: SubChatFileChange[] = []
 
 // Mapping from subChatId to chatId (workspace ID) for aggregating stats
 // Map<subChatId, chatId>
@@ -1178,4 +1199,6 @@ export function clearSubChatAtomCaches(subChatId: string) {
   currentTaskToolsAtomFamily.remove(subChatId)
   isSubChatLoadingAtomFamily.remove(subChatId)
   loadingSubChatIdsForChatAtomFamily.remove(subChatId)
+  isSubChatUnseenAtomFamily.remove(subChatId)
+  subChatFilesForIdAtomFamily.remove(subChatId)
 }

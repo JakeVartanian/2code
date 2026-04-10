@@ -10,13 +10,17 @@ import { cn } from "../../lib/utils"
 import {
   loadingSubChatsAtom,
   agentsSubChatUnseenChangesAtom,
+  isSubChatLoadingAtomFamily,
+  isSubChatUnseenAtomFamily,
+  subChatFilesForIdAtomFamily,
   selectedAgentChatIdAtom,
   previousAgentChatIdAtom,
-  subChatFilesAtom,
   justCreatedIdsAtom,
   pendingUserQuestionsAtom,
   undoStackAtom,
+  subChatModelIdAtomFamily,
   subChatModeAtomFamily,
+  subChatOpenRouterModelAtomFamily,
   suppressInputFocusAtom,
   type UndoItem,
 } from "../agents/atoms"
@@ -188,6 +192,40 @@ const SidebarSearchHistoryPopover = memo(function SidebarSearchHistoryPopover({
   )
 })
 
+// ============================================================================
+// Per-subchat status component - subscribes only to THIS subchat's atoms
+// Prevents cascade re-renders when other subchats' loading/unseen/files change
+// ============================================================================
+interface SubChatCardStatusProps {
+  subChatId: string
+  children: (status: {
+    isLoading: boolean
+    hasUnseen: boolean
+    stats: { fileCount: number; additions: number; deletions: number } | null
+  }) => React.ReactNode
+}
+
+const SubChatCardStatus = memo(function SubChatCardStatus({
+  subChatId,
+  children,
+}: SubChatCardStatusProps) {
+  const isLoading = useAtomValue(isSubChatLoadingAtomFamily(subChatId))
+  const hasUnseen = useAtomValue(isSubChatUnseenAtomFamily(subChatId))
+  const fileChanges = useAtomValue(subChatFilesForIdAtomFamily(subChatId))
+  const stats = useMemo(() => {
+    if (fileChanges.length === 0) return null
+    return fileChanges.reduce(
+      (acc, f) => ({
+        fileCount: acc.fileCount + 1,
+        additions: acc.additions + f.additions,
+        deletions: acc.deletions + f.deletions,
+      }),
+      { fileCount: 0, additions: 0, deletions: 0 },
+    )
+  }, [fileChanges])
+  return <>{children({ isLoading, hasUnseen, stats })}</>
+})
+
 interface AgentsSubChatsSidebarProps {
   onClose?: () => void
   isMobile?: boolean
@@ -232,7 +270,6 @@ export function AgentsSubChatsSidebar({
     }))
   )
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
-  const subChatFiles = useAtomValue(subChatFilesAtom)
   const selectedTeamId = useAtomValue(selectedTeamIdAtom)
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
   const previousChatId = useAtomValue(previousAgentChatIdAtom)
@@ -288,10 +325,13 @@ export function AgentsSubChatsSidebar({
   const pendingQuestionsMap = useAtomValue(pendingUserQuestionsAtom)
   const defaultAgentMode = useAtomValue(defaultAgentModeAtom)
 
+  // Poll faster when streaming (data changes frequently), slower when idle
+  const statsRefetchInterval = loadingSubChats.size > 0 ? 5000 : 30000
+
   // Pending plan approvals from DB - only for open sub-chats
   const { data: pendingPlanApprovalsData } = trpc.chats.getPendingPlanApprovals.useQuery(
     { openSubChatIds },
-    { refetchInterval: 5000, enabled: openSubChatIds.length > 0, placeholderData: (prev) => prev }
+    { refetchInterval: statsRefetchInterval, enabled: openSubChatIds.length > 0, placeholderData: (prev) => prev }
   )
   const pendingPlanApprovals = useMemo(() => {
     const set = new Set<string>()
@@ -502,11 +542,7 @@ export function AgentsSubChatsSidebar({
     // Empty deps: handler is stable and uses only ref which doesn't need tracking
   }, [])
 
-  // Derive which sub-chats are loading (keys = subChatIds)
-  const loadingChatIds = useMemo(
-    () => new Set([...loadingSubChats.keys()]),
-    [loadingSubChats],
-  )
+
 
   const handleSubChatClick = (subChatId: string) => {
     const store = useAgentSubChatStore.getState()
@@ -740,6 +776,19 @@ export function AgentsSubChatsSidebar({
 
     // Initialize atomFamily mode for the new sub-chat
     appStore.set(subChatModeAtomFamily(newId), defaultAgentMode)
+
+    // Inherit model preferences from the currently active sub-chat
+    const activeId = store.activeSubChatId
+    if (activeId) {
+      appStore.set(
+        subChatModelIdAtomFamily(newId),
+        appStore.get(subChatModelIdAtomFamily(activeId)),
+      )
+      const sourceORModel = appStore.get(subChatOpenRouterModelAtomFamily(activeId))
+      if (sourceORModel) {
+        appStore.set(subChatOpenRouterModelAtomFamily(newId), sourceORModel)
+      }
+    }
 
     // Add to allSubChats with placeholder name
     store.addToAllSubChats({
@@ -1263,9 +1312,6 @@ export function AgentsSubChatsSidebar({
                       </div>
                       <div className="list-none p-0 m-0 mb-3">
                         {pinnedChats.map((subChat) => {
-                          const isSubChatLoading = loadingChatIds.has(
-                            subChat.id,
-                          )
                           const isActive = activeSubChatId === subChat.id
                           const isPinned = pinnedSubChatIds.includes(subChat.id)
                           const globalIndex = filteredIndexById.get(subChat.id) ?? -1
@@ -1282,7 +1328,6 @@ export function AgentsSubChatsSidebar({
                           const isFocused =
                             focusedChatIndex === globalIndex &&
                             focusedChatIndex >= 0
-                          const hasUnseen = subChatUnseenChanges.has(subChat.id)
                           const timeAgo = formatTimeAgo(
                             subChat.updated_at || subChat.created_at,
                           )
@@ -1291,21 +1336,11 @@ export function AgentsSubChatsSidebar({
                           const draftText = getDraftText(subChat.id)
                           const hasPendingQuestion = pendingQuestionsMap.has(subChat.id)
                           const hasPendingPlan = pendingPlanApprovals.has(subChat.id)
-                          const fileChanges = subChatFiles.get(subChat.id) || []
-                          const stats =
-                            fileChanges.length > 0
-                              ? fileChanges.reduce(
-                                  (acc, f) => ({
-                                    fileCount: acc.fileCount + 1,
-                                    additions: acc.additions + f.additions,
-                                    deletions: acc.deletions + f.deletions,
-                                  }),
-                                  { fileCount: 0, additions: 0, deletions: 0 },
-                                )
-                              : null
 
                           return (
-                            <ContextMenu key={subChat.id}>
+                            <SubChatCardStatus key={subChat.id} subChatId={subChat.id}>
+                            {({ isLoading: isSubChatLoading, hasUnseen, stats }) => (
+                            <ContextMenu>
                               <ContextMenuTrigger asChild>
                                 <div
                                   data-subchat-index={globalIndex}
@@ -1546,6 +1581,8 @@ export function AgentsSubChatsSidebar({
                                 />
                               )}
                             </ContextMenu>
+                          )}
+                          </SubChatCardStatus>
                           )
                         })}
                       </div>
@@ -1567,9 +1604,6 @@ export function AgentsSubChatsSidebar({
                       </div>
                       <div className="list-none p-0 m-0">
                         {unpinnedChats.map((subChat) => {
-                          const isSubChatLoading = loadingChatIds.has(
-                            subChat.id,
-                          )
                           const isActive = activeSubChatId === subChat.id
                           const isPinned = pinnedSubChatIds.includes(subChat.id)
                           const globalIndex = filteredIndexById.get(subChat.id) ?? -1
@@ -1586,7 +1620,6 @@ export function AgentsSubChatsSidebar({
                           const isFocused =
                             focusedChatIndex === globalIndex &&
                             focusedChatIndex >= 0
-                          const hasUnseen = subChatUnseenChanges.has(subChat.id)
                           const timeAgo = formatTimeAgo(
                             subChat.updated_at || subChat.created_at,
                           )
@@ -1595,21 +1628,11 @@ export function AgentsSubChatsSidebar({
                           const draftText = getDraftText(subChat.id)
                           const hasPendingQuestion = pendingQuestionsMap.has(subChat.id)
                           const hasPendingPlan = pendingPlanApprovals.has(subChat.id)
-                          const fileChanges = subChatFiles.get(subChat.id) || []
-                          const stats =
-                            fileChanges.length > 0
-                              ? fileChanges.reduce(
-                                  (acc, f) => ({
-                                    fileCount: acc.fileCount + 1,
-                                    additions: acc.additions + f.additions,
-                                    deletions: acc.deletions + f.deletions,
-                                  }),
-                                  { fileCount: 0, additions: 0, deletions: 0 },
-                                )
-                              : null
 
                           return (
-                            <ContextMenu key={subChat.id}>
+                            <SubChatCardStatus key={subChat.id} subChatId={subChat.id}>
+                            {({ isLoading: isSubChatLoading, hasUnseen, stats }) => (
+                            <ContextMenu>
                               <ContextMenuTrigger asChild>
                                 <div
                                   data-subchat-index={globalIndex}
@@ -1850,6 +1873,8 @@ export function AgentsSubChatsSidebar({
                                 />
                               )}
                             </ContextMenu>
+                          )}
+                          </SubChatCardStatus>
                           )
                         })}
                       </div>

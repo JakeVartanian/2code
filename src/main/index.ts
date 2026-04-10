@@ -21,6 +21,7 @@ import {
 import { cleanupGitWatchers } from "./lib/git/watcher"
 import { cancelAllPendingOAuth, handleMcpOAuthCallback } from "./lib/mcp-auth"
 import { getAllMcpConfigHandler, hasActiveClaudeSessions, abortAllClaudeSessions } from "./lib/trpc/routers/claude"
+import { warmupShellEnvironment } from "./lib/claude/env"
 import {
   createMainWindow,
   createWindow,
@@ -899,7 +900,14 @@ if (gotTheLock) {
       }
     })
 
-    // Initialize database
+    // Start loading shell environment in the background (non-blocking)
+    // This warms the cache so the first Claude session doesn't block on execSync
+    warmupShellEnvironment()
+
+    // Create main window early so the user sees UI while DB initializes
+    createMainWindow()
+
+    // Initialize database (window is already visible with loading state)
     try {
       initDatabase()
       console.log("[App] Database initialized")
@@ -908,9 +916,6 @@ if (gotTheLock) {
     } catch (error) {
       console.error("[App] Failed to initialize database:", error)
     }
-
-    // Create main window
-    createMainWindow()
 
     // Signal renderer that main process is fully initialized
     setAppReady()
@@ -970,13 +975,10 @@ if (gotTheLock) {
     event.preventDefault()
     console.log("[App] Shutting down...")
     try {
-      abortAllClaudeSessions()
+      // Abort all sessions and wait for their cleanup (flushPendingWrite) to complete
+      await abortAllClaudeSessions()
       cancelAllPendingOAuth()
       await cleanupGitWatchers()
-      // Give in-flight abort handlers time to flush their debounced writes before
-      // the database handle is closed. abort() triggers async catch blocks in claude.ts
-      // that call flushPendingWrite() — 200ms covers even slow event loop cycles.
-      await new Promise(resolve => setTimeout(resolve, 200))
       await closeDatabase()
     } catch (error) {
       console.error("[App] Cleanup error:", error)
