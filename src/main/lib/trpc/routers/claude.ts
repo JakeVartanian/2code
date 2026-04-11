@@ -1855,59 +1855,62 @@ export const claudeRouter = router({
               )
             }
 
-            // Check if user has existing API key or proxy configured in their shell environment
-            // If so, use that instead of OAuth (allows using custom API proxies)
-            // Based on PR #29 by @sa4hnd
-            const hasExistingApiConfig = !!(
-              claudeEnv.ANTHROPIC_API_KEY || claudeEnv.ANTHROPIC_BASE_URL
-            )
+            // Check if a custom base URL is configured in the shell environment
+            // (independent of finalCustomConfig which comes from the UI settings).
+            // ANTHROPIC_API_KEY is always stripped, so only BASE_URL matters here.
+            const hasExistingApiConfig = !!claudeEnv.ANTHROPIC_BASE_URL
 
             if (hasExistingApiConfig) {
               console.log(
-                `[claude] Using existing CLI config - API_KEY: ${claudeEnv.ANTHROPIC_API_KEY ? "set" : "not set"}, BASE_URL: ${claudeEnv.ANTHROPIC_BASE_URL || "default"}`,
+                `[claude] Shell has ANTHROPIC_BASE_URL: ${claudeEnv.ANTHROPIC_BASE_URL}`,
               )
             }
 
-            // Build final env - credentials are written as .credentials.json in the
-            // isolated config dir (see below). The subprocess reads them via its
-            // plaintext credential storage backend.
-            const finalEnv = {
+            // Build final env with CLAUDE_CODE_OAUTH_TOKEN for direct inference.
+            //
+            // AUTH MECHANISM (reverse-engineered from CLI binary v2.1.45):
+            //
+            // The CLI's pB() function reads OAuth tokens from three sources in order:
+            //   1. CLAUDE_CODE_OAUTH_TOKEN env var (hardcodes scopes to ["user:inference"])
+            //   2. CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR (same hardcoded scopes)
+            //   3. .credentials.json file (uses scopes from file)
+            //
+            // When CLAUDE_CODE_OAUTH_TOKEN is set:
+            //   - pB() returns { accessToken, scopes: ["user:inference"], ... }
+            //   - O_() returns true (because Vw(scopes) finds "user:inference")
+            //   - The Anthropic SDK client is created with:
+            //       { apiKey: null, authToken: accessToken }
+            //   - The SDK sends Authorization: Bearer <token> directly
+            //   - NO create_api_key call is ever made
+            //
+            // This is vastly simpler than .credentials.json because:
+            //   - Scopes are hardcoded by the CLI itself (no format mismatch risk)
+            //   - No file I/O needed
+            //   - No refresh token handling needed (2Code handles refresh separately)
+            //   - Bypasses the entire credential storage system
+            //
+            // IMPORTANT: ANTHROPIC_AUTH_TOKEN must NOT be in the env because it
+            // makes KN() return false, which disables the OAuth path entirely.
+            // ANTHROPIC_API_KEY must also not be set (already stripped in env.ts).
+            const finalEnv: Record<string, string> = {
               ...claudeEnv,
               CLAUDE_CONFIG_DIR: isolatedConfigDir,
             }
 
-            // Write OAuth credentials as .credentials.json in the isolated config dir.
-            // The Claude CLI binary reads credentials from {CLAUDE_CONFIG_DIR}/.credentials.json
-            // using its plaintext storage backend. This is required because:
-            // 1. The subprocess can't access the macOS Keychain (isolated config dir)
-            // 2. ANTHROPIC_AUTH_TOKEN env var is rejected by the API for OAuth tokens
-            //    ("OAuth authentication is currently not supported")
-            // Only for the native Anthropic path — custom configs (OpenRouter/Ollama)
+            // Pass OAuth token via CLAUDE_CODE_OAUTH_TOKEN env var for direct inference.
+            // Only for the native Anthropic path -- custom configs (OpenRouter/Ollama)
             // already inject their token via customEnv in buildClaudeEnv above.
             if (!finalCustomConfig && claudeCodeToken) {
-              const credentialsData: Record<string, unknown> = {
-                claudeAiOauth: {
-                  accessToken: claudeCodeToken,
-                },
-              }
-              // Include refresh token and expiry if available
-              const refreshToken = getStoredRefreshToken()
-              if (refreshToken) {
-                (credentialsData.claudeAiOauth as Record<string, unknown>).refreshToken = refreshToken
-              }
-              const tokenExpiry = getStoredTokenExpiry()
-              if (tokenExpiry) {
-                (credentialsData.claudeAiOauth as Record<string, unknown>).expiresAt = tokenExpiry
-              }
-              const credentialsPath = path.join(isolatedConfigDir, ".credentials.json")
-              await fs.writeFile(credentialsPath, JSON.stringify(credentialsData), "utf-8")
-              console.log(`[claude-auth] Wrote .credentials.json to ${credentialsPath}`)
+              finalEnv.CLAUDE_CODE_OAUTH_TOKEN = claudeCodeToken
+              console.log(`[claude-auth] Set CLAUDE_CODE_OAUTH_TOKEN env var for direct inference (token: ${claudeCodeToken.slice(0, 10)}...)`)
             }
 
             // Log auth method being used (single line)
-            const credFileExists = existsSync(path.join(isolatedConfigDir, ".credentials.json"))
+            const authMethod = finalEnv.ANTHROPIC_API_KEY ? "api-key"
+              : finalEnv.CLAUDE_CODE_OAUTH_TOKEN ? "oauth-env-var"
+              : "keychain/default"
             console.log(
-              `[claude-auth] method=${finalEnv.ANTHROPIC_API_KEY ? "api-key" : credFileExists ? "credentials-file" : "keychain/default"} customApiConfig=${hasExistingApiConfig} baseUrl=${finalEnv.ANTHROPIC_BASE_URL || "(default)"}`,
+              `[claude-auth] method=${authMethod} customApiConfig=${hasExistingApiConfig} baseUrl=${finalEnv.ANTHROPIC_BASE_URL || "(default)"}`,
             )
 
             // Get bundled Claude binary path
@@ -2795,17 +2798,10 @@ ${prompt}
                       if (refreshedToken && refreshedToken !== claudeCodeToken) {
                         authRetryAttempted = true
                         authRetryNeeded = true
-                        // Update .credentials.json for retry
+                        // Update CLAUDE_CODE_OAUTH_TOKEN env var for retry
+                        // (the subprocess env is rebuilt on next iteration)
                         if (!hasExistingApiConfig) {
-                          const retryCredsData: Record<string, unknown> = {
-                            claudeAiOauth: { accessToken: refreshedToken },
-                          }
-                          const retryRefresh = getStoredRefreshToken()
-                          if (retryRefresh) (retryCredsData.claudeAiOauth as Record<string, unknown>).refreshToken = retryRefresh
-                          const retryExpiry = getStoredTokenExpiry()
-                          if (retryExpiry) (retryCredsData.claudeAiOauth as Record<string, unknown>).expiresAt = retryExpiry
-                          const retryCredPath = path.join(isolatedConfigDir, ".credentials.json")
-                          await fs.writeFile(retryCredPath, JSON.stringify(retryCredsData), "utf-8")
+                          finalEnv.CLAUDE_CODE_OAUTH_TOKEN = refreshedToken
                         }
                         console.log("[claude] Auth failed but token refreshed - retrying")
                         break // break for-await loop to retry

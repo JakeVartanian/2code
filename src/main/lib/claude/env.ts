@@ -21,12 +21,20 @@ let shellEnvPromise: Promise<Record<string, string>> | null = null
 // Delimiter for parsing env output
 const DELIMITER = "_CLAUDE_ENV_DELIMITER_"
 
-// Keys to strip (prevent interference from unrelated providers)
-// NOTE: We intentionally keep ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL in production
-// so users can use their existing Claude Code CLI configuration (API proxy, etc.)
-// Based on PR #29 by @sa4hnd
-const STRIPPED_ENV_KEYS_BASE = [
+// Keys stripped from the subprocess environment to prevent interference.
+// ANTHROPIC_API_KEY is ALWAYS stripped because the app uses OAuth via
+// CLAUDE_CODE_OAUTH_TOKEN env var. A stale ANTHROPIC_API_KEY in the user's
+// shell would override the OAuth token and cause auth failures.
+// Users with custom API key/proxy configs go through the customEnv path
+// in buildClaudeEnv(), which re-injects their key after stripping.
+const STRIPPED_ENV_KEYS = [
   "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  // ANTHROPIC_AUTH_TOKEN must be stripped because it causes KN() in the CLI
+  // to return false, which disables the OAuth/direct-inference path (O_())
+  // and forces the CLI into API-key mode (where it looks for a key in the
+  // keychain that doesn't exist, since we never called create_api_key).
+  "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
   // Strip CLAUDECODE so the child Claude process doesn't detect a nested session
@@ -34,13 +42,6 @@ const STRIPPED_ENV_KEYS_BASE = [
   // from within a Claude Code session (e.g. during development).
   "CLAUDECODE",
 ]
-
-// In dev mode, also strip ANTHROPIC_API_KEY so OAuth token is used instead
-// This allows devs to test OAuth flow without unsetting their shell env
-// Added by Sergey Bunas for dev purposes
-const STRIPPED_ENV_KEYS = !app.isPackaged
-  ? [...STRIPPED_ENV_KEYS_BASE, "ANTHROPIC_API_KEY"]
-  : STRIPPED_ENV_KEYS_BASE
 
 // Cache the bundled binary path (only compute once)
 let cachedBinaryPath: string | null = null
@@ -315,8 +316,8 @@ export function buildClaudeEnv(options?: {
   }
 
   // 2b. Strip sensitive keys again (process.env may have re-added them)
-  // This ensures ANTHROPIC_API_KEY from dev's shell doesn't override OAuth in dev mode
-  // Added by Sergey Bunas for dev purposes
+  // ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN from the user's shell would
+  // override the OAuth flow. customEnv (step 4) can re-inject them if needed.
   for (const key of STRIPPED_ENV_KEYS) {
     if (key in env) {
       console.log(`[claude-env] Stripped ${key} from final environment`)
@@ -379,6 +380,9 @@ export function logClaudeEnv(
     `${prefix}[claude-env] PATH includes /usr/local/bin: ${env.PATH?.includes("/usr/local/bin")}`
   )
   console.log(
-    `${prefix}[claude-env] ANTHROPIC_AUTH_TOKEN: ${env.ANTHROPIC_AUTH_TOKEN ? "set" : "not set"}`
+    `${prefix}[claude-env] CLAUDE_CODE_OAUTH_TOKEN: ${env.CLAUDE_CODE_OAUTH_TOKEN ? "set" : "not set"}`
+  )
+  console.log(
+    `${prefix}[claude-env] ANTHROPIC_AUTH_TOKEN: ${env.ANTHROPIC_AUTH_TOKEN ? "set (WARNING: should be stripped!)" : "not set"}`
   )
 }
