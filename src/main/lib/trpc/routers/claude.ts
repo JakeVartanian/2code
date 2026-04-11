@@ -1,6 +1,6 @@
 import { observable } from "@trpc/server/observable"
 import { eq } from "drizzle-orm"
-import { app, BrowserWindow, safeStorage } from "electron"
+import { app, BrowserWindow, powerMonitor, safeStorage } from "electron"
 import { existsSync } from "fs"
 import * as fs from "fs/promises"
 import * as os from "os"
@@ -189,15 +189,30 @@ function encryptToken(token: string): string {
 }
 
 /**
- * Decrypt token using Electron's safeStorage
+ * In-memory cache for decrypted tokens.
+ * Avoids repeated safeStorage.decryptString() calls which trigger macOS
+ * keychain password prompts on every message (especially in dev where the
+ * app signature changes on each rebuild).
+ */
+const decryptCache = new Map<string, string>()
+
+/**
+ * Decrypt token using Electron's safeStorage (cached per encrypted value)
  */
 function decryptToken(encrypted: string): string {
+  const cached = decryptCache.get(encrypted)
+  if (cached !== undefined) return cached
+
   try {
+    let result: string
     if (!safeStorage.isEncryptionAvailable()) {
-      return Buffer.from(encrypted, "base64").toString("utf-8")
+      result = Buffer.from(encrypted, "base64").toString("utf-8")
+    } else {
+      const buffer = Buffer.from(encrypted, "base64")
+      result = safeStorage.decryptString(buffer)
     }
-    const buffer = Buffer.from(encrypted, "base64")
-    return safeStorage.decryptString(buffer)
+    decryptCache.set(encrypted, result)
+    return result
   } catch (error) {
     console.error("[decryptToken] Failed to decrypt:", error)
     return ""
@@ -259,6 +274,17 @@ function getClaudeCodeToken(): string | null {
  */
 let tokenRefreshCache: { token: string; refreshedAt: number } | null = null
 const TOKEN_REFRESH_TTL_MS = 45 * 60 * 1000 // 45 minutes
+
+// FIX: Invalidate Claude OAuth token cache after OS sleep/wake.
+// After 8+ hours of sleep, the cached token is likely expired. Without this,
+// the user's first message after wake would use a stale cached token and fail
+// with an unhelpful auth error.
+powerMonitor.on("resume", () => {
+  if (tokenRefreshCache) {
+    console.log("[claude-auth] OS resume detected — invalidating token cache")
+    tokenRefreshCache = null
+  }
+})
 
 /**
  * Update the stored access token (and optionally refresh token) in the DB
@@ -329,7 +355,14 @@ export async function getClaudeCodeTokenFresh(): Promise<string | null> {
   // Get the stored token and its expiry from the DB (no keychain prompt)
   const storedToken = getClaudeCodeToken()
   const dbTokenExpiry = getStoredTokenExpiry()
-  const dbTokenExpired = dbTokenExpiry !== null ? isTokenExpired(dbTokenExpiry) : true
+  const appRefreshTokenExists = !!getStoredRefreshToken()
+  // When tokenExpiresAt is null (CLI auth, markAsAuthenticated, or initial OAuth
+  // without expiry), treat the token as NOT expired. Defaulting to expired was
+  // causing every session to fall through to the keychain/refresh path, triggering
+  // repeated macOS keychain password prompts and auth-error modals.
+  const dbTokenExpired = dbTokenExpiry !== null ? isTokenExpired(dbTokenExpiry) : false
+
+  console.log(`[claude-auth-fresh] storedToken=${storedToken ? `${storedToken.slice(0, 8)}...` : "null"} dbTokenExpiry=${dbTokenExpiry} dbTokenExpired=${dbTokenExpired} hasRefreshToken=${appRefreshTokenExists}`)
 
   // If the DB token is fresh, use it immediately without touching the keychain.
   // This avoids the macOS keychain password prompt on every new build.
@@ -340,20 +373,22 @@ export async function getClaudeCodeTokenFresh(): Promise<string | null> {
 
   // DB token is absent or expired — now check app refresh token before keychain
   const appRefreshToken = getStoredRefreshToken()
+  console.log(`[claude-auth-fresh] appRefreshToken=${appRefreshToken ? "present" : "null"} storedToken=${storedToken ? "present" : "null"}`)
 
   if (appRefreshToken) {
     if (_refreshInFlight) return _refreshInFlight
 
     _refreshInFlight = (async () => {
       try {
+        console.log("[claude-auth-fresh] Attempting token refresh via app refresh token...")
         const refreshed = await refreshClaudeToken(appRefreshToken)
-        console.log("[claude-auth] Token refreshed successfully")
+        console.log(`[claude-auth-fresh] Token refreshed successfully, new token=${refreshed.accessToken.slice(0, 8)}... expiresIn=${refreshed.expiresAt ? Math.round((refreshed.expiresAt - Date.now()) / 1000) + "s" : "none"}`)
         const expiresAt = refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined
         updateStoredAccessToken(refreshed.accessToken, refreshed.refreshToken, expiresAt)
         tokenRefreshCache = { token: refreshed.accessToken, refreshedAt: Date.now() }
         return refreshed.accessToken
       } catch (e) {
-        console.log("[claude-auth] Token refresh failed, falling back to keychain:", e)
+        console.error("[claude-auth-fresh] Token refresh FAILED:", e instanceof Error ? e.message : e)
         tokenRefreshCache = null
         // Fall through to keychain below
         return null
@@ -405,6 +440,15 @@ export async function getClaudeCodeTokenFresh(): Promise<string | null> {
   const fallbackExpiry = storedToken ? dbTokenExpiry : keychainCreds?.expiresAt
   if (fallback && !isTokenExpired(fallbackExpiry ?? undefined)) {
     tokenRefreshCache = { token: fallback, refreshedAt: Date.now() }
+  } else if (fallback) {
+    // FIX: Log a clear warning when returning an expired token with no way to refresh.
+    // This helps diagnose auth failures instead of silently sending a stale token
+    // that results in a confusing "Run 'claude login'" error.
+    console.warn(
+      `[claude-auth-fresh] WARNING: Returning expired token (no refresh token available). ` +
+      `Token expired at ${fallbackExpiry ? new Date(fallbackExpiry).toISOString() : "unknown"}. ` +
+      `User will likely see an auth error.`
+    )
   }
   return fallback
 }
@@ -615,6 +659,8 @@ export function clearClaudeCaches() {
   projectMcpJsonCache.clear()
   agentsMdCache.clear()
   mergedMcpCache.clear()
+  decryptCache.clear()
+  tokenRefreshCache = null
   console.log("[claude] All caches cleared")
 }
 
@@ -1540,6 +1586,12 @@ export const claudeRouter = router({
                   // Strip ANTHROPIC_API_KEY to prevent the SDK from using a stale Claude
                   // API key against a non-Anthropic endpoint.
                   ANTHROPIC_API_KEY: "",
+                  // Disable Claude-specific beta headers (prompt-caching, interleaved-thinking, etc.)
+                  // OpenRouter and other third-party providers reject requests that contain
+                  // unknown anthropic-beta headers, causing invalid_request errors.
+                  ...(isNonAnthropicEndpoint && {
+                    CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+                  }),
                 },
               }),
               enableTasks: input.enableTasks ?? true,
@@ -1820,7 +1872,7 @@ export const claudeRouter = router({
             // If so, use that instead of OAuth (allows using custom API proxies)
             // Based on PR #29 by @sa4hnd
             const hasExistingApiConfig = !!(
-              claudeEnv.ANTHROPIC_API_KEY || claudeEnv.ANTHROPIC_AUTH_TOKEN || claudeEnv.ANTHROPIC_BASE_URL
+              claudeEnv.ANTHROPIC_API_KEY || claudeEnv.ANTHROPIC_BASE_URL
             )
 
             if (hasExistingApiConfig) {
@@ -1829,25 +1881,46 @@ export const claudeRouter = router({
               )
             }
 
-            // Build final env - rely on system keychain or existing API config
-            // Don't pass CLAUDE_CODE_OAUTH_TOKEN (Claude API doesn't support it)
-            // The subprocess will use: system keychain > ANTHROPIC_API_KEY > ANTHROPIC_AUTH_TOKEN
+            // Build final env - credentials are written as .credentials.json in the
+            // isolated config dir (see below). The subprocess reads them via its
+            // plaintext credential storage backend.
             const finalEnv = {
               ...claudeEnv,
               CLAUDE_CONFIG_DIR: isolatedConfigDir,
             }
 
-            // Inject the freshly-resolved OAuth token so the subprocess receives
-            // the SQLite-stored 2Code token, not just the system keychain.
+            // Write OAuth credentials as .credentials.json in the isolated config dir.
+            // The Claude CLI binary reads credentials from {CLAUDE_CONFIG_DIR}/.credentials.json
+            // using its plaintext storage backend. This is required because:
+            // 1. The subprocess can't access the macOS Keychain (isolated config dir)
+            // 2. ANTHROPIC_AUTH_TOKEN env var is rejected by the API for OAuth tokens
+            //    ("OAuth authentication is currently not supported")
             // Only for the native Anthropic path — custom configs (OpenRouter/Ollama)
             // already inject their token via customEnv in buildClaudeEnv above.
             if (!finalCustomConfig && claudeCodeToken) {
-              finalEnv.ANTHROPIC_AUTH_TOKEN = claudeCodeToken
+              const credentialsData: Record<string, unknown> = {
+                claudeAiOauth: {
+                  accessToken: claudeCodeToken,
+                },
+              }
+              // Include refresh token and expiry if available
+              const refreshToken = getStoredRefreshToken()
+              if (refreshToken) {
+                (credentialsData.claudeAiOauth as Record<string, unknown>).refreshToken = refreshToken
+              }
+              const tokenExpiry = getStoredTokenExpiry()
+              if (tokenExpiry) {
+                (credentialsData.claudeAiOauth as Record<string, unknown>).expiresAt = tokenExpiry
+              }
+              const credentialsPath = path.join(isolatedConfigDir, ".credentials.json")
+              await fs.writeFile(credentialsPath, JSON.stringify(credentialsData), "utf-8")
+              console.log(`[claude-auth] Wrote .credentials.json to ${credentialsPath}`)
             }
 
             // Log auth method being used (single line)
+            const credFileExists = existsSync(path.join(isolatedConfigDir, ".credentials.json"))
             console.log(
-              `[claude-auth] method=${finalEnv.ANTHROPIC_API_KEY ? "api-key" : finalEnv.ANTHROPIC_AUTH_TOKEN ? "auth-token" : "keychain/default"} customApiConfig=${hasExistingApiConfig} baseUrl=${finalEnv.ANTHROPIC_BASE_URL || "(default)"}`,
+              `[claude-auth] method=${finalEnv.ANTHROPIC_API_KEY ? "api-key" : credFileExists ? "credentials-file" : "keychain/default"} customApiConfig=${hasExistingApiConfig} baseUrl=${finalEnv.ANTHROPIC_BASE_URL || "(default)"}`,
             )
 
             // Get bundled Claude binary path
@@ -2432,6 +2505,10 @@ ${prompt}
             // Auto-retry on auth failure after token refresh (once)
             let authRetryAttempted = false
             let authRetryNeeded = false
+            // Auto-retry on OpenRouter transient rate limits (free-tier models are frequently rate-limited)
+            const MAX_OPENROUTER_RATE_LIMIT_RETRIES = 3
+            let openRouterRateLimitRetryCount = 0
+            let openRouterRateLimitRetryNeeded = false
             let messageCount = 0
             let pendingFinishChunk: UIMessageChunk | null = null
 
@@ -2439,6 +2516,7 @@ ${prompt}
             while (true) {
               policyRetryNeeded = false
               authRetryNeeded = false
+              openRouterRateLimitRetryNeeded = false
               messageCount = 0
               pendingFinishChunk = null
 
@@ -2668,11 +2746,19 @@ ${prompt}
                     } else if (
                       rawErrorCode === "invalid_request" &&
                       isOpenRouter &&
-                      (sdkError.includes("model") || sdkError.includes("selected model") ||
-                        sdkError.includes("rate-limited") || sdkError.includes("temporarily"))
+                      (sdkError.includes("rate-limited") || sdkError.includes("temporarily") ||
+                        sdkError.includes("rate limit") || sdkError.includes("overloaded") ||
+                        sdkError.includes("upstream"))
                     ) {
-                      // OpenRouter: model not found, no access, or temporarily rate-limited upstream.
-                      // Use a dedicated category so the retry logic is skipped (retrying won't help).
+                      // OpenRouter: transient upstream rate limit — retryable with backoff
+                      errorCategory = "OPENROUTER_RATE_LIMIT"
+                      errorContext = "OpenRouter model is rate-limited. Retrying automatically... (free-tier models have limited capacity)"
+                    } else if (
+                      rawErrorCode === "invalid_request" &&
+                      isOpenRouter &&
+                      (sdkError.includes("model") || sdkError.includes("selected model"))
+                    ) {
+                      // OpenRouter: model not found or no access — hard failure, don't retry.
                       errorCategory = "OPENROUTER_MODEL_ERROR"
                       errorContext = sdkError
                     } else if (
@@ -2697,6 +2783,23 @@ ${prompt}
                       break // break for-await loop to retry
                     }
 
+                    // Auto-retry on OpenRouter transient rate limits with exponential backoff
+                    // Free-tier OpenRouter models are frequently rate-limited; a short delay usually resolves it.
+                    if (
+                      errorCategory === "OPENROUTER_RATE_LIMIT" &&
+                      openRouterRateLimitRetryCount < MAX_OPENROUTER_RATE_LIMIT_RETRIES &&
+                      !abortController.signal.aborted
+                    ) {
+                      openRouterRateLimitRetryCount++
+                      openRouterRateLimitRetryNeeded = true
+                      const backoffMs = openRouterRateLimitRetryCount * 5000 // 5s, 10s, 15s
+                      console.log(
+                        `[claude] OpenRouter rate limit - backing off ${backoffMs}ms then retrying (attempt ${openRouterRateLimitRetryCount}/${MAX_OPENROUTER_RATE_LIMIT_RETRIES})`,
+                      )
+                      await new Promise((resolve) => setTimeout(resolve, backoffMs))
+                      break // break for-await loop to retry
+                    }
+
                     // On auth failure, try refreshing token and retrying once before showing modal
                     if (errorCategory === "AUTH_FAILED_SDK" && !authRetryAttempted) {
                       // Invalidate cache so refresh is forced
@@ -2705,10 +2808,17 @@ ${prompt}
                       if (refreshedToken && refreshedToken !== claudeCodeToken) {
                         authRetryAttempted = true
                         authRetryNeeded = true
-                        // Update env for retry
-                        if (!hasExistingApiConfig && queryOptions.options?.env) {
-                          // Fixed: use ANTHROPIC_AUTH_TOKEN (CLAUDE_CODE_OAUTH_TOKEN is not recognized by the subprocess)
-                          (queryOptions.options.env as Record<string, string>).ANTHROPIC_AUTH_TOKEN = refreshedToken
+                        // Update .credentials.json for retry
+                        if (!hasExistingApiConfig) {
+                          const retryCredsData: Record<string, unknown> = {
+                            claudeAiOauth: { accessToken: refreshedToken },
+                          }
+                          const retryRefresh = getStoredRefreshToken()
+                          if (retryRefresh) (retryCredsData.claudeAiOauth as Record<string, unknown>).refreshToken = retryRefresh
+                          const retryExpiry = getStoredTokenExpiry()
+                          if (retryExpiry) (retryCredsData.claudeAiOauth as Record<string, unknown>).expiresAt = retryExpiry
+                          const retryCredPath = path.join(isolatedConfigDir, ".credentials.json")
+                          await fs.writeFile(retryCredPath, JSON.stringify(retryCredsData), "utf-8")
                         }
                         console.log("[claude] Auth failed but token refreshed - retrying")
                         break // break for-await loop to retry
@@ -3107,6 +3217,15 @@ ${prompt}
                 await new Promise((resolve) => setTimeout(resolve, delayMs))
                 continue
               }
+
+              // Retry if OpenRouter rate-limited (backoff already applied in error handler)
+              if (openRouterRateLimitRetryNeeded) {
+                console.log(
+                  `[claude] OpenRouter rate limit retry ${openRouterRateLimitRetryCount}/${MAX_OPENROUTER_RATE_LIMIT_RETRIES} - restarting stream`,
+                )
+                continue
+              }
+
               break
             } // end policyRetryLoop
 
@@ -3715,7 +3834,7 @@ ${prompt}
     const appToken = getClaudeCodeToken()
     const appRefreshToken = getStoredRefreshToken()
     const dbTokenExpiry = getStoredTokenExpiry()
-    const dbTokenExpired = dbTokenExpiry !== null ? isTokenExpired(dbTokenExpiry) : true
+    const dbTokenExpired = dbTokenExpiry !== null ? isTokenExpired(dbTokenExpiry) : false
 
     let accessToken: string | null = appToken
     let refreshToken: string | undefined = appRefreshToken ?? undefined

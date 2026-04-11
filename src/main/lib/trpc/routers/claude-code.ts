@@ -6,6 +6,7 @@ import { getAuthManager } from "../../../index"
 import { AUTH_SERVER_PORT } from "../../../constants"
 import { getClaudeShellEnvironment } from "../../claude"
 import { getExistingClaudeCredentials, getExistingClaudeToken } from "../../claude-token"
+import { clearClaudeCaches } from "./claude"
 import {
   anthropicAccounts,
   anthropicSettings,
@@ -226,6 +227,9 @@ function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: 
     })
     .run()
 
+  // Clear cached tokens so next Claude session picks up the new token
+  clearClaudeCaches()
+
   return newId
 }
 
@@ -325,10 +329,11 @@ export const claudeCodeRouter = router({
 
     oauthSessions.set(sessionId, { codeVerifier, state, redirectUri, manualUrl, autoUrl, completed: false, exchangeError: null })
 
-    // Auto-cleanup after 15 minutes (only if not completed)
+    // FIX: Auto-cleanup after 15 minutes regardless of completion state.
+    // Previously only cleaned up incomplete sessions, causing completed sessions
+    // to leak in memory indefinitely.
     setTimeout(() => {
-      const s = oauthSessions.get(sessionId)
-      if (s && !s.completed) { oauthSessions.delete(sessionId) }
+      oauthSessions.delete(sessionId)
     }, 15 * 60 * 1000)
 
     // Open the auto URL in the browser

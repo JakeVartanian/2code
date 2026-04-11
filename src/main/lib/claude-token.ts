@@ -192,18 +192,26 @@ export function getExistingClaudeToken(): string | null {
  * Refresh Claude OAuth token using refresh token
  * Uses the Anthropic API token endpoint
  */
-export async function refreshClaudeToken(refreshToken: string): Promise<{
+export async function refreshClaudeToken(
+  refreshToken: string,
+  options?: { clientId?: string; tokenEndpoint?: string },
+): Promise<{
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
 }> {
+  // Default to 2Code's own OAuth credentials (used for app-stored tokens).
+  // CLI keychain tokens use different credentials — callers must pass them explicitly.
+  const clientId = options?.clientId ?? '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+  const tokenEndpoint = options?.tokenEndpoint ?? 'https://platform.claude.com/v1/oauth/token';
+
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
-    client_id: 'claude-desktop', // Fixed: use correct client_id for Claude OAuth refresh
+    client_id: clientId,
   });
 
-  const response = await fetch('https://api.anthropic.com/v1/oauth/token', { // Fixed: use correct Anthropic API endpoint
+  const response = await fetch(tokenEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString(),

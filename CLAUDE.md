@@ -325,14 +325,48 @@ If the binary is missing, `getBundledClaudeBinaryPath()` logs a `WARNING` and re
 
 ### Auth Flow
 
-Token priority (highest to lowest):
+**Why 2Code uses the Claude CLI's OAuth flow:**
+
+2Code reuses the exact same OAuth client credentials as the Claude CLI (`client_id: 9d1c250a-...`, endpoint: `platform.claude.com/v1/oauth/token`, auth URL: `claude.ai/oauth/authorize`). This is intentional — 2Code is a GUI wrapper around the bundled Claude CLI binary, and the CLI subprocess needs credentials in the same format it would get from `claude login`. The OAuth scopes requested are: `org:create_api_key`, `user:profile`, `user:inference`, `user:sessions:claude_code`, `user:mcp_servers`.
+
+**How credentials flow from OAuth → DB → subprocess:**
+
+```
+1. User clicks "Connect" in Settings
+2. 2Code opens claude.ai/oauth/authorize in browser (PKCE flow)
+3. Browser redirects to localhost callback with auth code
+4. 2Code exchanges code for access_token + refresh_token at platform.claude.com
+5. Tokens are encrypted with Electron safeStorage and stored in SQLite (anthropicAccounts table)
+6. On each Claude session, tokens are decrypted and written as .credentials.json
+   in the isolated config dir ({userData}/claude-sessions/{subChatId}/)
+7. The CLI subprocess reads .credentials.json via its plaintext credential backend
+```
+
+**Critical:** The Anthropic API rejects OAuth tokens passed via `ANTHROPIC_AUTH_TOKEN` env var with "OAuth authentication is currently not supported." Tokens MUST be provided as `.credentials.json` in `CLAUDE_CONFIG_DIR` using the `claudeAiOauth` format:
+
+```json
+{
+  "claudeAiOauth": {
+    "accessToken": "sk-ant-o...",
+    "refreshToken": "...",
+    "expiresAt": 1775868768000
+  }
+}
+```
+
+**Token resolution priority** (highest to lowest):
 
 1. **Multi-account system** — active account record from `anthropicAccounts` table in SQLite, decrypted with Electron `safeStorage`.
 2. **Legacy table** — `claudeCodeCredentials` row with `id = "default"`.
 3. **System keychain** — `claude-token.ts` reads `Claude Code-credentials` from macOS Keychain / Windows Credential Manager / Linux Secret Service, so users who already have `claude` CLI installed and logged in don't need to authenticate again.
-4. **`ANTHROPIC_AUTH_TOKEN` env var** — can be set explicitly if none of the above exist.
 
 In dev mode `ANTHROPIC_API_KEY` is stripped from the environment so the OAuth token is used even if the developer's shell has an API key set (prevents accidentally bypassing the auth flow).
+
+**Key auth files:**
+- `src/main/lib/trpc/routers/claude-code.ts` — OAuth PKCE flow (start, exchange, store)
+- `src/main/lib/trpc/routers/claude.ts` — token resolution, refresh, .credentials.json writing
+- `src/main/lib/claude-token.ts` — keychain/credential file reading, token refresh API
+- `src/main/auth-store.ts` — encrypted credential storage (safeStorage)
 
 ### Environment Handling
 
@@ -425,6 +459,7 @@ The CLI script is bundled at `resources/cli/` and installed/uninstalled via `ins
 |-------|-----------|
 | Binary not found | Run `bun run claude:download` |
 | OAuth token ignored in dev | `ANTHROPIC_API_KEY` is stripped; ensure OAuth connection via Settings → Claude Code |
+| "OAuth authentication is currently not supported" | OAuth tokens must be written as `.credentials.json` in `CLAUDE_CONFIG_DIR`, NOT passed via `ANTHROPIC_AUTH_TOKEN` env var |
 | OpenRouter key stripped | Pass via `customEnv`, not shell env |
 | Nested session detection | `CLAUDECODE` env key is always stripped from the child process |
 | Shell env stale after nvm/brew changes | Call `clearClaudeEnvCache()` and restart the app |

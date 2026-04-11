@@ -175,12 +175,11 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     // Read thinking config dynamically (so toggle applies to existing chats)
     const thinkingMode = appStore.get(thinkingModeAtom)
     // Thinking is an Anthropic-only feature — disable it for non-Anthropic models to prevent crashes
+    // FIX: Only consider non-Anthropic config when an OpenRouter model is explicitly selected
+    // for this sub-chat. A leftover OpenRouter baseUrl in storedConfig should NOT disable
+    // thinking/effort for Claude subscription sessions.
     const _selectedORModel = appStore.get(subChatOpenRouterModelAtomFamily(this.config.subChatId))
-    const _storedConfig = appStore.get(customClaudeConfigAtom) as CustomClaudeConfig
-    const _usingNonAnthropicConfig = Boolean(
-      _selectedORModel ||
-      (_storedConfig?.baseUrl && !_storedConfig.baseUrl.includes("api.anthropic.com"))
-    )
+    const _usingNonAnthropicConfig = Boolean(_selectedORModel)
     const thinkingConfig = _usingNonAnthropicConfig
       ? ({ type: "disabled" as const })
       : thinkingMode === "adaptive"
@@ -232,10 +231,24 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
           baseUrl: "https://openrouter.ai/api/v1",
         }
       } else {
-        console.error(`[ipc-chat-transport] OpenRouter model "${selectedOpenRouterModelId}" selected but no API key found. The request will fail.`)
+        // No OpenRouter key — clear the stale model selection and fall back to Claude model
+        console.warn(`[ipc-chat-transport] OpenRouter model "${selectedOpenRouterModelId}" selected but no API key found. Clearing selection and falling back to Claude model.`)
+        appStore.set(subChatOpenRouterModelAtomFamily(this.config.subChatId), undefined)
+        toast.info("OpenRouter API key missing — using Claude model instead")
+        // Fall through to normalizeCustomClaudeConfig below
+        customConfig = normalizeCustomClaudeConfig(storedCustomConfig)
       }
     } else {
-      customConfig = normalizeCustomClaudeConfig(storedCustomConfig)
+      // FIX: When no OpenRouter model is selected for this sub-chat, do NOT pass through
+      // a stored config that has a non-Anthropic baseUrl (e.g. leftover OpenRouter config
+      // from localStorage). This prevents OpenRouter credentials from bleeding into
+      // Claude subscription sessions, which would cause ANTHROPIC_BASE_URL=openrouter.ai
+      // and ANTHROPIC_API_KEY="" to be injected, wiping OAuth auth.
+      const normalized = normalizeCustomClaudeConfig(storedCustomConfig)
+      const isNonAnthropicBaseUrl = normalized?.baseUrl &&
+        !normalized.baseUrl.includes("api.anthropic.com") &&
+        !normalized.baseUrl.includes("localhost")
+      customConfig = isNonAnthropicBaseUrl ? undefined : normalized
     }
 
     // Get selected Ollama model for offline mode
