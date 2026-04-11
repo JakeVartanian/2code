@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto"
 import { eq } from "drizzle-orm"
-import { safeStorage, shell } from "electron"
+import { shell } from "electron"
 import { z } from "zod"
 import { getAuthManager } from "../../../index"
 import { AUTH_SERVER_PORT } from "../../../constants"
@@ -144,28 +144,21 @@ async function getDesktopToken(): Promise<string | null> {
 }
 
 /**
- * Encrypt token using Electron's safeStorage
+ * Encode token as base64 for DB storage.
+ * No safeStorage — it ties encryption to the app's code signature,
+ * so every unsigned rebuild produces a different key and old tokens
+ * become permanently undecryptable. Plain base64 is fine for a local
+ * desktop app where the DB file is already on the user's machine.
  */
 function encryptToken(token: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    console.warn("[ClaudeCode] Encryption not available, storing as base64")
-    return Buffer.from(token).toString("base64")
-  }
-  return safeStorage.encryptString(token).toString("base64")
+  return Buffer.from(token).toString("base64")
 }
 
-/**
- * Decrypt token using Electron's safeStorage
- */
 function decryptToken(encrypted: string): string {
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
-      return Buffer.from(encrypted, "base64").toString("utf-8")
-    }
-    const buffer = Buffer.from(encrypted, "base64")
-    return safeStorage.decryptString(buffer)
+    return Buffer.from(encrypted, "base64").toString("utf-8")
   } catch (error) {
-    console.error("[decryptToken] Failed to decrypt:", error)
+    console.error("[decryptToken] Failed to decode:", error)
     return ""
   }
 }

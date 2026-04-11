@@ -1,6 +1,6 @@
 import { observable } from "@trpc/server/observable"
 import { eq } from "drizzle-orm"
-import { app, BrowserWindow, powerMonitor, safeStorage } from "electron"
+import { app, BrowserWindow, powerMonitor } from "electron"
 import { existsSync } from "fs"
 import * as fs from "fs/promises"
 import * as os from "os"
@@ -179,42 +179,20 @@ function parseMentions(prompt: string): {
 }
 
 /**
- * Encrypt token using Electron's safeStorage
+ * Encode token as base64 for DB storage.
+ * No safeStorage — it ties encryption to the app's code signature,
+ * so every unsigned rebuild produces a different key and old tokens
+ * become permanently undecryptable.
  */
 function encryptToken(token: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    return Buffer.from(token).toString("base64")
-  }
-  return safeStorage.encryptString(token).toString("base64")
+  return Buffer.from(token).toString("base64")
 }
 
-/**
- * In-memory cache for decrypted tokens.
- * Avoids repeated safeStorage.decryptString() calls which trigger macOS
- * keychain password prompts on every message (especially in dev where the
- * app signature changes on each rebuild).
- */
-const decryptCache = new Map<string, string>()
-
-/**
- * Decrypt token using Electron's safeStorage (cached per encrypted value)
- */
 function decryptToken(encrypted: string): string {
-  const cached = decryptCache.get(encrypted)
-  if (cached !== undefined) return cached
-
   try {
-    let result: string
-    if (!safeStorage.isEncryptionAvailable()) {
-      result = Buffer.from(encrypted, "base64").toString("utf-8")
-    } else {
-      const buffer = Buffer.from(encrypted, "base64")
-      result = safeStorage.decryptString(buffer)
-    }
-    decryptCache.set(encrypted, result)
-    return result
+    return Buffer.from(encrypted, "base64").toString("utf-8")
   } catch (error) {
-    console.error("[decryptToken] Failed to decrypt:", error)
+    console.error("[decryptToken] Failed to decode:", error)
     return ""
   }
 }
@@ -340,8 +318,7 @@ function updateStoredAccessToken(newAccessToken: string, newRefreshToken?: strin
         .run()
     }
 
-    // Clear decryption cache so next read picks up the new encrypted values
-    decryptCache.clear()
+    // No decryption cache to clear (safeStorage removed)
     console.log("[claude-auth] Stored tokens updated after refresh")
   } catch (error) {
     console.error("[claude-auth] Failed to update stored tokens:", error)
@@ -671,7 +648,6 @@ export function clearClaudeCaches() {
   projectMcpJsonCache.clear()
   agentsMdCache.clear()
   mergedMcpCache.clear()
-  decryptCache.clear()
   tokenRefreshCache = null
   console.log("[claude] All caches cleared")
 }
@@ -1111,10 +1087,7 @@ function getStoredRefreshToken(): string | null {
     if (!settings?.activeAccountId) return null
     const account = db.select().from(anthropicAccounts).where(eq(anthropicAccounts.id, settings.activeAccountId)).get()
     if (!account?.refreshToken) return null
-    if (!safeStorage.isEncryptionAvailable()) {
-      return Buffer.from(account.refreshToken, "base64").toString("utf-8")
-    }
-    return safeStorage.decryptString(Buffer.from(account.refreshToken, "base64"))
+    return Buffer.from(account.refreshToken, "base64").toString("utf-8")
   } catch (error) {
     console.error("[claude-auth] Failed to decrypt refresh token:", error)
     return null
