@@ -4,7 +4,8 @@ import { safeStorage, shell } from "electron"
 import { z } from "zod"
 import { getAuthManager } from "../../../index"
 import { AUTH_SERVER_PORT } from "../../../constants"
-import { getClaudeShellEnvironment } from "../../claude"
+// getClaudeShellEnvironment import removed — hasExistingCliConfig now reads process.env
+// directly to detect API keys that are stripped from the subprocess environment.
 import { getExistingClaudeCredentials, getExistingClaudeToken } from "../../claude-token"
 import { clearClaudeCaches } from "./claude"
 import {
@@ -227,6 +228,18 @@ function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: 
     })
     .run()
 
+  // Clean up old accounts whose tokens can't be decrypted (from different unsigned builds)
+  const allAccounts = db.select().from(anthropicAccounts).all()
+  for (const acct of allAccounts) {
+    if (acct.id !== newId && acct.oauthToken) {
+      const token = decryptToken(acct.oauthToken)
+      if (!token) {
+        console.log(`[ClaudeCode] Deleting undecryptable old account ${acct.id}`)
+        db.delete(anthropicAccounts).where(eq(anthropicAccounts.id, acct.id)).run()
+      }
+    }
+  }
+
   // Clear cached tokens so next Claude session picks up the new token
   clearClaudeCaches()
 
@@ -244,12 +257,14 @@ export const claudeCodeRouter = router({
    * Based on PR #29 by @sa4hnd
    */
   hasExistingCliConfig: publicProcedure.query(() => {
-    const shellEnv = getClaudeShellEnvironment()
-    const hasConfig = !!(shellEnv.ANTHROPIC_API_KEY || shellEnv.ANTHROPIC_AUTH_TOKEN || shellEnv.ANTHROPIC_BASE_URL)
+    // Check process.env directly (not the stripped shell env) so we detect
+    // ANTHROPIC_API_KEY even though it's stripped from the subprocess environment.
+    // This lets users with an existing API key skip the OAuth onboarding screen.
+    const hasConfig = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_BASE_URL)
     return {
       hasConfig,
-      hasApiKey: !!(shellEnv.ANTHROPIC_API_KEY || shellEnv.ANTHROPIC_AUTH_TOKEN),
-      baseUrl: shellEnv.ANTHROPIC_BASE_URL || null,
+      hasApiKey: !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
+      baseUrl: process.env.ANTHROPIC_BASE_URL || null,
     }
   }),
 
@@ -275,12 +290,20 @@ export const claudeCodeRouter = router({
         .get()
 
       if (account) {
-        return {
-          isConnected: true,
-          connectedAt: account.connectedAt?.toISOString() ?? null,
-          accountId: account.id,
-          displayName: account.displayName,
+        // Validate that the token is actually decryptable.
+        // Unsigned builds change safeStorage keys, making old tokens unusable.
+        // Without this check, the app thinks it's "connected" but can't use the token.
+        const token = account.oauthToken ? decryptToken(account.oauthToken) : ""
+        if (token) {
+          return {
+            isConnected: true,
+            connectedAt: account.connectedAt?.toISOString() ?? null,
+            accountId: account.id,
+            displayName: account.displayName,
+          }
         }
+        // Token undecryptable — treat as not connected
+        console.warn(`[ClaudeCode] Active account ${account.id} has undecryptable token — reporting not connected`)
       }
     }
 
@@ -291,8 +314,10 @@ export const claudeCodeRouter = router({
       .where(eq(claudeCodeCredentials.id, "default"))
       .get()
 
+    // Also validate legacy token is decryptable
+    const legacyToken = cred?.oauthToken ? decryptToken(cred.oauthToken) : ""
     return {
-      isConnected: !!cred?.oauthToken,
+      isConnected: !!legacyToken,
       connectedAt: cred?.connectedAt?.toISOString() ?? null,
       accountId: null,
       displayName: null,

@@ -243,8 +243,13 @@ function getClaudeCodeToken(): string | null {
         .get()
 
       if (account?.oauthToken) {
-        console.log(`[claude-auth] token=oauth accountId=${settings.activeAccountId}`)
-        return decryptToken(account.oauthToken)
+        const token = decryptToken(account.oauthToken)
+        if (token) {
+          console.log(`[claude-auth] token=oauth accountId=${settings.activeAccountId}`)
+          return token
+        }
+        // Token undecryptable (different unsigned build) — fall through
+        console.warn(`[claude-auth] token=oauth accountId=${settings.activeAccountId} UNDECRYPTABLE — skipping`)
       }
     }
 
@@ -260,8 +265,13 @@ function getClaudeCodeToken(): string | null {
       return null
     }
 
+    const legacyToken = decryptToken(cred.oauthToken)
+    if (!legacyToken) {
+      console.warn("[claude-auth] token=oauth(legacy) UNDECRYPTABLE — returning null")
+      return null
+    }
     console.log("[claude-auth] token=oauth(legacy)")
-    return decryptToken(cred.oauthToken)
+    return legacyToken
   } catch (error) {
     console.error("[claude-auth] Error getting Claude Code token:", error)
     return null
@@ -330,6 +340,8 @@ function updateStoredAccessToken(newAccessToken: string, newRefreshToken?: strin
         .run()
     }
 
+    // Clear decryption cache so next read picks up the new encrypted values
+    decryptCache.clear()
     console.log("[claude-auth] Stored tokens updated after refresh")
   } catch (error) {
     console.error("[claude-auth] Failed to update stored tokens:", error)
@@ -1085,7 +1097,8 @@ function getStoredTokenExpiry(): number | null {
     if (!settings?.activeAccountId) return null
     const account = db.select().from(anthropicAccounts).where(eq(anthropicAccounts.id, settings.activeAccountId)).get()
     return account?.tokenExpiresAt?.getTime() ?? null
-  } catch {
+  } catch (error) {
+    console.error("[claude-auth] Failed to read token expiry:", error)
     return null
   }
 }
@@ -1102,7 +1115,8 @@ function getStoredRefreshToken(): string | null {
       return Buffer.from(account.refreshToken, "base64").toString("utf-8")
     }
     return safeStorage.decryptString(Buffer.from(account.refreshToken, "base64"))
-  } catch {
+  } catch (error) {
+    console.error("[claude-auth] Failed to decrypt refresh token:", error)
     return null
   }
 }
