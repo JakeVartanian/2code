@@ -181,6 +181,7 @@ export function AnthropicOnboardingPage() {
     if (flowState.step === "idle" || flowState.step === "error") {
       urlOpenedRef.current = false
       setUrlOpened(false)
+      setShowManualInput(false) // FIX: Reset manual input on retry so it re-appears after 12s delay
       setFlowState({ step: "starting" })
       try {
         const result = await startAuthMutation.mutateAsync()

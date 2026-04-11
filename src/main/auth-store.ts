@@ -55,7 +55,9 @@ export class AuthStore {
       } else {
         // Fallback: store with warning (should rarely happen)
         console.warn("safeStorage not available - storing auth data without encryption")
-        writeFileSync(this.filePath + ".json", jsonData, "utf-8")
+        // FIX: Write with restrictive permissions (owner-only) since this file contains
+        // plaintext auth tokens. Default 0644 would make it world-readable.
+        writeFileSync(this.filePath + ".json", jsonData, { encoding: "utf-8", mode: 0o600 })
       }
     } catch (error) {
       console.error("Failed to save auth data:", error)
@@ -182,6 +184,10 @@ export class AuthStore {
   needsRefresh(): boolean {
     const data = this.load()
     if (!data) return false
+
+    // FIX: Don't signal refresh needed if there's no refresh token available.
+    // CLI users (setCliCredentials) and markAsAuthenticated store empty refreshToken.
+    if (!data.refreshToken) return false
 
     const expiresAt = new Date(data.expiresAt).getTime()
     const fiveMinutes = 5 * 60 * 1000
