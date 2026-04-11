@@ -5427,6 +5427,8 @@ export function ChatView({
     // Always keep streaming (or queued) subchats mounted, even if they exceed MAX_MOUNTED_TABS.
     // Without this, a streaming subchat that falls off the tab limit gets its ChatDataSync
     // unmounted → cleanup clears streaming status → eviction effect sees "not streaming" → kills stream.
+    // NOTE: This only covers sub-chats for the CURRENT workspace. Cross-workspace streaming
+    // sub-chats are kept alive separately via crossWorkspaceStreamingIds below.
     for (const id of agentChatStore.keys()) {
       if (agentChatStore.getParentChatId(id) !== chatId) continue
       if (result.includes(id)) continue
@@ -5439,6 +5441,24 @@ export function ChatView({
 
     return result
   }, [activeSubChatId, chatId, splitPaneIds, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
+
+  // Keep streaming sub-chats from OTHER workspaces alive. Without this, switching
+  // workspaces unmounts their ChatDataSync → unsubscribes tRPC → kills the Claude
+  // subprocess. These get rendered as headless ChatDataSync (no UI) below.
+  const streamingStatuses = useStreamingStatusStore((s) => s.statuses)
+  const crossWorkspaceStreamingIds = useMemo(() => {
+    const ids: string[] = []
+    for (const id of agentChatStore.keys()) {
+      if (agentChatStore.getParentChatId(id) === chatId) continue // current workspace handled by tabsToRender
+      const isStreaming = useStreamingStatusStore.getState().isStreaming(id)
+      const hasQueued = (useMessageQueueStore.getState().queues[id]?.length ?? 0) > 0
+      if (isStreaming || hasQueued) {
+        ids.push(id)
+      }
+    }
+    return ids
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId, streamingStatuses])
 
   // Prune chat instances from previous workspace when switching parent chat.
   // Prevents cross-workspace memory accumulation.
@@ -7977,6 +7997,18 @@ Make sure to preserve all functionality from both branches when resolving confli
           </Suspense>
         </ResizableBottomPanel>
       )}
+      {/* Ghost ChatDataSync for streaming sub-chats in OTHER workspaces.
+        * These keep the tRPC subscription alive so Claude subprocesses aren't killed
+        * when the user switches to a different workspace. No UI is rendered. */}
+      {crossWorkspaceStreamingIds.map(subChatId => {
+        const chat = agentChatStore.get(subChatId)
+        if (!chat) return null
+        return (
+          <ChatDataSync key={`ghost-${subChatId}`} chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={false}>
+            {null}
+          </ChatDataSync>
+        )
+      })}
     </div>
     </TextSelectionProvider>
     </FileOpenProvider>
