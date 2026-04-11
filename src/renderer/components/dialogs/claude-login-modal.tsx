@@ -67,6 +67,11 @@ export function ClaudeLoginModal({
   const [authStarted, setAuthStarted] = useState(false)
   const urlOpenedRef = useRef(false)
   const didAutoStartForOpenRef = useRef(false)
+  // Track whether the account was already connected when the modal opened.
+  // Prevents premature handleAuthSuccess when an old (undecryptable) account
+  // exists in the DB from a previous build — isConnected is true on mount,
+  // but the token can't actually be used.
+  const wasConnectedOnOpenRef = useRef<boolean | null>(null)
 
   // tRPC mutations
   const startAuthMutation = trpc.claudeCode.startAuth.useMutation()
@@ -94,9 +99,23 @@ export function ClaudeLoginModal({
     refetchInterval: authStarted || isPolling ? 1500 : false,
   })
 
-  // Complete as soon as token is stored in DB
+  // Capture initial isConnected state when integrationQuery first loads
   useEffect(() => {
-    if ((authStarted || isPolling) && integrationQuery.data?.isConnected) {
+    if (integrationQuery.data && wasConnectedOnOpenRef.current === null) {
+      wasConnectedOnOpenRef.current = !!integrationQuery.data.isConnected
+    }
+  }, [integrationQuery.data])
+
+  // Complete as soon as token is NEWLY stored in DB (transition from false→true).
+  // Without the transition check, an existing but undecryptable account (from a
+  // previous unsigned build) would trigger immediate handleAuthSuccess before the
+  // user completes OAuth, causing a close→retry→fail→reopen loop.
+  useEffect(() => {
+    if (
+      (authStarted || isPolling) &&
+      integrationQuery.data?.isConnected &&
+      wasConnectedOnOpenRef.current === false
+    ) {
       handleAuthSuccess()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -166,6 +185,7 @@ export function ClaudeLoginModal({
       setAuthStarted(false)
       urlOpenedRef.current = false
       didAutoStartForOpenRef.current = false
+      wasConnectedOnOpenRef.current = null
     }
   }, [open])
 
