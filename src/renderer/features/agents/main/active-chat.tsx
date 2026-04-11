@@ -5426,8 +5426,21 @@ export function ChatView({
       }
     }
 
+    // Always keep streaming (or queued) subchats mounted, even if they exceed MAX_MOUNTED_TABS.
+    // Without this, a streaming subchat that falls off the tab limit gets its ChatDataSync
+    // unmounted → cleanup clears streaming status → eviction effect sees "not streaming" → kills stream.
+    for (const id of agentChatStore.keys()) {
+      if (agentChatStore.getParentChatId(id) !== chatId) continue
+      if (result.includes(id)) continue
+      const isStreaming = useStreamingStatusStore.getState().isStreaming(id)
+      const hasQueued = (useMessageQueueStore.getState().queues[id]?.length ?? 0) > 0
+      if (isStreaming || hasQueued) {
+        result.push(id)
+      }
+    }
+
     return result
-  }, [activeSubChatId, splitPaneIds, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
+  }, [activeSubChatId, chatId, splitPaneIds, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
 
   // Prune chat instances from previous workspace when switching parent chat.
   // Prevents cross-workspace memory accumulation.

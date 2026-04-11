@@ -161,15 +161,14 @@ export function useGitWorkflow({
   const updateBaseBranchMutation = trpc.chats.updateBaseBranch.useMutation()
 
   const preflight = useCallback(async () => {
-    await refetchWorkflow()
-    await refetchPrStatus()
+    await Promise.allSettled([refetchWorkflow(), refetchPrStatus()])
   }, [refetchWorkflow, refetchPrStatus])
 
   const handleCommit = useCallback(
     async (message: string) => {
       if (!worktreePath) return
-      await preflight()
       try {
+        await preflight()
         await stageAllMutation.mutateAsync({ worktreePath })
         await commitMutation.mutateAsync({ worktreePath, message })
         queryClient.invalidateQueries({ queryKey: [["changes", "getWorkflowState"]] })
@@ -182,8 +181,8 @@ export function useGitWorkflow({
 
   const handlePush = useCallback(async () => {
     if (!worktreePath) return
-    await preflight()
     try {
+      await preflight()
       await pushMutation.mutateAsync({ worktreePath, setUpstream: !state.hasRemote })
       queryClient.invalidateQueries({ queryKey: [["changes", "getWorkflowState"]] })
     } catch (err) {
@@ -193,8 +192,8 @@ export function useGitWorkflow({
 
   const handleOpenPR = useCallback(async () => {
     if (!worktreePath) return
-    await preflight()
     try {
+      await preflight()
       await createPrMutation.mutateAsync({ worktreePath })
     } catch (err) {
       toast.error((err as Error).message || "Failed to open PR", { position: "top-center" })
@@ -203,8 +202,8 @@ export function useGitWorkflow({
 
   const handleRebase = useCallback(async () => {
     if (!worktreePath) return
-    await preflight()
     try {
+      await preflight()
       await mergeFromDefaultMutation.mutateAsync({ worktreePath, useRebase: true })
       queryClient.invalidateQueries({ queryKey: [["changes", "getWorkflowState"]] })
       toast.success("Rebased onto base branch", { position: "top-center" })
