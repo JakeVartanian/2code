@@ -12,7 +12,7 @@ export { AgentPreview } from "./agent-preview"
 export { ViewportToggle } from "./viewport-toggle"
 export { ScaleControl } from "./scale-control"
 export { DevicePresetsBar } from "./device-presets-bar"
-export { PreviewUrlInput } from "./preview-url-input"
+export { PreviewRouteDropdown } from "./preview-route-dropdown"
 
 // Diff components
 export { AgentDiffView } from "./agent-diff-view"

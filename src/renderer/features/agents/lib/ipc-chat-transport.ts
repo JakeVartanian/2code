@@ -134,6 +134,13 @@ const ERROR_TOAST_CONFIG: Record<
 
 type UIMessageChunk = any // Inferred from subscription
 
+// Track session IDs that have expired so we don't retry with them.
+// When SESSION_EXPIRED is received, the server already cleared the session ID
+// from the DB, but the renderer's in-memory messages still carry the old ID in
+// metadata. Without this set, every subsequent sendMessages() would read the
+// stale ID, immediately hit SESSION_EXPIRED again, and loop forever.
+const expiredSessionIds = new Set<string>()
+
 type IPCChatTransportConfig = {
   chatId: string
   subChatId: string
@@ -170,7 +177,13 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
       .reverse()
       .find((m) => m.role === "assistant")
     const metadata = lastAssistant?.metadata as AgentMessageMetadata | undefined
-    const sessionId = metadata?.sessionId
+    const rawSessionId = metadata?.sessionId
+    // Skip session IDs that have already expired this process lifetime.
+    // When SESSION_EXPIRED is received, the server clears the session ID from the DB,
+    // but the renderer's in-memory messages still carry the old ID in metadata.
+    // Without this guard every subsequent sendMessages() would pass the stale ID,
+    // immediately hit SESSION_EXPIRED again, and loop forever.
+    const sessionId = rawSessionId && expiredSessionIds.has(rawSessionId) ? undefined : rawSessionId
 
     // Read thinking config dynamically (so toggle applies to existing chats)
     const thinkingMode = appStore.get(thinkingModeAtom)
@@ -443,6 +456,12 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               // Handle errors - show toast to user FIRST before anything else
               if (chunk.type === "error") {
                 const category = chunk.debugInfo?.category || "UNKNOWN"
+
+                // When the session has expired, record its ID so future sendMessages()
+                // calls don't keep re-submitting it and triggering another SESSION_EXPIRED.
+                if (category === "SESSION_EXPIRED" && sessionId) {
+                  expiredSessionIds.add(sessionId)
+                }
 
                 // Detailed SDK error logging for debugging
                 console.error(`[SDK ERROR] ========================================`)

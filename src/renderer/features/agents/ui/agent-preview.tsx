@@ -3,20 +3,19 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { useAtom } from "jotai"
 import { Button } from "../../../components/ui/button"
-import { RotateCw, Terminal, ClipboardList, SquareArrowOutUpRight } from "lucide-react"
+import { RotateCw, Terminal, SquareArrowOutUpRight } from "lucide-react"
 import {
   ExternalLinkIcon,
   IconDoubleChevronRight,
   IconChatBubble,
 } from "../../../components/ui/icons"
-import { PreviewUrlInput } from "./preview-url-input"
+import { PreviewRouteDropdown } from "./preview-route-dropdown"
 import { toast } from "sonner"
 import {
   previewPathAtomFamily,
   viewportModeAtomFamily,
   previewScaleAtomFamily,
   mobileDeviceAtomFamily,
-  previewViewModeAtomFamily,
 } from "../atoms"
 import { cn } from "../../../lib/utils"
 import { Logo } from "../../../components/ui/logo"
@@ -33,7 +32,6 @@ import { DevicePresetsBar } from "./device-presets-bar"
 import { ResizeHandle } from "./resize-handle"
 import { MobileCopyLinkButton } from "./mobile-copy-link-button"
 import { PreviewCompareView } from "./preview-compare-view"
-import { PreviewPageRegistry } from "./preview-page-registry"
 import { DEVICE_PRESETS, AGENTS_PREVIEW_CONSTANTS } from "../constants"
 // import { getSandboxPreviewUrl } from "@/app/(alpha)/canvas/{components}/settings-tabs/repositories/preview-url"
 const getSandboxPreviewUrl = (sandboxId: string, port: number, _type: string) => `https://${sandboxId}-${port}.csb.app` // Desktop mock
@@ -130,9 +128,6 @@ export function AgentPreview({
   )
   const [scale, setScale] = useAtom(previewScaleAtomFamily(chatId))
   const [device, setDevice] = useAtom(mobileDeviceAtomFamily(chatId))
-  const [previewViewMode, setPreviewViewMode] = useAtom(
-    previewViewModeAtomFamily(chatId),
-  )
 
   // Local state for resizing
   const [isResizing, setIsResizing] = useState(false)
@@ -441,7 +436,9 @@ export function AgentPreview({
 
             {/* URL Input - centered, flexible */}
             <div className="flex-1 min-w-0 mx-1">
-              <PreviewUrlInput
+              <PreviewRouteDropdown
+                chatId={chatId}
+                projectPath={projectPath}
                 baseHost={baseHost ?? ""}
                 currentPath={currentPath}
                 onPathChange={handlePathSelect}
@@ -484,9 +481,11 @@ export function AgentPreview({
             <ScaleControl value={scale} onChange={setScale} />
           </div>
 
-          {/* Center: URL bar */}
+          {/* Center: URL bar + route dropdown */}
           <div className="flex-1 mx-2 min-w-0 flex items-center justify-center">
-            <PreviewUrlInput
+            <PreviewRouteDropdown
+              chatId={chatId}
+              projectPath={projectPath}
               baseHost={baseHost}
               currentPath={currentPath}
               onPathChange={handlePathSelect}
@@ -495,24 +494,8 @@ export function AgentPreview({
             />
           </div>
 
-          {/* Right: Registry + External link + Close */}
+          {/* Right: External link + Close */}
           <div className="flex items-center justify-end gap-1 flex-1">
-            {projectPath && (
-              <Button
-                variant="ghost"
-                className={cn(
-                  "h-7 w-7 p-0 hover:bg-muted transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] rounded-md",
-                  previewViewMode === "registry" && "bg-muted",
-                )}
-                onClick={() =>
-                  setPreviewViewMode(
-                    previewViewMode === "registry" ? "preview" : "registry",
-                  )
-                }
-              >
-                <ClipboardList className="h-3.5 w-3.5 text-muted-foreground" />
-              </Button>
-            )}
             {previewUrl && <ExternalLinkDropdown url={previewUrl} />}
 
             {onClose && (
@@ -540,23 +523,8 @@ export function AgentPreview({
         />
       )}
 
-      {/* Registry view */}
-      {previewViewMode === "registry" && projectPath && (
-        <PreviewPageRegistry
-          chatId={chatId}
-          projectPath={projectPath}
-          onBack={() => setPreviewViewMode("preview")}
-          onNavigate={(path, viewport) => {
-            handlePathSelect(path)
-            if (viewport === "mobile") setViewportMode("mobile")
-            else if (viewport === "desktop") setViewportMode("desktop")
-            setPreviewViewMode("preview")
-          }}
-        />
-      )}
-
       {/* Content area */}
-      {previewViewMode !== "registry" && <div
+      <div
         className={cn(
           "flex-1 relative flex items-center justify-center overflow-hidden",
           isMobile ? "w-full h-full" : "px-1 pb-1",
@@ -708,7 +676,6 @@ export function AgentPreview({
           </>
         )}
       </div>
-      }
     </div>
   )
 }

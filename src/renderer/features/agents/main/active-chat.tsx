@@ -6326,6 +6326,7 @@ Make sure to preserve all functionality from both branches when resolving confli
       if (!Array.isArray(latestMessages)) return
       const latestMessagesJson = JSON.stringify(latestMessages)
 
+      // Update React Query cache for immediate access
       utils.agents.getAgentChat.setData({ chatId }, (old: any) => {
         if (!old?.subChats || !Array.isArray(old.subChats)) return old
 
@@ -6338,6 +6339,13 @@ Make sure to preserve all functionality from both branches when resolving confli
 
         return found ? { ...old, subChats } : old
       })
+
+      // Persist to DB so messages survive workspace switches and query refetches
+      trpcClient.chats.updateSubChatMessages
+        .mutate({ id: subChatId, messages: latestMessagesJson })
+        .catch(() => {
+          // Best-effort — cache is already updated above
+        })
     },
     [chatId, utils],
   )
