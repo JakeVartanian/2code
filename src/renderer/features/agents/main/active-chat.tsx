@@ -286,7 +286,7 @@ function waitForStreamingReady(subChatId: string): Promise<void> {
     const unsub = useStreamingStatusStore.subscribe(
       (state) => state.statuses[subChatId],
       (status) => {
-        if (status === "ready" || status === undefined) {
+        if (status === "ready" || status === "error" || status === undefined) {
           clearTimeout(timeout)
           unsub()
           resolve()
