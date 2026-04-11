@@ -20,6 +20,8 @@ import {
 } from "./lib/cli"
 import { cleanupGitWatchers } from "./lib/git/watcher"
 import { cancelAllPendingOAuth, handleMcpOAuthCallback } from "./lib/mcp-auth"
+import { handleClaudeCodeOAuthCallback } from "./lib/trpc/routers/claude-code"
+import { bringToFront } from "./lib/window"
 import { getAllMcpConfigHandler, hasActiveClaudeSessions, abortAllClaudeSessions } from "./lib/trpc/routers/claude"
 import { warmupShellEnvironment } from "./lib/claude/env"
 import {
@@ -271,7 +273,8 @@ const FAVICON_DATA_URI = `data:image/png;base64,${FAVICON_PNG_BASE64}`
 
 // Start local HTTP server for auth callbacks
 // This catches http://localhost:{AUTH_SERVER_PORT}/auth/callback?code=xxx and /callback (for MCP OAuth)
-const server = createServer((req, res) => {
+const server = createServer(async (req, res) => {
+  try {
     const url = new URL(req.url || "", `http://localhost:${AUTH_SERVER_PORT}`)
 
     // Serve favicon
@@ -390,23 +393,30 @@ const server = createServer((req, res) => {
       )
 
       if (code && state) {
-        // Try MCP OAuth first (sync map lookup, fire-and-forget)
-        handleMcpOAuthCallback(code, state).catch((err) => console.error("[Auth Server] MCP OAuth callback failed:", err))
-        // Try Claude Code OAuth (dynamic import to avoid circular dep)
-        import("./lib/trpc/routers/claude-code").then(mod => {
-          mod.handleClaudeCodeOAuthCallback(code, state).catch(err =>
+        // Await both OAuth handlers before responding. Each handler looks up the
+        // state in its own in-memory map and returns near-instantly if the state
+        // doesn't match. The matching handler completes the full token exchange.
+        // This guarantees the token is stored in the DB BEFORE the browser shows
+        // the success page, so the renderer's next poll picks up the result.
+        await Promise.all([
+          handleMcpOAuthCallback(code, state).catch((err) =>
+            console.error("[Auth Server] MCP OAuth callback failed:", err)
+          ),
+          handleClaudeCodeOAuthCallback(code, state).catch(err =>
             console.error("[Auth Server] Claude Code token exchange failed:", err)
-          )
-        }).catch(err => console.error("[Auth Server] Failed to load claude-code module:", err))
+          ),
+        ])
 
-        // Send success page immediately (token exchanges happen async)
+        // Bring 2Code to the foreground after auth completes
+        bringToFront()
+
         res.writeHead(200, { "Content-Type": "text/html" })
         res.end(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <link rel="icon" type="image/png" href="${FAVICON_DATA_URI}">
-  <title>2Code - MCP Authentication</title>
+  <title>2Code - Authentication</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
@@ -472,6 +482,13 @@ const server = createServer((req, res) => {
       res.writeHead(404, { "Content-Type": "text/plain" })
       res.end("Not found")
     }
+  } catch (err) {
+    console.error("[Auth Server] Unhandled error:", err)
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "text/plain" })
+      res.end("Internal server error")
+    }
+  }
   })
 
 server.on("error", (err: NodeJS.ErrnoException) => {

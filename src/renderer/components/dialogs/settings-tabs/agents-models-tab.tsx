@@ -190,6 +190,16 @@ function AnthropicAccountsSection() {
 
   const removeMutation = trpc.anthropicAccounts.remove.useMutation({
     onSuccess: () => {
+      // Optimistically mark as disconnected NOW (synchronously) so the migrateLegacy
+      // effect doesn't race: if list settles before getIntegration refetches, it would
+      // see accounts=[] + isConnected=true (stale) and re-create the account from the
+      // legacy table before we have a chance to clear it.
+      trpcUtils.claudeCode.getIntegration.setData(undefined, {
+        isConnected: false,
+        connectedAt: null,
+        accountId: null,
+        displayName: null,
+      })
       trpcUtils.anthropicAccounts.list.invalidate()
       trpcUtils.anthropicAccounts.getActive.invalidate()
       trpcUtils.claudeCode.getIntegration.invalidate()

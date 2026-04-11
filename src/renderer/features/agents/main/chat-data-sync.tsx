@@ -164,7 +164,7 @@ export function ChatDataSync({
   const actionsRef = useRef({
     sendMessage,
     stop,
-    regenerate,
+    regenerate: regenerate.bind(chat),
     setMessages,
     status,
   })
@@ -172,7 +172,7 @@ export function ChatDataSync({
   // Update refs (no re-render triggered)
   actionsRef.current.sendMessage = sendMessage
   actionsRef.current.stop = stop
-  actionsRef.current.regenerate = regenerate
+  actionsRef.current.regenerate = regenerate.bind(chat)
   actionsRef.current.setMessages = setMessages
   actionsRef.current.status = status
 

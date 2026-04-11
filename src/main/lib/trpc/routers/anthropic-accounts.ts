@@ -376,9 +376,15 @@ export const anthropicAccountsRouter = router({
             })
             .where(eq(anthropicSettings.id, "singleton"))
             .run()
+          // Clear legacy table too — getIntegration falls back to it and would
+          // still report isConnected:true if this row is left behind.
+          db.delete(claudeCodeCredentials)
+            .where(eq(claudeCodeCredentials.id, "default"))
+            .run()
         }
       }
 
+      clearClaudeCaches()
       console.log(`[AnthropicAccounts] Removed account: ${input.accountId}`)
       return { success: true }
     }),
