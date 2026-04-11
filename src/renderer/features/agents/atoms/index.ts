@@ -1256,30 +1256,21 @@ export const pageReviewAtomFamily = atomFamily((chatId: string) =>
   ),
 )
 
-// Routes drawer open state
-export const previewRoutesDrawerOpenAtom = atomWithStorage<boolean>(
-  "agents:previewRoutesDrawer",
-  false,
-  undefined,
-  { getOnInit: true },
-)
-
-// Preview view mode: "preview" (iframe) or "registry" (page review table)
-export type PreviewViewMode = "preview" | "registry"
-
-const previewViewModeStorageAtom = atomWithStorage<Record<string, PreviewViewMode>>(
-  "agents:previewViewMode",
+// Preview admin mode - bypasses order-of-operations in previewed app
+// When enabled, appends ?__admin=1 to iframe navigation URLs
+const previewAdminModeStorageAtom = atomWithStorage<Record<string, boolean>>(
+  "agents:previewAdminMode",
   {},
   undefined,
   { getOnInit: true },
 )
 
-export const previewViewModeAtomFamily = atomFamily((chatId: string) =>
+export const previewAdminModeAtomFamily = atomFamily((chatId: string) =>
   atom(
-    (get) => get(previewViewModeStorageAtom)[chatId] ?? "preview",
-    (get, set, mode: PreviewViewMode) => {
-      const current = get(previewViewModeStorageAtom)
-      set(previewViewModeStorageAtom, { ...current, [chatId]: mode })
+    (get) => get(previewAdminModeStorageAtom)[chatId] ?? false,
+    (get, set, enabled: boolean) => {
+      const current = get(previewAdminModeStorageAtom)
+      set(previewAdminModeStorageAtom, { ...current, [chatId]: enabled })
     },
   ),
 )
@@ -1305,7 +1296,7 @@ export function clearChatAtomCaches(chatId: string) {
   previewSourceAtomFamily.remove(chatId)
   compareDevicesAtomFamily.remove(chatId)
   pageReviewAtomFamily.remove(chatId)
-  previewViewModeAtomFamily.remove(chatId)
+  previewAdminModeAtomFamily.remove(chatId)
 }
 
 /**

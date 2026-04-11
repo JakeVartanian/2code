@@ -198,6 +198,16 @@ function decryptToken(encrypted: string): string {
 }
 
 /**
+ * Validate that a decoded token looks like a real Claude OAuth access token.
+ * Tokens stored with the old safeStorage.encryptString() scheme decode as garbage
+ * UTF-8 (binary ciphertext re-interpreted as text) which is truthy but unusable.
+ * Checking the well-known prefix guards against silently using garbage credentials.
+ */
+function isValidOAuthToken(token: string): boolean {
+  return token.startsWith("sk-ant-")
+}
+
+/**
  * Get Claude Code OAuth token from local SQLite
  * Uses multi-account system first (active account), falls back to legacy table
  * Returns null if not connected
@@ -222,12 +232,13 @@ function getClaudeCodeToken(): string | null {
 
       if (account?.oauthToken) {
         const token = decryptToken(account.oauthToken)
-        if (token) {
+        if (isValidOAuthToken(token)) {
           console.log(`[claude-auth] token=oauth accountId=${settings.activeAccountId}`)
           return token
         }
-        // Token undecryptable (different unsigned build) — fall through
-        console.warn(`[claude-auth] token=oauth accountId=${settings.activeAccountId} UNDECRYPTABLE — skipping`)
+        // Token invalid: either undecryptable (different unsigned build) or
+        // was encoded with old safeStorage (garbage UTF-8 after base64 decode).
+        console.warn(`[claude-auth] token=oauth accountId=${settings.activeAccountId} INVALID — skipping`)
       }
     }
 
@@ -244,8 +255,8 @@ function getClaudeCodeToken(): string | null {
     }
 
     const legacyToken = decryptToken(cred.oauthToken)
-    if (!legacyToken) {
-      console.warn("[claude-auth] token=oauth(legacy) UNDECRYPTABLE — returning null")
+    if (!isValidOAuthToken(legacyToken)) {
+      console.warn("[claude-auth] token=oauth(legacy) INVALID (undecryptable or safeStorage garbage) — returning null")
       return null
     }
     console.log("[claude-auth] token=oauth(legacy)")

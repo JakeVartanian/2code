@@ -1,7 +1,9 @@
 import { useState } from "react"
+import { toast } from "sonner"
 import { Button } from "../../../../components/ui/button"
 import { Textarea } from "../../../../components/ui/textarea"
 import { cn } from "../../../../lib/utils"
+import { trpc } from "../../../../lib/trpc"
 import type { WorkflowStage, WorkflowMode, WorkflowState } from "./use-git-workflow"
 import { GitMergeConfirmDialog } from "./git-merge-confirm-dialog"
 import { IconSpinner } from "../../../../components/ui/icons"
@@ -33,6 +35,29 @@ export function GitActionArea({
 }: GitActionAreaProps) {
   const [commitMessage, setCommitMessage] = useState("")
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false)
+  const [isGenerating, setIsGenerating] = useState(false)
+  const generateCommitMutation = trpc.chats.generateCommitMessage.useMutation()
+
+  const handleCommitClick = async (filePaths?: string[]) => {
+    let message = commitMessage.trim()
+    if (!message) {
+      setIsGenerating(true)
+      try {
+        const result = await generateCommitMutation.mutateAsync({ chatId, filePaths })
+        message = result.message
+        setCommitMessage(message)
+      } catch {
+        toast.error("Failed to generate commit message")
+        return
+      } finally {
+        setIsGenerating(false)
+      }
+    }
+    onCommit(message)
+    setCommitMessage("")
+  }
+
+  const isBusy = isMutating || isGenerating
 
   // ── Direct mode: simple commit + push ──────────────────────────────────────
   if (mode === "direct") {
@@ -52,15 +77,12 @@ export function GitActionArea({
             />
             <Button
               size="sm"
-              disabled={!commitMessage.trim() || isMutating}
-              onClick={() => {
-                onCommit(commitMessage)
-                setCommitMessage("")
-              }}
+              disabled={isBusy}
+              onClick={() => handleCommitClick(state.uncommittedFiles.map((f) => f.path))}
               className="w-full h-7 text-xs gap-1.5"
             >
-              {isMutating && <IconSpinner className="h-3 w-3 animate-spin" />}
-              Commit {state.uncommittedFiles.length} file{state.uncommittedFiles.length !== 1 ? "s" : ""} to {branch || "branch"}
+              {isBusy && <IconSpinner className="h-3 w-3 animate-spin" />}
+              {isGenerating ? "Generating message…" : `Commit ${state.uncommittedFiles.length} file${state.uncommittedFiles.length !== 1 ? "s" : ""} to ${branch || "branch"}`}
             </Button>
           </div>
         )}
@@ -93,16 +115,14 @@ export function GitActionArea({
         />
         <Button
           size="sm"
-          disabled={!commitMessage.trim() || isMutating}
-          onClick={() => {
-            onCommit(commitMessage)
-            setCommitMessage("")
-          }}
+          disabled={isBusy}
+          onClick={() => handleCommitClick(state.uncommittedFiles.map((f) => f.path))}
           className="w-full h-7 text-xs gap-1.5"
         >
-          {isMutating && <IconSpinner className="h-3 w-3 animate-spin" />}
-          Commit {state.uncommittedFiles.length} file{state.uncommittedFiles.length !== 1 ? "s" : ""}
-          {branch ? ` to ${branch}` : ""}
+          {isBusy && <IconSpinner className="h-3 w-3 animate-spin" />}
+          {isGenerating
+            ? "Generating message…"
+            : `Commit ${state.uncommittedFiles.length} file${state.uncommittedFiles.length !== 1 ? "s" : ""}${branch ? ` to ${branch}` : ""}`}
         </Button>
       </div>
     )

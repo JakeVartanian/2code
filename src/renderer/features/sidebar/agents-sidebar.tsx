@@ -1944,9 +1944,10 @@ export function AgentsSidebar({
       remoteStats?: { fileCount: number; additions: number; deletions: number } | null
     }> = []
 
-    // Add local chats
+    // Add local chats (filtered to current project if one is selected)
     if (localChats) {
       for (const chat of localChats) {
+        if (selectedProject && chat.projectId !== selectedProject.id) continue
         unified.push({
           id: chat.id,
           name: chat.name,
@@ -1995,7 +1996,7 @@ export function AgentsSidebar({
     })
 
     return unified
-  }, [localChats, remoteChats])
+  }, [localChats, remoteChats, selectedProject?.id])
 
   // Track open sub-chat changes for reactivity
   const [openSubChatsVersion, setOpenSubChatsVersion] = useState(0)
@@ -2066,8 +2067,8 @@ export function AgentsSidebar({
     return new Map(projects.map((p) => [p.id, p]))
   }, [projects])
 
-  // Fetch all archived chats (to get count)
-  const { data: archivedChats } = trpc.chats.listArchived.useQuery({})
+  // Fetch archived chats for current project (to get count)
+  const { data: archivedChats } = trpc.chats.listArchived.useQuery({ projectId: selectedProject?.id })
   const archivedChatsCount = archivedChats?.length ?? 0
 
   // Get utils outside of callbacks - hooks must be called at top level
