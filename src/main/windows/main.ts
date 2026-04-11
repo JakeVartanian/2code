@@ -654,6 +654,14 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
   // unsafe-inline is required by Tailwind/Radix inline styles.
   // All external API calls go through tRPC (main process IPC), not renderer fetch.
   window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    // Don't inject CSP on localhost responses — these are preview iframe apps
+    // that need full network access to their own APIs
+    const url = details.url
+    if (url.startsWith("http://localhost:") || url.startsWith("http://127.0.0.1:")) {
+      callback({ responseHeaders: details.responseHeaders })
+      return
+    }
+
     callback({
       responseHeaders: {
         ...details.responseHeaders,
@@ -667,7 +675,8 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
             "font-src 'self' data:",
             "worker-src 'self' blob:",
             // ws://localhost:* needed for Vite HMR in dev; https://openrouter.ai for model fetching
-            "connect-src 'self' ws://localhost:* http://localhost:* https://openrouter.ai",
+            // https: needed so preview iframe apps can call their own external APIs
+            "connect-src 'self' ws://localhost:* wss://localhost:* http://localhost:* https://openrouter.ai https:",
             "media-src 'self' blob:",
             "object-src 'none'",
             "frame-src 'self' http://localhost:* https://localhost:*",

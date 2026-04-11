@@ -18,7 +18,7 @@ const FRAMEWORK_PORT_MAP: Record<string, number> = {
   gatsby: 8000,
 }
 
-const COMMON_DEV_PORTS = [3000, 3001, 5173, 5174, 8080, 8000, 4200, 4321]
+const COMMON_DEV_PORTS = [3000, 3001, 5173, 5174, 8080, 8081, 8000, 4200, 4321]
 
 // Route scanning exclusions
 const NEXT_EXCLUDED_FILES = new Set([

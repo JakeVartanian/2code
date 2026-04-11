@@ -7253,7 +7253,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                         onCreateNew={handleCreateNewSubChat}
                         isMobile={false}
                         onBackToChats={onBackToChats}
-                        onOpenPreview={onOpenPreview}
+                        onOpenPreview={onOpenPreview ?? (() => setIsPreviewSidebarOpen(true))}
                         canOpenPreview={canOpenPreview}
                         onOpenDiff={canOpenDiff ? () => setIsDiffSidebarOpen(true) : undefined}
                         canOpenDiff={canShowDiffButton}
@@ -7758,7 +7758,7 @@ Make sure to preserve all functionality from both branches when resolving confli
             className="bg-tl-background border-l"
             style={{ borderLeftWidth: "0.5px" }}
           >
-            {isQuickSetup ? (
+            {isQuickSetup && !localhostUrl ? (
               <div className="flex flex-col h-full">
                 {/* Header with close button */}
                 <div className="flex items-center justify-end px-3 h-10 bg-tl-background flex-shrink-0 border-b border-border/50">

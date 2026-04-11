@@ -10,6 +10,7 @@ import {
   IconChatBubble,
 } from "../../../components/ui/icons"
 import { PreviewUrlInput } from "./preview-url-input"
+import { toast } from "sonner"
 import {
   previewPathAtomFamily,
   viewportModeAtomFamily,
@@ -43,10 +44,23 @@ const getSandboxPreviewUrl = (sandboxId: string, port: number, _type: string) =>
  * - In system browser
  */
 function ExternalLinkDropdown({ url }: { url: string }) {
-  const externalMutation = trpc.external.openExternal.useMutation()
+  const externalMutation = trpc.external.openExternal.useMutation({
+    onSuccess: () => {
+      toast.success("Opened in browser")
+    },
+    onError: (error) => {
+      toast.error(`Failed to open in browser: ${error.message}`)
+    },
+  })
 
   const handleOpenInBrowser = () => {
-    externalMutation.mutate(url)
+    // Validate URL before attempting to open
+    try {
+      new URL(url)
+      externalMutation.mutate(url)
+    } catch {
+      toast.error("Invalid URL")
+    }
   }
 
   const handleOpenIn2Code = () => {
@@ -64,9 +78,9 @@ function ExternalLinkDropdown({ url }: { url: string }) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuItem onClick={handleOpenInBrowser} className="gap-2">
+        <DropdownMenuItem onClick={handleOpenInBrowser} disabled={externalMutation.isPending} className="gap-2">
           <SquareArrowOutUpRight className="h-4 w-4" />
-          <span>Open in browser</span>
+          <span>{externalMutation.isPending ? "Opening..." : "Open in browser"}</span>
         </DropdownMenuItem>
         <DropdownMenuItem onClick={handleOpenIn2Code} className="gap-2">
           <ExternalLinkIcon className="h-4 w-4" />
