@@ -219,7 +219,8 @@ export const AgentEditTool = memo(function AgentEditTool({
   partIndex,
   chatStatus,
 }: AgentEditToolProps) {
-  const [isOutputExpanded, setIsOutputExpanded] = useState(() => appStore.get(toolVerbosityAtom) === "expanded")
+  const verbosity = appStore.get(toolVerbosityAtom)
+  const [isOutputExpanded, setIsOutputExpanded] = useState(() => verbosity === "expanded")
   // Retroactively update expanded state when user changes verbosity in settings.
   useEffect(() => {
     return appStore.sub(toolVerbosityAtom, () => {
