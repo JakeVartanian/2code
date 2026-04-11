@@ -1,5 +1,3 @@
-"use client"
-
 import { cn } from "../../../lib/utils"
 import { Monitor, Smartphone, Columns2 } from "lucide-react"
 import { motion } from "motion/react"

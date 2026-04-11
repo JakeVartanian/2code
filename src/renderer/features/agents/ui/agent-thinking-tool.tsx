@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useState, useEffect, useRef } from "react"
 import { ChevronRight } from "lucide-react"
 import { cn } from "../../../lib/utils"

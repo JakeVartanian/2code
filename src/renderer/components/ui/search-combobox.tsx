@@ -1,5 +1,3 @@
-"use client"
-
 import React, { useState, useMemo } from "react"
 import { Popover, PopoverContent, PopoverTrigger } from "./popover"
 import {

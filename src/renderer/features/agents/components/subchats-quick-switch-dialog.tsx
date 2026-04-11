@@ -1,5 +1,3 @@
-"use client"
-
 import { useMemo } from "react"
 import { AnimatePresence } from "motion/react"
 import { createPortal } from "react-dom"

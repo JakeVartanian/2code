@@ -1,5 +1,3 @@
-"use client"
-
 import { LucideProps } from "lucide-react"
 import * as React from "react"
 

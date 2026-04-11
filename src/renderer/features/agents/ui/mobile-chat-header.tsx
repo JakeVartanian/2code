@@ -1,5 +1,3 @@
-"use client"
-
 import { useCallback, useMemo, useState } from "react"
 import { useAtomValue } from "jotai"
 import { isSubChatLoadingAtomFamily } from "../atoms"

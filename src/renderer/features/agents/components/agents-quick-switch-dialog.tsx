@@ -1,5 +1,3 @@
-"use client"
-
 import { AnimatePresence } from "motion/react"
 import { createPortal } from "react-dom"
 import { useAtomValue } from "jotai"

@@ -1,5 +1,3 @@
-"use client"
-
 import { createContext, useContext, useMemo } from "react"
 import { getFileIconByExtension } from "./agents-file-mention"
 import { SkillIcon, CustomAgentIcon, OriginalMCPIcon } from "../../../components/ui/icons"

@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useState, useCallback, useEffect, useRef } from "react"
 import { ChevronDown, ArrowUp, X, Pencil, Check } from "lucide-react"
 import { motion, AnimatePresence } from "motion/react"

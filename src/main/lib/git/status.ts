@@ -215,7 +215,7 @@ async function getBranchComparison(
 		const logOutput = await git.raw([
 			"log",
 			`origin/${defaultBranch}..HEAD`,
-			"--format=%H|%h|%s|%b|%an|%aI",
+			"--format=%H%x1e%h%x1e%s%x1e%b%x1e%an%x1e%aI",
 		]);
 		commits = parseGitLog(logOutput);
 

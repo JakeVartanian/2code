@@ -1,5 +1,3 @@
-"use client"
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { ArrowUpRight, TerminalSquare, Box, ListTodo } from "lucide-react"

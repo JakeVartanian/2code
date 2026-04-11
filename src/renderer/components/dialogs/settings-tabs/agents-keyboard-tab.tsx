@@ -1,5 +1,3 @@
-"use client"
-
 import { useCallback, useMemo, useState, useRef, useEffect } from "react"
 import { useListKeyboardNav } from "./use-list-keyboard-nav"
 import { useAtom, useAtomValue } from "jotai"

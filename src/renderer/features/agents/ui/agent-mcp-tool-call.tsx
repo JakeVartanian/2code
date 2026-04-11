@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useState, useMemo, useEffect } from "react"
 import { ChevronRight } from "lucide-react"
 import { TextShimmer } from "../../../components/ui/text-shimmer"

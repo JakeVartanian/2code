@@ -1,5 +1,3 @@
-"use client"
-
 import { Fragment, useCallback, useEffect, useRef, useState } from "react"
 import { getDefaultRatios } from "../atoms"
 import { useAgentSubChatStore } from "../stores/sub-chat-store"

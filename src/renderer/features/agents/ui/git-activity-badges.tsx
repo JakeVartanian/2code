@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useCallback, useMemo, useState } from "react"
 import { GitCommit, GitPullRequest } from "lucide-react"
 import { useAtomValue, useSetAtom } from "jotai"

@@ -1,5 +1,3 @@
-"use client"
-
 import { useState } from "react"
 import { X, FileText, FileCode, FileJson } from "lucide-react"
 import { IconSpinner } from "../../../components/ui/icons"

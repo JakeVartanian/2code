@@ -1,5 +1,3 @@
-"use client"
-
 import { Button } from "../../../components/ui/button"
 import { ArrowUp, Loader2 } from "lucide-react"
 import {

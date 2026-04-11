@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useState, useMemo, useEffect } from "react"
 import { Check, X } from "lucide-react"
 import { useAtomValue } from "jotai"

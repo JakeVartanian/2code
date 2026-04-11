@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useState, useRef, useCallback, useEffect } from "react"
 import { useAtom, useSetAtom } from "jotai"
 import {

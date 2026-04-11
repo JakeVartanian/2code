@@ -1,5 +1,3 @@
-"use client"
-
 /**
  * VS Code Theme Provider
  * 

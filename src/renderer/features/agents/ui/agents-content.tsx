@@ -1,5 +1,3 @@
-"use client"
-
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { useQuery } from "@tanstack/react-query"

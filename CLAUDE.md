@@ -453,6 +453,18 @@ The CLI script is bundled at `resources/cli/` and installed/uninstalled via `ins
 
 `parseLaunchDirectory()` is called at startup to capture a directory argument from `process.argv`, stored and consumed once via `getLaunchDirectory()` in the window-creation flow.
 
+### DO NOT MODIFY — Auth Flow Protected
+
+**The Claude CLI OAuth flow, token resolution, credential storage, and `.credentials.json` writing are OFF LIMITS.** Do not refactor, "improve", or change any of the following files or their auth-related logic:
+
+- `src/main/lib/trpc/routers/claude-code.ts` (OAuth PKCE flow)
+- `src/main/lib/trpc/routers/claude.ts` (token resolution, refresh, .credentials.json writing)
+- `src/main/lib/claude-token.ts` (keychain/credential file reading, token refresh)
+- `src/main/auth-store.ts` (encrypted credential storage)
+- `src/main/auth-manager.ts` (OAuth flow, token refresh)
+
+This flow is battle-tested and fragile by nature. Any "cleanup" risks breaking auth for every user. If you think something needs changing here, stop and ask the user first.
+
 ### Gotchas
 
 | Issue | Resolution |

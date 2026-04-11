@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useState } from "react"
 import { TextShimmer } from "../../../components/ui/text-shimmer"
 import {

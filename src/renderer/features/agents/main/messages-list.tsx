@@ -1,5 +1,3 @@
-"use client"
-
 import { useAtomValue } from "jotai"
 import { createContext, memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react"
 import { showMessageJsonAtom } from "../atoms"

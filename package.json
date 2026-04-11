@@ -3,7 +3,10 @@
   "version": "0.0.91",
   "private": true,
   "description": "2Code - UI for parallel work with AI agents",
-  "sideEffects": false,
+  "sideEffects": [
+    "**/*.css",
+    "src/renderer/index.tsx"
+  ],
   "homepage": "https://github.com/JakeVartanian/2code",
   "author": {
     "name": "jakev",
@@ -14,9 +17,13 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "prepackage": "node scripts/check-claude-binary.mjs",
     "package": "electron-builder --dir",
+    "prepackage:mac": "node scripts/check-claude-binary.mjs",
     "package:mac": "electron-builder --mac",
+    "prepackage:win": "node scripts/check-claude-binary.mjs",
     "package:win": "electron-builder --win",
+    "prepackage:linux": "node scripts/check-claude-binary.mjs",
     "package:linux": "electron-builder --linux",
     "dist": "electron-builder",
     "dist:manifest": "node scripts/generate-update-manifest.mjs",

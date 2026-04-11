@@ -1,5 +1,3 @@
-"use client"
-
 import { useAtomValue, useSetAtom } from "jotai"
 import { ChevronDown } from "lucide-react"
 import { memo, useMemo, useState } from "react"

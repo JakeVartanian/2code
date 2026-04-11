@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useAtomValue, useSetAtom } from "jotai"
 import { useCodeTheme } from "../../../lib/hooks/use-code-theme"

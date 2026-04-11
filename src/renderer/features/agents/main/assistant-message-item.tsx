@@ -1,5 +1,3 @@
-"use client"
-
 import { useAtomValue } from "jotai"
 import { ListTree, MoreHorizontal } from "lucide-react"
 import { memo, useCallback, useContext, useMemo, useState } from "react"

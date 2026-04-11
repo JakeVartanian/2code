@@ -1,5 +1,3 @@
-"use client"
-
 import { memo } from "react"
 import { useAtomValue } from "jotai"
 import { TextShimmer } from "../../../components/ui/text-shimmer"

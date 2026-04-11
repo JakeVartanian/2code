@@ -1,5 +1,3 @@
-"use client"
-
 import { useState, useEffect, useMemo } from "react"
 import { toast } from "sonner"
 import { GitBranch, ChevronDown, Check } from "lucide-react"

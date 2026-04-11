@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from "react"
 import { ChevronUp, ChevronDown, CornerDownLeft } from "lucide-react"
 import { Button } from "../../../components/ui/button"

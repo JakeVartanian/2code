@@ -1,5 +1,3 @@
-"use client"
-
 import { cn } from "../../../lib/utils"
 import { api } from "../../../lib/mock-api"
 import { trpc } from "../../../lib/trpc"

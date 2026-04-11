@@ -764,9 +764,9 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
             detail:
               "Reloading will interrupt them. The current progress will be saved. Are you sure you want to reload?",
           })
-          .then(({ response }) => {
+          .then(async ({ response }) => {
             if (response === 1) {
-              abortAllClaudeSessions()
+              await abortAllClaudeSessions()
               window.webContents.reloadIgnoringCache()
             }
           })
@@ -800,7 +800,10 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     // Skip confirmation if app quit was already confirmed by the user
     if (isQuitting) {
       // Still abort sessions gracefully so partial state is saved
-      abortAllClaudeSessions()
+      event.preventDefault()
+      abortAllClaudeSessions().finally(() => {
+        window.destroy()
+      })
       return
     }
 
@@ -817,9 +820,9 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
           detail:
             "Closing this window will interrupt them. The current progress will be saved. Are you sure you want to close?",
         })
-        .then(({ response }) => {
+        .then(async ({ response }) => {
           if (response === 1) {
-            abortAllClaudeSessions()
+            await abortAllClaudeSessions()
             window.destroy()
           }
         })
@@ -886,7 +889,9 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
   // trying to stream to a dead frame.
   window.webContents.on("render-process-gone", (_event, details) => {
     console.error("[Main] Renderer process gone in window", window.id, details)
-    abortAllClaudeSessions()
+    abortAllClaudeSessions().catch((err) => {
+      console.error("[Main] Error aborting sessions after renderer crash:", err)
+    })
   })
 
   return window

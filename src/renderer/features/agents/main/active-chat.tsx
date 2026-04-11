@@ -1,5 +1,3 @@
-"use client"
-
 import {
   stripEmojis
 } from "../../../components/chat-markdown-renderer"

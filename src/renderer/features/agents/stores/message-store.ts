@@ -1,5 +1,3 @@
-"use client"
-
 import { atom } from "jotai"
 import { atomFamily } from "jotai/utils"
 import { appStore } from "../../../lib/jotai-store"

@@ -1,5 +1,3 @@
-"use client"
-
 import "./inbox-styles.css"
 import { useAtomValue, useSetAtom, useAtom } from "jotai"
 import { selectedTeamIdAtom, isDesktopAtom, isFullscreenAtom, chatSourceModeAtom } from "../../lib/atoms"

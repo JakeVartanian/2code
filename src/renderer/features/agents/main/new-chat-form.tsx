@@ -1,5 +1,3 @@
-"use client"
-
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { AlignJustify, Plus } from "lucide-react"

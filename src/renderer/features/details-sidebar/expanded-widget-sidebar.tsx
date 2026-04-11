@@ -1,5 +1,3 @@
-"use client"
-
 import { useCallback, useEffect, useMemo } from "react"
 import { useAtom } from "jotai"
 import { X } from "lucide-react"

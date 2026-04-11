@@ -1,5 +1,3 @@
-"use client"
-
 import { useState, useEffect, useCallback } from "react"
 import { createPortal } from "react-dom"
 import { X, ImageOff, ChevronLeft, ChevronRight, Copy, Download } from "lucide-react"

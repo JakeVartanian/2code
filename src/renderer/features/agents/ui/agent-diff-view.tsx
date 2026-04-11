@@ -1,5 +1,3 @@
-"use client"
-
 import {
   Component,
   memo,
@@ -75,7 +73,6 @@ import {
 const useIsHydrated = () => true // Desktop is always hydrated
 import { cn } from "../../../lib/utils"
 import { isDesktopApp } from "../../../lib/utils/platform"
-import { api } from "../../../lib/mock-api"
 import { trpcClient } from "../../../lib/trpc"
 import { remoteApi } from "../../../lib/remote-api"
 // Re-export lightweight types/atoms/utils from separate module (avoids pulling @pierre/diffs into importers that only need these)

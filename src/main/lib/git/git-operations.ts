@@ -116,7 +116,7 @@ export const createGitOperationsRouter = () => {
 					const logOutput = await git.raw([
 						"log",
 						`-${input.limit}`,
-						"--format=%H|%h|%s|%an|%ae|%aI|%D",
+						"--format=%H%x1e%h%x1e%s%x1e%an%x1e%ae%x1e%aI%x1e%D",
 					]);
 
 					if (!logOutput.trim()) return [];
@@ -126,7 +126,7 @@ export const createGitOperationsRouter = () => {
 						.split("\n")
 						.map((line) => {
 							const [hash, shortHash, message, author, email, dateStr, refs] =
-								line.split("|");
+								line.split("\x1e");
 							// Extract tags from ref names (format: "HEAD -> main, tag: v1.0.0, origin/main")
 							const tags = (refs || "")
 								.split(",")

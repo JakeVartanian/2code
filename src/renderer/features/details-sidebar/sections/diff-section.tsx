@@ -1,5 +1,3 @@
-"use client"
-
 import { Button } from "@/components/ui/button"
 import { GitCommit } from "lucide-react"
 import { IconSpinner, DiffIcon } from "@/components/ui/icons"

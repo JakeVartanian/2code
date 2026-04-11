@@ -1,5 +1,3 @@
-"use client"
-
 import "./automations-styles.css"
 import { useAtomValue, useSetAtom, useAtom } from "jotai"
 import { selectedTeamIdAtom } from "../../lib/atoms"

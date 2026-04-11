@@ -1,5 +1,3 @@
-"use client"
-
 import React, { useMemo, useRef, useEffect, useState, useCallback, memo } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { trpc } from "../../../lib/trpc"

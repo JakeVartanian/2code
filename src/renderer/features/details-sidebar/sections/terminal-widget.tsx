@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAtom, useAtomValue } from "jotai"
 import { useTheme } from "next-themes"

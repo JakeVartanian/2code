@@ -1,5 +1,3 @@
-"use client"
-
 import { memo } from "react"
 import { ChatMarkdownRenderer } from "../../../components/chat-markdown-renderer"
 import { areToolPropsEqual } from "./agent-tool-utils"

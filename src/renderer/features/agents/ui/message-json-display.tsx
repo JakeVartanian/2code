@@ -1,5 +1,3 @@
-"use client"
-
 import { memo, useState, useCallback, useEffect } from "react"
 import {
   Collapsible,

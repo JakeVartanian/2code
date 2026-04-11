@@ -1,5 +1,3 @@
-"use client"
-
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useAtomValue } from "jotai"
 import { Button } from "../../../components/ui/button"

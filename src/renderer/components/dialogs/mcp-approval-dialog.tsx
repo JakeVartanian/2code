@@ -1,5 +1,3 @@
-"use client"
-
 import { useAtom } from "jotai"
 import { Shield } from "lucide-react"
 import {

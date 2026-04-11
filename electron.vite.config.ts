@@ -22,7 +22,6 @@ export default defineConfig({
         external: [
           "electron",
           "better-sqlite3",
-          "@prisma/client",
           "@anthropic-ai/claude-agent-sdk", // ESM module - must use dynamic import
         ],
         output: {

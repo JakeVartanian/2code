@@ -1,5 +1,3 @@
-"use client"
-
 import { Button } from "../../../components/ui/button"
 import { AlignJustify } from "lucide-react"
 import {

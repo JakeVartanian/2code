@@ -1,5 +1,3 @@
-"use client"
-
 import { ChevronRight, Zap } from "lucide-react"
 import { useCallback, useMemo, useState } from "react"
 import {

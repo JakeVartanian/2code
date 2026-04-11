@@ -1,5 +1,3 @@
-"use client"
-
 import { useAtom, useSetAtom } from "jotai"
 import { ChevronDown } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"

@@ -1,5 +1,3 @@
-"use client"
-
 import { useAtom, useSetAtom } from "jotai"
 import { X } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"

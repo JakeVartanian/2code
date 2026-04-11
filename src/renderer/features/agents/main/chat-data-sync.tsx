@@ -1,5 +1,3 @@
-"use client"
-
 import { createContext, useContext, useLayoutEffect, useRef, type MutableRefObject, type ReactNode } from "react"
 import { Chat, useChat } from "@ai-sdk/react"
 import { useSetAtom } from "jotai"

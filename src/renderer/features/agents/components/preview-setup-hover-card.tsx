@@ -1,5 +1,3 @@
-"use client"
-
 import { useState } from "react"
 import { useTheme } from "next-themes"
 // import Image from "next/image" // Desktop doesn't use next/image

@@ -1,5 +1,3 @@
-"use client"
-
 import { useState, useRef, useEffect, memo, useMemo } from "react"
 import { cn } from "../../../lib/utils"
 import { useOverflowDetection } from "../../../hooks/use-overflow-detection"

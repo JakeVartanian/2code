@@ -1,5 +1,3 @@
-"use client"
-
 import { useEffect, useCallback, useState, useRef } from "react"
 import { createPortal } from "react-dom"
 import { useTextSelection, type TextSelectionSource } from "../context/text-selection-context"

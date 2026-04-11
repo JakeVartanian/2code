@@ -82,16 +82,16 @@ export function parseGitLog(logOutput: string): CommitInfo[] {
 	for (const line of lines) {
 		if (!line.trim()) continue;
 
-		// Format: hash|shortHash|message|description|author|date
-		// Use slice to preserve '|' characters in commit messages/descriptions
-		const parts = line.split("|");
+		// Format: hash\x1e shortHash\x1e message\x1e description\x1e author\x1e date
+		// Uses record separator (\x1e) to avoid conflicts with | in commit messages
+		const parts = line.split("\x1e");
 		if (parts.length < 6) continue;
 
 		const hash = parts[0]?.trim();
 		const shortHash = parts[1]?.trim();
 		const message = parts[2]?.trim();
 		// Description is between message and last 2 parts (author, date)
-		const description = parts.slice(3, -2).join("|").trim();
+		const description = parts.slice(3, -2).join("\x1e").trim();
 		const author = parts[parts.length - 2]?.trim();
 		const dateStr = parts[parts.length - 1]?.trim();
 

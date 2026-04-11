@@ -1,5 +1,3 @@
-"use client"
-
 import { memo } from "react"
 import { Eye } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
