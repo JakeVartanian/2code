@@ -1597,6 +1597,15 @@ export const claudeRouter = router({
                   // Strip ANTHROPIC_API_KEY to prevent the SDK from using a stale Claude
                   // API key against a non-Anthropic endpoint.
                   ANTHROPIC_API_KEY: "",
+                  // The CLI uses slot-based env vars to select models, not the SDK `model` param.
+                  // Set all slots to the user's chosen model so the CLI uses it regardless of
+                  // which internal slot it picks for the task.
+                  ...(finalCustomConfig.model && {
+                    ANTHROPIC_DEFAULT_OPUS_MODEL: finalCustomConfig.model,
+                    ANTHROPIC_DEFAULT_SONNET_MODEL: finalCustomConfig.model,
+                    ANTHROPIC_DEFAULT_HAIKU_MODEL: finalCustomConfig.model,
+                    CLAUDE_CODE_SUBAGENT_MODEL: finalCustomConfig.model,
+                  }),
                   // Disable Claude-specific beta headers (prompt-caching, interleaved-thinking, etc.)
                   // OpenRouter and other third-party providers reject requests that contain
                   // unknown anthropic-beta headers, causing invalid_request errors.
