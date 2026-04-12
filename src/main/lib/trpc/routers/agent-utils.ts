@@ -1,6 +1,7 @@
 import * as fs from "fs/promises"
 import * as path from "path"
 import * as os from "os"
+import { app } from "electron"
 import matter from "gray-matter"
 import { discoverInstalledPlugins, getPluginComponentPaths } from "../../plugins"
 import { resolveDirentType } from "../../fs/dirent"
@@ -18,11 +19,13 @@ export interface ParsedAgent {
   tools?: string[]
   disallowedTools?: string[]
   model?: AgentModel
+  memoryReads?: string[]
+  memoryWrites?: string[]
 }
 
 // Agent with source/path metadata
 export interface FileAgent extends ParsedAgent {
-  source: "user" | "project" | "plugin"
+  source: "user" | "project" | "plugin" | "bundled"
   pluginName?: string
   path: string
   valid: boolean
@@ -75,6 +78,21 @@ export function parseAgentMd(
         ? (data.model as AgentModel)
         : undefined
 
+    // Parse memory_reads / memory_writes (topic filenames for skill↔memory integration)
+    let memoryReads: string[] | undefined
+    if (typeof data.memory_reads === "string") {
+      memoryReads = data.memory_reads.split(",").map((s: string) => s.trim()).filter(Boolean)
+    } else if (Array.isArray(data.memory_reads)) {
+      memoryReads = data.memory_reads
+    }
+
+    let memoryWrites: string[] | undefined
+    if (typeof data.memory_writes === "string") {
+      memoryWrites = data.memory_writes.split(",").map((s: string) => s.trim()).filter(Boolean)
+    } else if (Array.isArray(data.memory_writes)) {
+      memoryWrites = data.memory_writes
+    }
+
     return {
       name:
         typeof data.name === "string" ? data.name : filename.replace(".md", ""),
@@ -83,6 +101,8 @@ export function parseAgentMd(
       tools,
       disallowedTools,
       model,
+      memoryReads,
+      memoryWrites,
     }
   } catch (err) {
     console.error("[agents] Failed to parse markdown:", err)
@@ -125,9 +145,15 @@ export async function loadAgent(
   name: string,
   cwd?: string
 ): Promise<ParsedAgent | null> {
+  // Bundled agents path (resources/agents/ in dev, {resourcesPath}/agents in prod)
+  const bundledAgentsDir = app.isPackaged
+    ? path.join(process.resourcesPath, "agents")
+    : path.join(app.getAppPath(), "resources", "agents")
+
   const locations = [
     path.join(os.homedir(), ".claude", "agents"),
     ...(cwd ? [path.join(cwd, ".claude", "agents")] : []),
+    bundledAgentsDir,
   ]
 
   for (const dir of locations) {
@@ -144,6 +170,8 @@ export async function loadAgent(
           tools: parsed.tools,
           disallowedTools: parsed.disallowedTools,
           model: parsed.model,
+          memoryReads: parsed.memoryReads,
+          memoryWrites: parsed.memoryWrites,
         }
       }
     } catch {
@@ -174,6 +202,8 @@ export async function loadAgent(
             tools: parsed.tools,
             disallowedTools: parsed.disallowedTools,
             model: parsed.model,
+            memoryReads: parsed.memoryReads,
+            memoryWrites: parsed.memoryWrites,
           }
         }
       } catch {}
@@ -189,7 +219,7 @@ export async function loadAgent(
  */
 export async function scanAgentsDirectory(
   dir: string,
-  source: "user" | "project" | "plugin",
+  source: "user" | "project" | "plugin" | "bundled",
   basePath?: string // For project agents, the cwd to make paths relative to
 ): Promise<FileAgent[]> {
   const agents: FileAgent[] = []

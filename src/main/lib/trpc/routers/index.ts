@@ -22,6 +22,8 @@ import { pluginsRouter } from "./plugins"
 import { envToolsRouter } from "./env-tools"
 import { devServerRouter } from "./dev-server"
 import { secureStoreRouter } from "./secure-store"
+import { memoryRouter } from "./memory"
+import { orchestrationRouter } from "./orchestration"
 import { createGitRouter } from "../../git"
 import { BrowserWindow } from "electron"
 
@@ -54,6 +56,8 @@ export function createAppRouter(getWindow: () => BrowserWindow | null) {
     envTools: envToolsRouter,
     devServer: devServerRouter,
     secureStore: secureStoreRouter,
+    memory: memoryRouter,
+    orchestration: orchestrationRouter,
     // Git operations - named "changes" to match Superset API
     changes: createGitRouter(),
   })

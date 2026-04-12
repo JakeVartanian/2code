@@ -94,6 +94,71 @@ export const subChatsRelations = relations(subChats, ({ one }) => ({
   }),
 }))
 
+// ============ ORCHESTRATION RUNS ============
+// Tracks multi-step agent orchestration runs (goal decomposition → task DAG → workers)
+export const orchestrationRuns = sqliteTable("orchestration_runs", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  chatId: text("chat_id")
+    .notNull()
+    .references(() => chats.id, { onDelete: "cascade" }),
+  subChatId: text("sub_chat_id"),
+  goal: text("goal").notNull(),
+  status: text("status").notNull().default("planning"), // RunStatus
+  taskGraph: text("task_graph"), // JSON TaskGraph
+  memoryContext: text("memory_context"), // JSON MemoryContext
+  checkpoint: text("checkpoint"), // JSON CheckpointData
+  totalCostUsd: integer("total_cost_usd").default(0), // millicents (1 = $0.00001)
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+}, (table) => [
+  index("orchestration_runs_chat_id_idx").on(table.chatId),
+  index("orchestration_runs_sub_chat_id_idx").on(table.subChatId),
+])
+
+export const orchestrationRunsRelations = relations(orchestrationRuns, ({ one, many }) => ({
+  chat: one(chats, {
+    fields: [orchestrationRuns.chatId],
+    references: [chats.id],
+  }),
+  tasks: many(orchestrationTasks),
+}))
+
+// ============ ORCHESTRATION TASKS ============
+// Individual tasks within an orchestration run's DAG
+export const orchestrationTasks = sqliteTable("orchestration_tasks", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  runId: text("run_id")
+    .notNull()
+    .references(() => orchestrationRuns.id, { onDelete: "cascade" }),
+  workerType: text("worker_type").notNull(), // WorkerType
+  description: text("description").notNull(),
+  status: text("status").notNull().default("pending"), // TaskStatus
+  dependsOn: text("depends_on").default("[]"), // JSON string[]
+  memoryFiles: text("memory_files").default("[]"), // JSON string[]
+  result: text("result"), // JSON WorkerResult
+  error: text("error"),
+  startedAt: integer("started_at", { mode: "timestamp" }),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+}, (table) => [
+  index("orchestration_tasks_run_id_idx").on(table.runId),
+])
+
+export const orchestrationTasksRelations = relations(orchestrationTasks, ({ one }) => ({
+  run: one(orchestrationRuns, {
+    fields: [orchestrationTasks.runId],
+    references: [orchestrationRuns.id],
+  }),
+}))
+
 // ============ CLAUDE CODE CREDENTIALS ============
 // Stores encrypted OAuth token for Claude Code integration
 // DEPRECATED: Use anthropicAccounts for multi-account support
@@ -145,3 +210,7 @@ export type NewClaudeCodeCredential = typeof claudeCodeCredentials.$inferInsert
 export type AnthropicAccount = typeof anthropicAccounts.$inferSelect
 export type NewAnthropicAccount = typeof anthropicAccounts.$inferInsert
 export type AnthropicSettings = typeof anthropicSettings.$inferSelect
+export type OrchestrationRun = typeof orchestrationRuns.$inferSelect
+export type NewOrchestrationRun = typeof orchestrationRuns.$inferInsert
+export type OrchestrationTask = typeof orchestrationTasks.$inferSelect
+export type NewOrchestrationTask = typeof orchestrationTasks.$inferInsert

@@ -3,6 +3,7 @@ import { router, publicProcedure } from "../index"
 import * as fs from "fs/promises"
 import * as path from "path"
 import * as os from "os"
+import { app } from "electron"
 import {
   parseAgentMd,
   generateAgentMd,
@@ -51,16 +52,23 @@ const listAgentsProcedure = publicProcedure
       }
     })
 
+    // Scan bundled agents directory
+    const bundledAgentsDir = app.isPackaged
+      ? path.join(process.resourcesPath, "agents")
+      : path.join(app.getAppPath(), "resources", "agents")
+    const bundledAgentsPromise = scanAgentsDirectory(bundledAgentsDir, "bundled")
+
     // Scan all directories in parallel
-    const [userAgents, projectAgents, ...pluginAgentsArrays] =
+    const [userAgents, projectAgents, bundledAgents, ...pluginAgentsArrays] =
       await Promise.all([
         userAgentsPromise,
         projectAgentsPromise,
+        bundledAgentsPromise,
         ...pluginAgentsPromises,
       ])
     const pluginAgents = pluginAgentsArrays.flat()
 
-    return [...projectAgents, ...userAgents, ...pluginAgents]
+    return [...projectAgents, ...userAgents, ...bundledAgents, ...pluginAgents]
   })
 
 export const agentsRouter = router({

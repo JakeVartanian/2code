@@ -47,6 +47,7 @@ export type BuiltinCommandAction =
   | { type: "security-review" }
   | { type: "commit" }
   | { type: "worktree-setup" }
+  | { type: "superpowers" }
 
 // Result of selecting a slash command
 export type SlashCommandSelection =

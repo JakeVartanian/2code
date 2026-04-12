@@ -33,6 +33,10 @@ import {
 // e2b API routes are used instead of useSandboxManager for agents
 // import { clearSubChatSelectionAtom, isSubChatMultiSelectModeAtom, selectedSubChatIdsAtom } from "@/lib/atoms/agent-subchat-selection"
 import { ResizableBottomPanel } from "@/components/ui/resizable-bottom-panel"
+import { MemoryIndicator } from "../../memory/components/memory-indicator"
+import { MemoryPanel } from "../../memory/components/memory-panel"
+import { OrchestrationPanel } from "../../orchestration/components/orchestration-panel"
+import { orchestrationPanelOpenAtom } from "../../orchestration/atoms"
 import { Chat } from "@ai-sdk/react"
 import { atom, useAtom, useAtomValue, useSetAtom } from "jotai"
 import {
@@ -40,7 +44,8 @@ import {
   ChevronDown,
   GitFork,
   ListTree,
-  TerminalSquare
+  TerminalSquare,
+  Workflow
 } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import {
@@ -7119,6 +7124,27 @@ Make sure to preserve all functionality from both branches when resolving confli
     return () => window.removeEventListener("keydown", handleKeyDown, true)
   }, [isArchived, restoreWorkspaceMutation.isPending, handleRestoreWorkspace])
 
+  // Keyboard shortcut: Cmd + Shift + O to toggle orchestration panel
+  const setOrchestrationOpen = useSetAtom(orchestrationPanelOpenAtom)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.metaKey &&
+        e.shiftKey &&
+        !e.altKey &&
+        !e.ctrlKey &&
+        e.code === "KeyO"
+      ) {
+        e.preventDefault()
+        e.stopPropagation()
+        setOrchestrationOpen((prev) => !prev)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown, true)
+    return () => window.removeEventListener("keydown", handleKeyDown, true)
+  }, [setOrchestrationOpen])
+
   // Handle auto-rename for sub-chat and parent chat
   // Receives subChatId as param to avoid stale closure issues
   const handleAutoRename = useCallback(
@@ -7323,6 +7349,10 @@ Make sure to preserve all functionality from both branches when resolving confli
                         isPreviewOpen={isPreviewSidebarOpen}
                         chatId={chatId}
                       />
+                      {originalProjectPath && (
+                        <MemoryIndicator projectPath={originalProjectPath} />
+                      )}
+                      <OrchestrationToggle />
                       {/* Open Locally button - desktop only, sandbox mode */}
                       {showOpenLocally && (
                         <Tooltip>
@@ -7466,6 +7496,9 @@ Make sure to preserve all functionality from both branches when resolving confli
             prNumber={agentChat?.prNumber ?? null}
             prUrl={agentChat?.prUrl ?? null}
           />
+
+          {/* Orchestration Panel — task DAG progress + controls */}
+          <OrchestrationPanel chatId={chatId} />
 
           {/* Chat Content - Keep-alive: render all open tabs, hide inactive with CSS */}
           {tabsToRender.length > 0 && agentChat ? (
@@ -8017,7 +8050,36 @@ Make sure to preserve all functionality from both branches when resolving confli
         </ResizableBottomPanel>
       )}
     </div>
+    {/* Memory Panel overlay */}
+    {originalProjectPath && (
+      <MemoryPanel projectPath={originalProjectPath} />
+    )}
     </TextSelectionProvider>
     </FileOpenProvider>
+  )
+}
+
+function OrchestrationToggle() {
+  const [isOpen, setIsOpen] = useAtom(orchestrationPanelOpenAtom)
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "h-6 w-6 p-0",
+            isOpen && "bg-foreground/10 text-foreground"
+          )}
+          onClick={() => setIsOpen(!isOpen)}
+        >
+          <Workflow className="h-3.5 w-3.5" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        Toggle orchestration panel
+        <Kbd>⇧⌘O</Kbd>
+      </TooltipContent>
+    </Tooltip>
   )
 }

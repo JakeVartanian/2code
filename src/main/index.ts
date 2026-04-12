@@ -23,6 +23,7 @@ import { cancelAllPendingOAuth, handleMcpOAuthCallback } from "./lib/mcp-auth"
 import { handleClaudeCodeOAuthCallback } from "./lib/trpc/routers/claude-code"
 import { bringToFront } from "./lib/window"
 import { getAllMcpConfigHandler, hasActiveClaudeSessions, abortAllClaudeSessions } from "./lib/trpc/routers/claude"
+import { abortAllOrchestrationRuns, hasActiveOrchestrationRuns, recoverIncompleteRuns } from "./lib/orchestration"
 import { flushAllPendingWrites } from "./lib/db/debounced-writer"
 import { warmupShellEnvironment } from "./lib/claude/env"
 import {
@@ -956,6 +957,15 @@ if (gotTheLock) {
     try {
       initDatabase()
       console.log("[App] Database initialized")
+      // Recover incomplete orchestration runs from previous session
+      try {
+        const recovery = recoverIncompleteRuns()
+        if (recovery.found > 0) {
+          console.log(`[App] Orchestration recovery: ${recovery.found} found, ${recovery.recovered} paused, ${recovery.failed} failed`)
+        }
+      } catch (err) {
+        console.warn("[App] Orchestration recovery check failed:", err)
+      }
       // Clean up orphaned session directories in background (non-blocking)
       cleanupOrphanedSessionDirs()
     } catch (error) {
@@ -1024,6 +1034,7 @@ if (gotTheLock) {
     try {
       // Abort all sessions and wait for their cleanup (flushPendingWrite) to complete
       await abortAllClaudeSessions()
+      await abortAllOrchestrationRuns()
       cancelAllPendingOAuth()
       await cleanupGitWatchers()
       await closeDatabase()

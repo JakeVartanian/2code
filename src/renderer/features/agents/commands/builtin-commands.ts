@@ -142,6 +142,13 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommandOption[] = [
     description: "Generate worktree setup config with AI",
     category: "builtin",
   },
+  {
+    id: "builtin:superpowers",
+    name: "superpowers",
+    command: "/superpowers",
+    description: "Run full orchestrated workflow: brainstorm → plan → execute → review",
+    category: "builtin",
+  },
 ]
 
 /**

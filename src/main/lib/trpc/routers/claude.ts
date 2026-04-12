@@ -2197,9 +2197,26 @@ ${prompt}
             }
 
             // System prompt config - use preset for both Claude and Ollama
-            // If AGENTS.md exists, append its content to the system prompt
-            // Build system prompt appendix
+            // Build system prompt appendix: Memory (hot tier) → AGENTS.md → Section Guards
             let systemAppend = ""
+
+            // Inject MEMORY.md (hot tier) — loaded before AGENTS.md for prompt caching
+            const memoryProjectPath = input.projectPath || input.cwd
+            try {
+              const { readMemoryMdCached } = await import("../../memory/cache")
+              const memoryContent = readMemoryMdCached(memoryProjectPath)
+              if (memoryContent) {
+                if (isUsingOllama) {
+                  const truncated = memoryContent.slice(0, 300)
+                  systemAppend += `\n\n# Project Memory (summary)\n${truncated}${memoryContent.length > 300 ? "\n...(truncated)" : ""}`
+                } else if (!isNonAnthropicEndpoint) {
+                  systemAppend += `\n\n# Project Memory\n${memoryContent}`
+                }
+              }
+            } catch (e) {
+              console.warn("[Memory] Failed to load MEMORY.md:", e)
+            }
+
             if (agentsMdContent) {
               if (isUsingOllama) {
                 // Ollama has no prompt caching — truncate to first 500 chars to save tokens
@@ -3303,6 +3320,16 @@ ${prompt}
             // Create snapshot stash for rollback support
             if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
               await createRollbackStash(input.cwd, metadata.sdkMessageUuid)
+            }
+
+            // Fire-and-forget: extract memories from this session
+            if (parts.length > 0) {
+              const memProjectPath = input.projectPath || input.cwd
+              const sessionMessages = [...messagesToSave, { role: "assistant", parts }]
+              const slug = (input.prompt || "session").slice(0, 40).replace(/[^a-z0-9]+/gi, "-").toLowerCase()
+              import("../../memory/accretion")
+                .then(({ runAccretion }) => runAccretion(memProjectPath, sessionMessages, input.chatId, slug))
+                .catch((e) => console.warn("[Memory] Accretion failed (non-fatal):", e))
             }
 
             const duration = ((Date.now() - streamStart) / 1000).toFixed(1)
