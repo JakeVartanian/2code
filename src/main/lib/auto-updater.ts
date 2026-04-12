@@ -324,7 +324,9 @@ export function setupFocusUpdateCheck(_getWindows: () => BrowserWindow[]) {
   // Listen for window focus events
   app.on("browser-window-focus", () => {
     log.info("[AutoUpdater] Window focused - checking for updates")
-    checkForUpdates()
+    checkForUpdates().catch((err) => {
+      log.error("[AutoUpdater] Focus check failed:", err)
+    })
   })
 }
 

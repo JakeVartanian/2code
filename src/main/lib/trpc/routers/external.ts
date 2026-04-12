@@ -24,9 +24,12 @@ function spawnAsync(command: string, args: string[]): Promise<void> {
 			stdio: "ignore",
 		});
 		child.unref();
-		child.on("error", reject);
-		// Resolve immediately — we just need to launch the app
-		resolve();
+		child.on("error", (err) => {
+			// Only reject if promise hasn't resolved yet (spawn failed immediately)
+			reject(err);
+		});
+		// Use nextTick to ensure synchronous spawn errors (ENOENT) fire first
+		process.nextTick(() => resolve());
 	});
 }
 

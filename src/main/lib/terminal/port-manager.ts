@@ -23,7 +23,7 @@ class PortManager extends EventEmitter {
 
 	constructor() {
 		super()
-		this.startPeriodicScan()
+		// Don't start polling until sessions are registered
 	}
 
 	/**
@@ -31,6 +31,10 @@ class PortManager extends EventEmitter {
 	 */
 	registerSession(session: TerminalSession, workspaceId: string): void {
 		this.sessions.set(session.paneId, { session, workspaceId })
+		// Start polling when first session is registered
+		if (this.sessions.size === 1) {
+			this.startPeriodicScan()
+		}
 	}
 
 	/**
@@ -39,6 +43,10 @@ class PortManager extends EventEmitter {
 	unregisterSession(paneId: string): void {
 		this.sessions.delete(paneId)
 		this.removePortsForPane(paneId)
+		// Stop polling when no sessions remain
+		if (this.sessions.size === 0) {
+			this.stopPeriodicScan()
+		}
 
 		// Cancel any pending hint scan for this pane
 		const pendingTimeout = this.pendingHintScans.get(paneId)

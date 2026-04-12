@@ -23,6 +23,7 @@ import { cancelAllPendingOAuth, handleMcpOAuthCallback } from "./lib/mcp-auth"
 import { handleClaudeCodeOAuthCallback } from "./lib/trpc/routers/claude-code"
 import { bringToFront } from "./lib/window"
 import { getAllMcpConfigHandler, hasActiveClaudeSessions, abortAllClaudeSessions } from "./lib/trpc/routers/claude"
+import { flushAllPendingWrites } from "./lib/db/debounced-writer"
 import { warmupShellEnvironment } from "./lib/claude/env"
 import {
   createMainWindow,
@@ -971,7 +972,9 @@ if (gotTheLock) {
       setupFocusUpdateCheck(getAllWindows)
       // Check for updates 5 seconds after startup (force to bypass interval check)
       setTimeout(() => {
-        checkForUpdates(true)
+        checkForUpdates(true).catch((err) => {
+          console.error("[AutoUpdater] Startup check failed:", err)
+        })
       }, 5000)
     }
 
@@ -1030,12 +1033,14 @@ if (gotTheLock) {
     app.quit()
   })
 
-  // Handle uncaught exceptions
+  // Handle uncaught exceptions — flush pending DB writes so in-flight messages aren't lost
   process.on("uncaughtException", (error) => {
     console.error("[App] Uncaught exception:", error)
+    try { flushAllPendingWrites() } catch {}
   })
 
   process.on("unhandledRejection", (reason, promise) => {
     console.error("[App] Unhandled rejection at:", promise, "reason:", reason)
+    try { flushAllPendingWrites() } catch {}
   })
 }

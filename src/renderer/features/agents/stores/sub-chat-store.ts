@@ -240,12 +240,16 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
     }
 
     // Cleanup queue, streaming status, Chat instance, and task snapshot cache
-    // to prevent memory leaks and race conditions (QueueProcessor sending to closed subChat)
-    useMessageQueueStore.getState().clearQueue(subChatId)
-    useStreamingStatusStore.getState().clearStatus(subChatId)
-    clearSubChatRuntimeCaches(subChatId)
-    agentChatStore.delete(subChatId)
-    clearTaskSnapshotCache(subChatId)
+    // to prevent memory leaks and race conditions (QueueProcessor sending to closed subChat).
+    // IMPORTANT: Skip cleanup if the sub-chat is actively streaming — closing a tab
+    // should not kill a running Claude process. The ghost ChatDataSync will keep it alive.
+    if (!useStreamingStatusStore.getState().isStreaming(subChatId)) {
+      useMessageQueueStore.getState().clearQueue(subChatId)
+      useStreamingStatusStore.getState().clearStatus(subChatId)
+      clearSubChatRuntimeCaches(subChatId)
+      agentChatStore.delete(subChatId)
+      clearTaskSnapshotCache(subChatId)
+    }
   },
 
   togglePinSubChat: (subChatId) => {

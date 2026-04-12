@@ -607,7 +607,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
           } catch {
             // Already closed
           }
-        })
+        }, { once: true })
       },
     })
   }

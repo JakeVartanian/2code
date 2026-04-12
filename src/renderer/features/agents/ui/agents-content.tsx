@@ -42,6 +42,7 @@ import { ChatView } from "../main/active-chat"
 import { api } from "../../../lib/mock-api"
 import { trpc } from "../../../lib/trpc"
 import { useIsMobile } from "../../../lib/hooks/use-mobile"
+import { StreamingKeepAlive } from "../components/streaming-keep-alive"
 import { AgentsSidebar } from "../../sidebar/agents-sidebar"
 import { AgentsSubChatsSidebar } from "../../sidebar/agents-subchats-sidebar"
 import { AgentPreview } from "./agent-preview"
@@ -317,12 +318,16 @@ export function AgentsContent() {
   // Get recent chats for quick-switch dialog
   // Order: current chat first (left), then previous chats by last updated
   // IMPORTANT: Only recalculate when dialog is closed to prevent flickering
-  const sortedChats = agentChats
-    ? [...agentChats].sort(
-        (a, b) =>
-          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-      )
-    : []
+  const sortedChats = useMemo(
+    () =>
+      agentChats
+        ? [...agentChats].sort(
+            (a, b) =>
+              new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+          )
+        : [],
+    [agentChats],
+  )
 
   let recentChats: typeof sortedChats = []
   // Use frozen chats when dialog is open to prevent recalculation
@@ -1070,6 +1075,11 @@ export function AgentsContent() {
             sandbox: {chatData.sandbox_id}
           </a>
         )}
+
+      {/* Keep-alive for ALL streaming sub-chats across all workspaces.
+        * Lives above ChatView so streams survive even when no chat is selected.
+        * Uses same key as ChatView's tabsToRender so React moves instances. */}
+      <StreamingKeepAlive />
     </>
   )
 }

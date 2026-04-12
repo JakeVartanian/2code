@@ -161,6 +161,15 @@ export function SettingsSidebar() {
   const betaClickCountRef = useRef(0)
   const betaClickTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
+  // Clean up beta click timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (betaClickTimeoutRef.current) {
+        clearTimeout(betaClickTimeoutRef.current)
+      }
+    }
+  }, [])
+
   // Show debug tab if in development OR if devtools are unlocked
   const showDebugTab = isDevelopment || devToolsUnlocked
 

@@ -117,7 +117,13 @@ export async function parseExportStream(
 		for (const line of lines) {
 			if (!line.trim()) continue;
 
-			const chunk = JSON.parse(line) as ExportChunk;
+			let chunk: ExportChunk;
+			try {
+				chunk = JSON.parse(line) as ExportChunk;
+			} catch (parseError) {
+				console.error(`[sandbox-import] Failed to parse NDJSON line ${chunkCount + 1}:`, parseError);
+				continue;
+			}
 			chunkCount++;
 			console.log(`[sandbox-import] Received chunk ${chunkCount}: type=${chunk.type}`);
 
