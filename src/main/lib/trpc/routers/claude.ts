@@ -551,6 +551,17 @@ const agentsMdCache = new Map<
   }
 >()
 
+/** Evict oldest entries from a Map when it exceeds maxSize */
+function trimMap<K, V>(map: Map<K, V>, maxSize: number): void {
+  if (map.size <= maxSize) return
+  const toDelete = map.size - maxSize
+  let i = 0
+  for (const key of map.keys()) {
+    if (i++ >= toDelete) break
+    map.delete(key)
+  }
+}
+
 // TTL cache for the fully merged MCP server config (avoid re-running all merge logic on every message)
 // Keys by project path. Invalidated after 30s or on explicit refresh.
 const MCP_MERGE_TTL_MS = 30_000
@@ -584,6 +595,7 @@ async function readProjectMcpJsonCached(
       servers,
       mtime: stats.mtimeMs,
     })
+    trimMap(projectMcpJsonCache, 50)
     return servers
   } catch {
     return {}
@@ -612,6 +624,7 @@ async function readAgentsMdCached(cwd: string): Promise<string> {
       content,
       mtime: stats.mtimeMs,
     })
+    trimMap(agentsMdCache, 50)
     return content
   } catch {
     return ""
@@ -1744,6 +1757,7 @@ export const claudeRouter = router({
                     config: claudeConfig,
                     mtime: currentMtime,
                   })
+                  trimMap(mcpConfigCache, 50)
                 } else {
                   claudeConfig = {}
                 }
@@ -1806,6 +1820,7 @@ export const claudeRouter = router({
                   }
 
                   mergedMcpCache.set(lookupPath, { allServers, projectServers, timestamp: Date.now() })
+                  trimMap(mergedMcpCache, 50)
                 }
 
                 // Filter to only working MCPs using scoped cache keys

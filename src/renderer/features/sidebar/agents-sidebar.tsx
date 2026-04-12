@@ -2213,6 +2213,13 @@ export function AgentsSidebar({
   // Batch archive mutation
   const archiveChatsBatchMutation = trpc.chats.archiveBatch.useMutation({
     onSuccess: (_, variables) => {
+      // Clean up runtime caches for all archived chats
+      for (const chatId of variables.chatIds) {
+        const cachedChat = utils.chats.get.getData({ id: chatId })
+        const subChatIds = cachedChat?.subChats?.map((sc: any) => sc.id) ?? []
+        clearChatRuntimeCaches(chatId, subChatIds)
+      }
+
       // Hide tooltip if visible (element may be removed from DOM before mouseLeave fires)
       if (agentTooltipTimerRef.current) {
         clearTimeout(agentTooltipTimerRef.current)
