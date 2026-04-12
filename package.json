@@ -2,15 +2,15 @@
   "name": "2code",
   "version": "0.0.96",
   "private": true,
-  "description": "2Code - UI for parallel work with AI agents",
+  "description": "Local-first desktop app for AI-powered code assistance. Fork of 1Code.",
   "sideEffects": [
     "**/*.css",
     "src/renderer/index.tsx"
   ],
   "homepage": "https://github.com/JakeVartanian/2code",
   "author": {
-    "name": "jakev",
-    "email": ""
+    "name": "JakeVartanian",
+    "url": "https://github.com/JakeVartanian"
   },
   "main": "out/main/index.js",
   "scripts": {
