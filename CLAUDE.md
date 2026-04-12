@@ -21,6 +21,17 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Core Principle: Functionality Over Efficiency
+
+**Never sacrifice functionality, responsiveness, or multitasking ability for efficiency optimizations.** Optimizations are welcome, but only when they don't degrade the user experience:
+
+- All workspaces must run simultaneously — switching workspaces must NOT kill running Claude processes
+- Queued messages must send immediately when ready, not after artificial delays
+- Background work (streaming, queued sends, git operations) must continue regardless of which workspace is active
+- When in doubt, favor responsiveness and correctness over saving CPU/memory
+
+If an optimization introduces user-visible latency, breaks parallel workflows, or makes behavior unpredictable — it's not an optimization, it's a regression.
+
 ## What is this?
 
 **2Code** - A local-first Electron desktop app for AI-powered code assistance. Users create chat sessions linked to local project folders, interact with Claude in Plan or Agent mode, and see real-time tool execution (bash, file edits, web search, etc.).

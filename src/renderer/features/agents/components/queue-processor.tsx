@@ -10,8 +10,9 @@ import { MENTION_PREFIXES } from "../mentions/agents-mentions-editor"
 import { utf8ToBase64 } from "../utils/base64"
 import type { AgentQueueItem } from "../lib/queue-utils"
 
-// Delay between processing queue items (ms)
-const QUEUE_PROCESS_DELAY = 1000
+// Minimal delay to batch rapid queue mutations into a single processing pass.
+// Must be short — users expect queued messages to send immediately when ready.
+const QUEUE_PROCESS_DELAY = 50
 
 /**
  * Global queue processor component.
