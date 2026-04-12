@@ -42,6 +42,7 @@ import { ChatView } from "../main/active-chat"
 import { api } from "../../../lib/mock-api"
 import { trpc } from "../../../lib/trpc"
 import { useIsMobile } from "../../../lib/hooks/use-mobile"
+import { StreamingKeepAlive } from "../components/streaming-keep-alive"
 import { AgentsSidebar } from "../../sidebar/agents-sidebar"
 import { AgentsSubChatsSidebar } from "../../sidebar/agents-subchats-sidebar"
 import { AgentPreview } from "./agent-preview"
@@ -1070,6 +1071,11 @@ export function AgentsContent() {
             sandbox: {chatData.sandbox_id}
           </a>
         )}
+
+      {/* Keep-alive for ALL streaming sub-chats across all workspaces.
+        * Lives above ChatView so streams survive even when no chat is selected.
+        * Uses same key as ChatView's tabsToRender so React moves instances. */}
+      <StreamingKeepAlive />
     </>
   )
 }
