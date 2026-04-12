@@ -1,6 +1,6 @@
 {
   "name": "2code",
-  "version": "0.0.93",
+  "version": "0.0.94",
   "private": true,
   "description": "2Code - UI for parallel work with AI agents",
   "sideEffects": [
