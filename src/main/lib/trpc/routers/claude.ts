@@ -880,14 +880,18 @@ export async function getAllMcpConfigHandler() {
       })
     }
 
-    // Project MCPs from ~/.claude.json + ~/.claude/.claude.json (per-project configs)
-    // Collect all known project paths from both configs
+    // Project MCPs — only scan projects that are open in 2Code (DB projects),
+    // not every project Claude CLI has ever seen in ~/.claude.json.
+    // Scanning all projects causes 30s+ timeouts from stale stdio MCP servers.
     const allProjectPaths = new Set<string>()
-    if (config.projects) {
-      for (const p of Object.keys(config.projects)) allProjectPaths.add(p)
-    }
-    if (claudeDirConfig.projects) {
-      for (const p of Object.keys(claudeDirConfig.projects)) allProjectPaths.add(p)
+    try {
+      const db = getDatabase()
+      const dbProjects = db.select({ path: projectsTable.path }).from(projectsTable).all()
+      for (const proj of dbProjects) {
+        if (proj.path) allProjectPaths.add(proj.path)
+      }
+    } catch (dbErr) {
+      console.error("[MCP] DB project discovery error:", dbErr)
     }
 
     for (const projectPath of allProjectPaths) {
@@ -915,30 +919,6 @@ export async function getAllMcpConfigHandler() {
           })(),
         })
       }
-    }
-
-    // DB project discovery: find projects with .mcp.json that aren't in configs
-    try {
-      const db = getDatabase()
-      const dbProjects = db.select({ path: projectsTable.path }).from(projectsTable).all()
-      for (const proj of dbProjects) {
-        if (!proj.path || allProjectPaths.has(proj.path)) continue
-        const mcpJsonServers = await readProjectMcpJsonCached(proj.path)
-        if (Object.keys(mcpJsonServers).length > 0) {
-          const groupName = path.basename(proj.path) || proj.path
-          groupTasks.push({
-            groupName,
-            projectPath: proj.path,
-            promise: (async () => {
-              const start = Date.now()
-              const mcpServers = await convertServers(mcpJsonServers, proj.path)
-              return { mcpServers, duration: Date.now() - start }
-            })(),
-          })
-        }
-      }
-    } catch (dbErr) {
-      console.error("[MCP] DB project discovery error:", dbErr)
     }
 
     // Process all groups in parallel
@@ -1703,36 +1683,13 @@ export const claudeRouter = router({
                   }
                 }
 
-                await ensureSymlink(
-                  skillsSource,
-                  skillsTarget,
-                  "skills directory",
-                  "dir",
-                )
-                await ensureSymlink(
-                  commandsSource,
-                  commandsTarget,
-                  "commands directory",
-                  "dir",
-                )
-                await ensureSymlink(
-                  agentsSource,
-                  agentsTarget,
-                  "agents directory",
-                  "dir",
-                )
-                await ensureSymlink(
-                  pluginsSource,
-                  pluginsTarget,
-                  "plugins directory",
-                  "dir",
-                )
-                await ensureSymlink(
-                  settingsSource,
-                  settingsTarget,
-                  "settings.json",
-                  "file",
-                )
+                await Promise.all([
+                  ensureSymlink(skillsSource, skillsTarget, "skills directory", "dir"),
+                  ensureSymlink(commandsSource, commandsTarget, "commands directory", "dir"),
+                  ensureSymlink(agentsSource, agentsTarget, "agents directory", "dir"),
+                  ensureSymlink(pluginsSource, pluginsTarget, "plugins directory", "dir"),
+                  ensureSymlink(settingsSource, settingsTarget, "settings.json", "file"),
+                ])
 
                 if (symlinkSetupComplete) {
                   symlinksCreated.add(cacheKey)

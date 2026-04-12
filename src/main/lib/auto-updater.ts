@@ -221,7 +221,7 @@ function registerIpcHandlers() {
   // Download update
   ipcMain.handle("update:download", async () => {
     try {
-      await autoUpdater.downloadUpdate()
+      await downloadWithTimeout()
       return true
     } catch (error) {
       log.error("[AutoUpdater] Download failed:", error)
@@ -297,6 +297,22 @@ export async function checkForUpdates(force = false) {
   return autoUpdater.checkForUpdates()
 }
 
+/** Download timeout — 5 minutes */
+const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000
+
+/** Wrap downloadUpdate with a timeout so stalled CDN connections don't hang */
+function downloadWithTimeout(): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("Update download timed out after 5 minutes"))
+    }, DOWNLOAD_TIMEOUT_MS)
+
+    autoUpdater.downloadUpdate()
+      .then(() => { clearTimeout(timer); resolve() })
+      .catch((err) => { clearTimeout(timer); reject(err) })
+  })
+}
+
 /**
  * Start downloading the update
  */
@@ -308,7 +324,7 @@ export async function downloadUpdate() {
 
   try {
     log.info("[AutoUpdater] Starting update download...")
-    await autoUpdater.downloadUpdate()
+    await downloadWithTimeout()
     return true
   } catch (error) {
     log.error("[AutoUpdater] Download failed:", error)

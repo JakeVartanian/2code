@@ -314,9 +314,7 @@ export class TerminalManager extends EventEmitter {
 					}
 					cleanup(false)
 				}, 500)
-				sigkillTimeout.unref()
 			}, 2000)
-			sigtermTimeout.unref()
 
 			// Send SIGTERM
 			try {

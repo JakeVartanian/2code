@@ -25,6 +25,7 @@ import { bringToFront } from "./lib/window"
 import { getAllMcpConfigHandler, hasActiveClaudeSessions, abortAllClaudeSessions } from "./lib/trpc/routers/claude"
 import { flushAllPendingWrites } from "./lib/db/debounced-writer"
 import { warmupShellEnvironment } from "./lib/claude/env"
+import { cleanupOrphanedProcesses, writePidFile } from "./lib/process-cleanup"
 import {
   createMainWindow,
   createWindow,
@@ -39,6 +40,19 @@ import { IS_DEV, AUTH_SERVER_PORT } from "./constants"
 // Deep link protocol (must match package.json build.protocols.schemes)
 // Use different protocol in dev to avoid conflicts with production app
 const PROTOCOL = IS_DEV ? "2code-dev" : "2code"
+
+// Block running from a mounted DMG — orphaned renderer processes survive volume
+// unmount and spin at 100% CPU indefinitely. Force users to drag to /Applications.
+if (app.isPackaged && !IS_DEV && process.platform === "darwin") {
+  const appPath = app.getAppPath()
+  if (appPath.startsWith("/Volumes/")) {
+    dialog.showErrorBox(
+      "Move 2Code to Applications",
+      "2Code is running from a disk image. Please drag 2Code.app to your Applications folder and launch it from there.\n\nRunning from a DMG can cause runaway background processes."
+    )
+    app.exit(1)
+  }
+}
 
 // Set dev mode userData path BEFORE requestSingleInstanceLock()
 // This ensures dev and prod have separate instance locks
@@ -492,6 +506,13 @@ const server = createServer(async (req, res) => {
   }
   })
 
+// Prevent stale connections from accumulating
+server.setTimeout(30_000)
+server.on("connection", (socket) => {
+  socket.setTimeout(30_000)
+  socket.on("timeout", () => socket.destroy())
+})
+
 server.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
     console.warn(`[Auth Server] Port ${AUTH_SERVER_PORT} already in use — auth callbacks will use deep links only`)
@@ -584,11 +605,11 @@ if (gotTheLock) {
 
   // App ready
   app.whenReady().then(async () => {
-    // Set dev mode app name (userData path was already set before requestSingleInstanceLock)
-    // if (IS_DEV) {
-    //   app.name = "Agents Dev"
-    // }
+    // Clean up any orphaned processes from a previous crash (non-blocking)
+    cleanupOrphanedProcesses()
 
+    // Write our PID so the next launch can detect if we crashed
+    writePidFile()
 
     // Register protocol handler (must be after app is ready)
     initialRegistration = registerProtocol()
@@ -952,7 +973,10 @@ if (gotTheLock) {
     // Create main window early so the user sees UI while DB initializes
     createMainWindow()
 
-    // Initialize database (window is already visible with loading state)
+    // Yield to event loop so the window can start loading before DB init blocks
+    await new Promise((resolve) => setImmediate(resolve))
+
+    // Initialize database
     try {
       initDatabase()
       console.log("[App] Database initialized")

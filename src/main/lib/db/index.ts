@@ -3,8 +3,9 @@ import { drizzle } from "drizzle-orm/better-sqlite3"
 import { migrate } from "drizzle-orm/better-sqlite3/migrator"
 import { app } from "electron"
 import { join } from "path"
-import { existsSync, mkdirSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "fs"
 import { readdir as readdirAsync, rm as rmAsync } from "fs/promises"
+import crypto from "crypto"
 import * as schema from "./schema"
 
 let db: ReturnType<typeof drizzle<typeof schema>> | null = null
@@ -38,6 +39,67 @@ function getMigrationsPath(): string {
   }
   // Development: from out/main -> apps/desktop/drizzle
   return join(__dirname, "../../drizzle")
+}
+
+/**
+ * When migrations fail due to schema already existing (e.g. from db:push),
+ * read the journal, find unapplied migrations, and mark them as applied
+ * so Drizzle doesn't retry them on every startup.
+ */
+function applyMigrationsIndividually(
+  database: ReturnType<typeof drizzle<typeof schema>>,
+  migrationsPath: string,
+) {
+  if (!sqlite) return
+
+  try {
+    const journalPath = join(migrationsPath, "meta", "_journal.json")
+    const journal = JSON.parse(readFileSync(journalPath, "utf-8"))
+
+    // Get already-applied hashes
+    const applied = new Set(
+      sqlite.prepare("SELECT hash FROM __drizzle_migrations").all()
+        .map((r: any) => r.hash),
+    )
+
+    for (const entry of journal.entries) {
+      const sqlPath = join(migrationsPath, `${entry.tag}.sql`)
+      if (!existsSync(sqlPath)) continue
+
+      const sql = readFileSync(sqlPath, "utf-8")
+      const hash = crypto.createHash("sha256").update(sql).digest("hex")
+
+      if (applied.has(hash)) continue
+
+      // Try to run the migration — if it fails on duplicate column, just record it
+      const statements = sql.split("--> statement-breakpoint")
+      let allOk = true
+      for (const stmt of statements) {
+        const trimmed = stmt.trim()
+        if (!trimmed || trimmed.startsWith("--")) continue
+        try {
+          sqlite.exec(trimmed)
+        } catch (e: any) {
+          if (e.message?.includes("duplicate column name") || e.message?.includes("already exists")) {
+            // Schema already matches — safe to skip
+          } else {
+            console.error(`[DB] Migration ${entry.tag} statement failed:`, e.message)
+            allOk = false
+            break
+          }
+        }
+      }
+
+      if (allOk) {
+        sqlite.prepare(
+          "INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)",
+        ).run(hash, entry.when)
+        console.log(`[DB] Recorded migration ${entry.tag} as applied`)
+      }
+    }
+  } catch (e) {
+    console.error("[DB] Failed to sync migration journal:", e)
+  }
 }
 
 /**
@@ -90,9 +152,14 @@ export function initDatabase() {
     console.log("[DB] Migrations completed")
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
-    // "duplicate column name" means the column already exists — DB is in the correct state
-    if (msg.includes("duplicate column name")) {
-      console.warn("[DB] Migration warning (column already exists, skipping):", msg)
+    const causeMsg = (error as any)?.cause?.message ?? ""
+    const fullMsg = `${msg} ${causeMsg}`
+    // "duplicate column name" / "already exists" means the schema was applied out-of-band
+    // (e.g. db:push). The DB is in the correct state — apply remaining migrations one at a
+    // time so the journal catches up and this doesn't repeat on every startup.
+    if (fullMsg.includes("duplicate column name") || fullMsg.includes("already exists")) {
+      console.warn("[DB] Column already exists, syncing migration journal...")
+      applyMigrationsIndividually(db, migrationsPath)
     } else {
       console.error("[DB] Migration error:", error)
       // DB connection is still valid even if a migration fails —

@@ -9,4 +9,5 @@ export {
 export {
 	registerGitWatcherIPC,
 	cleanupGitWatchers,
+	cleanupWindowSubscriptions,
 } from "./ipc-bridge";

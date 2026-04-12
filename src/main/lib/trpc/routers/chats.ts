@@ -4,7 +4,7 @@ import * as fs from "fs/promises"
 import * as path from "path"
 import simpleGit from "simple-git"
 import { z } from "zod"
-import { chats, getDatabase, projects, subChats } from "../../db"
+import { chats, getDatabase, projects, subChats, cleanupOrphanedSessionDirs } from "../../db"
 import {
   createWorktreeForChat,
   fetchGitHubPRStatus,
@@ -668,7 +668,12 @@ export const chatsRouter = router({
         gitCache.invalidateParsedDiff(chat.worktreePath)
       }
 
-      return db.delete(chats).where(eq(chats.id, input.id)).returning().get()
+      const deleted = db.delete(chats).where(eq(chats.id, input.id)).returning().get()
+
+      // Clean up orphaned session credential dirs in background
+      cleanupOrphanedSessionDirs()
+
+      return deleted
     }),
 
   // ============ Sub-chat procedures ============

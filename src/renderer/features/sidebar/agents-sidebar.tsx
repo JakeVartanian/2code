@@ -1942,10 +1942,9 @@ export function AgentsSidebar({
       remoteStats?: { fileCount: number; additions: number; deletions: number } | null
     }> = []
 
-    // Add local chats (filtered to current project if one is selected)
+    // Add local chats (all projects)
     if (localChats) {
       for (const chat of localChats) {
-        if (selectedProject && chat.projectId !== selectedProject.id) continue
         unified.push({
           id: chat.id,
           name: chat.name,
@@ -1994,7 +1993,7 @@ export function AgentsSidebar({
     })
 
     return unified
-  }, [localChats, remoteChats, selectedProject?.id])
+  }, [localChats, remoteChats])
 
   // Track open sub-chat changes for reactivity
   const [openSubChatsVersion, setOpenSubChatsVersion] = useState(0)
@@ -2066,7 +2065,7 @@ export function AgentsSidebar({
   }, [projects])
 
   // Fetch archived chats for current project (to get count)
-  const { data: archivedChats } = trpc.chats.listArchived.useQuery({ projectId: selectedProject?.id })
+  const { data: archivedChats } = trpc.chats.listArchived.useQuery({})
   const archivedChatsCount = archivedChats?.length ?? 0
 
   // Get utils outside of callbacks - hooks must be called at top level
@@ -2243,57 +2242,31 @@ export function AgentsSidebar({
     },
   })
 
-  // Reset selected chat when project changes (but not on initial load)
-  const prevProjectIdRef = useRef<string | null | undefined>(undefined)
+  // Load pinned IDs from localStorage on mount
   useEffect(() => {
-    // Skip on initial mount (prevProjectIdRef is undefined)
-    if (prevProjectIdRef.current === undefined) {
-      prevProjectIdRef.current = selectedProject?.id ?? null
-      return
-    }
-    // Only reset if project actually changed from a real value (not from null/initial load)
-    if (
-      prevProjectIdRef.current !== null &&
-      prevProjectIdRef.current !== selectedProject?.id &&
-      selectedChatId
-    ) {
-      setSelectedChatId(null)
-    }
-    prevProjectIdRef.current = selectedProject?.id ?? null
-  }, [selectedProject?.id]) // Don't include selectedChatId in deps to avoid loops
-
-  // Load pinned IDs from localStorage when project changes
-  useEffect(() => {
-    if (!selectedProject?.id) {
-      setPinnedChatIds(new Set())
-      return
-    }
     try {
-      const stored = localStorage.getItem(
-        `agent-pinned-chats-${selectedProject.id}`,
-      )
+      const stored = localStorage.getItem("agent-pinned-chats")
       setPinnedChatIds(stored ? new Set(JSON.parse(stored)) : new Set())
     } catch {
       setPinnedChatIds(new Set())
     }
-  }, [selectedProject?.id])
+  }, [])
 
   // Save pinned IDs to localStorage when they change
   const prevPinnedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
-    if (!selectedProject?.id) return
     // Only save if pinnedChatIds actually changed (avoid saving on load)
     if (
       (pinnedChatIds !== prevPinnedRef.current && pinnedChatIds.size > 0) ||
       prevPinnedRef.current.size > 0
     ) {
       localStorage.setItem(
-        `agent-pinned-chats-${selectedProject.id}`,
+        "agent-pinned-chats",
         JSON.stringify([...pinnedChatIds]),
       )
     }
     prevPinnedRef.current = pinnedChatIds
-  }, [pinnedChatIds, selectedProject?.id])
+  }, [pinnedChatIds])
 
   // Rename mutation
   const renameChatMutation = trpc.chats.rename.useMutation({

@@ -15,7 +15,7 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs"
 import { createIPCHandler } from "trpc-electron/main"
 import { createAppRouter } from "../lib/trpc/routers"
 import { getAuthManager, handleAuthCode, getBaseUrl } from "../index"
-import { registerGitWatcherIPC } from "../lib/git/watcher"
+import { registerGitWatcherIPC, cleanupWindowSubscriptions } from "../lib/git/watcher"
 import { hasActiveClaudeSessions, abortAllClaudeSessions } from "../lib/trpc/routers/claude"
 import { registerThemeScannerIPC } from "../lib/vscode-theme-scanner"
 import { windowManager } from "./window-manager"
@@ -829,9 +829,11 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     }
   })
 
-  // Handle window close
+  // Handle window close — capture ID before window is destroyed
+  const closingWindowId = window.id
   window.on("closed", () => {
-    console.log(`[Main] Window ${window.id} closed`)
+    console.log(`[Main] Window ${closingWindowId} closed`)
+    cleanupWindowSubscriptions(closingWindowId)
     // windowManager handles cleanup via 'closed' event listener
   })
 
