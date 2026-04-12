@@ -971,7 +971,9 @@ if (gotTheLock) {
       setupFocusUpdateCheck(getAllWindows)
       // Check for updates 5 seconds after startup (force to bypass interval check)
       setTimeout(() => {
-        checkForUpdates(true)
+        checkForUpdates(true).catch((err) => {
+          console.error("[AutoUpdater] Startup check failed:", err)
+        })
       }, 5000)
     }
 
