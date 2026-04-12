@@ -6177,14 +6177,16 @@ Make sure to preserve all functionality from both branches when resolving confli
 
   const isCommittingCombined = isCommittingChanges || isPushing
 
-  // Refetch git status and diff stats when window gains focus
+  // Refetch git status and diff stats when window gains focus (with 30s cooldown)
   useEffect(() => {
     if (!worktreePath || !isDiffSidebarOpen) return
 
+    let lastFocusRefetch = 0
     const handleWindowFocus = () => {
-      // Refetch git status
+      const now = Date.now()
+      if (now - lastFocusRefetch < 30_000) return
+      lastFocusRefetch = now
       refetchGitStatus()
-      // Refetch diff stats to get latest changes
       fetchDiffStats()
     }
 

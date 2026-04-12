@@ -70,14 +70,18 @@ function loadFromDisk(): void {
 }
 
 function saveToDisk(): void {
-  const path = getStorePath()
-  const dir = join(path, "..")
-  mkdirSync(dir, { recursive: true })
-  const data: Record<string, string> = {}
-  for (const [k, v] of store) {
-    data[k] = v
+  try {
+    const path = getStorePath()
+    const dir = join(path, "..")
+    mkdirSync(dir, { recursive: true })
+    const data: Record<string, string> = {}
+    for (const [k, v] of store) {
+      data[k] = v
+    }
+    writeFileSync(path, JSON.stringify(data), { mode: 0o600 })
+  } catch (error) {
+    console.error("[SecureStore] Failed to save to disk:", error)
   }
-  writeFileSync(path, JSON.stringify(data), { mode: 0o600 })
 }
 
 // Load on module init

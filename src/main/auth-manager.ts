@@ -132,7 +132,9 @@ export class AuthManager {
           this.logout()
           // FIX: notify all renderer windows so UI can react to implicit logout
           for (const win of BrowserWindow.getAllWindows()) {
-            win.webContents.send("auth:logged-out")
+            if (!win.isDestroyed()) {
+              win.webContents.send("auth:logged-out")
+            }
           }
         }
         return false

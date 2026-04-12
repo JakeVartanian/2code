@@ -100,15 +100,19 @@ function spawnPty(params: {
 		})
 	} catch (error) {
 		console.error(`[Terminal] Failed to spawn PTY with ${resolvedShell}:`, error)
-		// Try with fallback shell
 		console.log(`[Terminal] Retrying with fallback shell: ${FALLBACK_SHELL}`)
-		return pty.spawn(FALLBACK_SHELL, [], {
-			name: "xterm-256color",
-			cols,
-			rows,
-			cwd: resolvedCwd,
-			env,
-		})
+		try {
+			return pty.spawn(FALLBACK_SHELL, [], {
+				name: "xterm-256color",
+				cols,
+				rows,
+				cwd: resolvedCwd,
+				env,
+			})
+		} catch (fallbackError) {
+			console.error(`[Terminal] Fallback shell also failed:`, fallbackError)
+			throw fallbackError
+		}
 	}
 }
 

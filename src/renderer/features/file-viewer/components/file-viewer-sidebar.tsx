@@ -489,6 +489,7 @@ function CodeViewer({
   const monacoRef = useRef<Monaco | null>(null)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const mutationObserverRef = useRef<MutationObserver | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const [hasSelection, setHasSelection] = useState(false)
 
@@ -596,6 +597,8 @@ function CodeViewer({
 
     // Suppress tooltips on find widget buttons by stripping title attributes.
     // Monaco re-adds them, so we use a MutationObserver.
+    // Disconnect any previous observer before creating a new one.
+    mutationObserverRef.current?.disconnect()
     const editorContainer = monacoEditor.getDomNode()?.closest(".monaco-editor")
     if (editorContainer) {
       const obs = new MutationObserver(() => {
@@ -605,6 +608,8 @@ function CodeViewer({
         }
       })
       obs.observe(editorContainer, { childList: true, subtree: true, attributes: true, attributeFilter: ["title", "class"] })
+      mutationObserverRef.current = obs
+      monacoEditor.onDidDispose(() => obs.disconnect())
     }
 
     // Track selection state for context menu

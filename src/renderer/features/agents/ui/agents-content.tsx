@@ -318,12 +318,16 @@ export function AgentsContent() {
   // Get recent chats for quick-switch dialog
   // Order: current chat first (left), then previous chats by last updated
   // IMPORTANT: Only recalculate when dialog is closed to prevent flickering
-  const sortedChats = agentChats
-    ? [...agentChats].sort(
-        (a, b) =>
-          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-      )
-    : []
+  const sortedChats = useMemo(
+    () =>
+      agentChats
+        ? [...agentChats].sort(
+            (a, b) =>
+              new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+          )
+        : [],
+    [agentChats],
+  )
 
   let recentChats: typeof sortedChats = []
   // Use frozen chats when dialog is open to prevent recalculation

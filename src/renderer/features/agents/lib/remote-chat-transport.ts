@@ -216,7 +216,7 @@ export class RemoteChatTransport implements ChatTransport<UIMessage> {
         console.log(`[RemoteTransport] ABORT sub=${subId} chunks=${chunkCount}`)
         streamDone = true
         cleanup()
-      })
+      }, { once: true })
     }
 
     const cleanup = () => {
