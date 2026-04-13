@@ -83,6 +83,39 @@ export const isRollingBackAtom = atom<boolean>(false)
 // Current subChatId - used to isolate caches per chat
 export const currentSubChatIdAtom = atom<string>("default")
 
+// Message truncation state - tracks whether messages were truncated for performance
+// Per-subChat Map: subChatId -> { isTruncated, totalCount, shownCount, totalChars, shownChars }
+interface TruncationState {
+  isTruncated: boolean
+  totalCount: number
+  shownCount: number
+  totalChars: number
+  shownChars: number
+}
+
+const defaultTruncationState: TruncationState = {
+  isTruncated: false,
+  totalCount: 0,
+  shownCount: 0,
+  totalChars: 0,
+  shownChars: 0,
+}
+
+export const messageTruncationStateAtom = atom<Map<string, TruncationState>>(new Map())
+
+// Selector for current chat's truncation state
+export const currentChatTruncationAtom = atom((get) => {
+  const subChatId = get(currentSubChatIdAtom)
+  return get(messageTruncationStateAtom).get(subChatId) || defaultTruncationState
+})
+
+// Per-subchat truncation state for split panes
+export const chatTruncationAtomFamily = atomFamily((subChatId: string) =>
+  atom((get) => {
+    return get(messageTruncationStateAtom).get(subChatId) || defaultTruncationState
+  })
+)
+
 // Last message ID - derived (uses stable messageIdsAtom)
 export const lastMessageIdAtom = atom((get) => {
   const ids = get(messageIdsAtom)
@@ -856,13 +889,118 @@ function hasMessageChanged(subChatId: string, msgId: string, msg: Message): bool
   return changed
 }
 
+// ============================================================================
+// MESSAGE TRUNCATION - Keep only recent messages in memory for performance
+// ============================================================================
+// When threads accumulate too much content (long messages with large code blocks),
+// rendering all of them causes severe performance issues and makes the page unscrollable.
+// Solution: Keep only the most recent messages within character/message limits.
+// All messages are still preserved in the database via Chat.messages.
+//
+// Limits:
+// - Max 500,000 characters total (~500KB of text, enough for substantial context)
+// - Max 150 messages (fallback for many small messages)
+// - Always keep at least 20 most recent messages (even if over char limit)
+//
+// This balances:
+// - Performance: Prevents DOM bloat from large code blocks
+// - Usability: Enough context visible for most conversations
+// - Memory: Prevents unbounded memory growth in long sessions
+const MAX_TOTAL_CHARS = 500_000 // ~500KB
+const MAX_MESSAGES_IN_MEMORY = 150
+const MIN_MESSAGES_TO_KEEP = 20 // Always keep at least this many recent messages
+
+function getMessageCharCount(message: Message): number {
+  if (!message.parts) return 0
+
+  let total = 0
+  for (const part of message.parts) {
+    // Count text content
+    if (part.text) {
+      total += part.text.length
+    }
+    // Count serialized tool input/output (these can be large JSON blobs)
+    if (part.input) {
+      total += JSON.stringify(part.input).length
+    }
+    if (part.output) {
+      total += JSON.stringify(part.output).length
+    }
+    if (part.result) {
+      total += JSON.stringify(part.result).length
+    }
+  }
+  return total
+}
+
+function truncateMessagesForRendering(messages: Message[]): Message[] {
+  // Fast path: under message limit and likely under char limit
+  if (messages.length <= MAX_MESSAGES_IN_MEMORY) {
+    // Still check total chars to catch edge case of few but huge messages
+    const totalChars = messages.reduce((sum, m) => sum + getMessageCharCount(m), 0)
+    if (totalChars <= MAX_TOTAL_CHARS) {
+      return messages
+    }
+  }
+
+  // Always keep at least MIN_MESSAGES_TO_KEEP most recent messages
+  const minKeepCount = Math.min(MIN_MESSAGES_TO_KEEP, messages.length)
+
+  // Work backwards from the end, accumulating messages until we hit a limit
+  let charCount = 0
+  let keepCount = 0
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msgChars = getMessageCharCount(messages[i])
+
+    // Always keep minimum number of recent messages
+    if (keepCount < minKeepCount) {
+      charCount += msgChars
+      keepCount++
+      continue
+    }
+
+    // Stop if adding this message would exceed limits
+    if (keepCount >= MAX_MESSAGES_IN_MEMORY || charCount + msgChars > MAX_TOTAL_CHARS) {
+      break
+    }
+
+    charCount += msgChars
+    keepCount++
+  }
+
+  // Return the most recent keepCount messages
+  return messages.slice(-keepCount)
+}
+
 export const syncMessagesWithStatusAtom = atom(
   null,
   (get, set, payload: { messages: Message[]; status: string; subChatId?: string; updateGlobal?: boolean }) => {
-    const { messages, status, subChatId, updateGlobal = true } = payload
+    const { status, subChatId, updateGlobal = true } = payload
+    const totalCount = payload.messages.length
+    const totalChars = payload.messages.reduce((sum, m) => sum + getMessageCharCount(m), 0)
+
+    // Truncate messages to prevent performance degradation on long threads
+    const messages = truncateMessagesForRendering(payload.messages)
+    const shownCount = messages.length
+    const shownChars = messages.reduce((sum, m) => sum + getMessageCharCount(m), 0)
+    const isTruncated = totalCount > shownCount
 
     const prevSubChatId = get(currentSubChatIdAtom)
     const currentSubChatId = subChatId ?? prevSubChatId
+
+    // Update truncation state for this subChat
+    const truncationState = get(messageTruncationStateAtom)
+    const newTruncationState = new Map(truncationState)
+    newTruncationState.set(currentSubChatId, {
+      isTruncated,
+      totalCount,
+      shownCount,
+      totalChars,
+      shownChars,
+    })
+    set(messageTruncationStateAtom, newTruncationState)
+
     let globalIdsChanged = false
     let globalRolesChanged = false
 
