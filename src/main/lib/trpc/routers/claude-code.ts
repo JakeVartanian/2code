@@ -40,6 +40,8 @@ interface OAuthSession {
   completed: boolean
   // Set if token exchange failed
   exchangeError: string | null
+  // The ID of the newly created account (set after successful token exchange)
+  newAccountId: string | null
 }
 
 const oauthSessions = new Map<string, OAuthSession>()
@@ -125,8 +127,9 @@ export async function handleClaudeCodeOAuthCallback(code: string, state: string)
 
     const tokenData = await tokenRes.json() as { access_token: string; refresh_token?: string; expires_in?: number }
     const expiresAt = tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000) : undefined
-    storeOAuthToken(tokenData.access_token, true, tokenData.refresh_token, expiresAt)
+    const newId = storeOAuthToken(tokenData.access_token, true, tokenData.refresh_token, expiresAt)
     matchedSession.completed = true
+    matchedSession.newAccountId = newId
     console.log("[ClaudeCode] Token stored via auth server callback")
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error)
@@ -167,7 +170,7 @@ function decryptToken(encrypted: string): string {
  * Store OAuth token - now uses multi-account system
  * If setAsActive is true, also sets this account as active
  */
-function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: string, expiresAt?: Date): string {
+function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: string, expiresAt?: Date, displayName?: string): string {
   const authManager = getAuthManager()
   const user = authManager.getUser()
 
@@ -183,7 +186,7 @@ function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: 
       oauthToken: encryptedToken,
       refreshToken: encryptedRefresh,
       tokenExpiresAt: expiresAt ?? null,
-      displayName: "Anthropic Account",
+      displayName: displayName || "Anthropic Account",
       connectedAt: new Date(),
       desktopUserId: user?.id ?? null,
     })
@@ -345,7 +348,7 @@ export const claudeCodeRouter = router({
     const autoUrl   = buildAuthUrl({ codeChallenge, state, redirectUri })
     const manualUrl = buildAuthUrl({ codeChallenge, state, redirectUri: MANUAL_REDIRECT_URI })
 
-    oauthSessions.set(sessionId, { codeVerifier, state, redirectUri, manualUrl, autoUrl, completed: false, exchangeError: null })
+    oauthSessions.set(sessionId, { codeVerifier, state, redirectUri, manualUrl, autoUrl, completed: false, exchangeError: null, newAccountId: null })
 
     // FIX: Auto-cleanup after 15 minutes regardless of completion state.
     // Previously only cleaned up incomplete sessions, causing completed sessions
@@ -375,7 +378,7 @@ export const claudeCodeRouter = router({
       }
 
       if (session.completed) {
-        return { state: "success" as const, oauthUrl: session.autoUrl, error: null }
+        return { state: "success" as const, oauthUrl: session.autoUrl, error: null, newAccountId: session.newAccountId }
       }
 
       if (session.exchangeError) {

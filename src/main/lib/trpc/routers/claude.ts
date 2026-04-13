@@ -51,6 +51,7 @@ import {
   getEnabledPlugins,
 } from "./claude-settings"
 import { getExistingClaudeCredentials, refreshClaudeToken, isTokenExpired } from "../../claude-token"
+import { markAccountRateLimited, isAccountRateLimited } from "../../claude/rate-limit-tracker"
 
 /**
  * Parse @[agent:name], @[skill:name], and @[tool:servername] mentions from prompt text
@@ -208,37 +209,92 @@ function isValidOAuthToken(token: string): boolean {
 }
 
 /**
+ * Track which account ID is currently being used for the active session.
+ * Used to mark the correct account as rate-limited when we detect 429 errors.
+ */
+let currentAccountId: string | null = null
+
+/**
+ * Get the account ID currently in use (for marking as rate-limited on 429)
+ */
+export function getCurrentAccountId(): string | null {
+  return currentAccountId
+}
+
+/**
+ * Select an available (non-rate-limited) account for the next Claude request.
+ * Rotates through accounts ordered by lastUsedAt (oldest first = fair rotation).
+ * Returns account ID or null if all accounts are rate-limited.
+ */
+function selectAvailableAccount(): string | null {
+  try {
+    const db = getDatabase()
+
+    // Get all accounts ordered by lastUsedAt (oldest first for fair rotation)
+    const accounts = db
+      .select()
+      .from(anthropicAccounts)
+      .orderBy(anthropicAccounts.lastUsedAt)
+      .all()
+
+    if (accounts.length === 0) {
+      console.log("[claude-auth-rotation] No accounts found")
+      return null
+    }
+
+    // Find first non-rate-limited account
+    for (const account of accounts) {
+      if (!isAccountRateLimited(account.id)) {
+        // Update lastUsedAt to track rotation
+        db.update(anthropicAccounts)
+          .set({ lastUsedAt: new Date() })
+          .where(eq(anthropicAccounts.id, account.id))
+          .run()
+
+        console.log(`[claude-auth-rotation] Selected account ${account.id} (${account.displayName || account.email || "unnamed"})`)
+        return account.id
+      }
+    }
+
+    // All accounts are rate-limited
+    console.warn("[claude-auth-rotation] All accounts are rate-limited")
+    return null
+  } catch (error) {
+    console.error("[claude-auth-rotation] Error selecting account:", error)
+    return null
+  }
+}
+
+/**
  * Get Claude Code OAuth token from local SQLite
- * Uses multi-account system first (active account), falls back to legacy table
- * Returns null if not connected
+ * Uses multi-account system with automatic rotation (skips rate-limited accounts)
+ * Falls back to legacy table if no multi-account setup exists
+ * Returns null if not connected or all accounts are rate-limited
  */
 function getClaudeCodeToken(): string | null {
   try {
     const db = getDatabase()
 
-    // First try multi-account system
-    const settings = db
-      .select()
-      .from(anthropicSettings)
-      .where(eq(anthropicSettings.id, "singleton"))
-      .get()
+    // Select an available (non-rate-limited) account
+    const selectedAccountId = selectAvailableAccount()
 
-    if (settings?.activeAccountId) {
+    if (selectedAccountId) {
       const account = db
         .select()
         .from(anthropicAccounts)
-        .where(eq(anthropicAccounts.id, settings.activeAccountId))
+        .where(eq(anthropicAccounts.id, selectedAccountId))
         .get()
 
       if (account?.oauthToken) {
         const token = decryptToken(account.oauthToken)
         if (isValidOAuthToken(token)) {
-          console.log(`[claude-auth] token=oauth accountId=${settings.activeAccountId}`)
+          currentAccountId = selectedAccountId
+          console.log(`[claude-auth] token=oauth accountId=${selectedAccountId}`)
           return token
         }
         // Token invalid: either undecryptable (different unsigned build) or
         // was encoded with old safeStorage (garbage UTF-8 after base64 decode).
-        console.warn(`[claude-auth] token=oauth accountId=${settings.activeAccountId} INVALID — skipping`)
+        console.warn(`[claude-auth] token=oauth accountId=${selectedAccountId} INVALID — skipping`)
       }
     }
 
@@ -268,6 +324,16 @@ function getClaudeCodeToken(): string | null {
 }
 
 /**
+ * Get the currently active Anthropic account ID from DB settings.
+ */
+function getCurrentActiveAccountId(): string | null {
+  // Return the account ID currently in use (set by selectAvailableAccount)
+  // This may differ from anthropicSettings.activeAccountId due to rotation
+  return currentAccountId
+}
+
+
+/**
  * In-memory cache for refreshed tokens to avoid refreshing on every message.
  * TTL: 45 minutes (Claude OAuth tokens typically expire after ~1 hour).
  */
@@ -295,14 +361,8 @@ function updateStoredAccessToken(newAccessToken: string, newRefreshToken?: strin
     const encrypted = encryptToken(newAccessToken)
     const encryptedRefresh = newRefreshToken ? encryptToken(newRefreshToken) : undefined
 
-    // Update multi-account system
-    const settings = db
-      .select()
-      .from(anthropicSettings)
-      .where(eq(anthropicSettings.id, "singleton"))
-      .get()
-
-    if (settings?.activeAccountId) {
+    // Update the currently selected account (may differ from activeAccountId due to rotation)
+    if (currentAccountId) {
       const updateData: Record<string, unknown> = { oauthToken: encrypted }
       if (encryptedRefresh) {
         updateData.refreshToken = encryptedRefresh
@@ -312,7 +372,7 @@ function updateStoredAccessToken(newAccessToken: string, newRefreshToken?: strin
       }
       db.update(anthropicAccounts)
         .set(updateData)
-        .where(eq(anthropicAccounts.id, settings.activeAccountId))
+        .where(eq(anthropicAccounts.id, currentAccountId))
         .run()
     }
 
@@ -1073,9 +1133,9 @@ export async function getAllMcpConfigHandler() {
 function getStoredTokenExpiry(): number | null {
   try {
     const db = getDatabase()
-    const settings = db.select().from(anthropicSettings).where(eq(anthropicSettings.id, "singleton")).get()
-    if (!settings?.activeAccountId) return null
-    const account = db.select().from(anthropicAccounts).where(eq(anthropicAccounts.id, settings.activeAccountId)).get()
+    // Use the currently selected account (may differ from activeAccountId due to rotation)
+    if (!currentAccountId) return null
+    const account = db.select().from(anthropicAccounts).where(eq(anthropicAccounts.id, currentAccountId)).get()
     return account?.tokenExpiresAt?.getTime() ?? null
   } catch (error) {
     console.error("[claude-auth] Failed to read token expiry:", error)
@@ -1083,13 +1143,13 @@ function getStoredTokenExpiry(): number | null {
   }
 }
 
-/** Read the encrypted refresh token for the active account from the app DB */
+/** Read the encrypted refresh token for the currently selected account from the app DB */
 function getStoredRefreshToken(): string | null {
   try {
     const db = getDatabase()
-    const settings = db.select().from(anthropicSettings).where(eq(anthropicSettings.id, "singleton")).get()
-    if (!settings?.activeAccountId) return null
-    const account = db.select().from(anthropicAccounts).where(eq(anthropicAccounts.id, settings.activeAccountId)).get()
+    // Use the currently selected account (may differ from activeAccountId due to rotation)
+    if (!currentAccountId) return null
+    const account = db.select().from(anthropicAccounts).where(eq(anthropicAccounts.id, currentAccountId)).get()
     if (!account?.refreshToken) return null
     return Buffer.from(account.refreshToken, "base64").toString("utf-8")
   } catch (error) {
@@ -1404,7 +1464,7 @@ export const claudeRouter = router({
             // 2.5. AUTO-FALLBACK: Check internet and switch to Ollama if offline
             // Only check if offline mode is enabled in settings
             // Use async version that auto-refreshes expired tokens
-            const claudeCodeToken = await getClaudeCodeTokenFresh()
+            let claudeCodeToken = await getClaudeCodeTokenFresh()
             const offlineResult = await checkOfflineFallback(
               input.customConfig,
               claudeCodeToken,
@@ -1857,6 +1917,9 @@ export const claudeRouter = router({
                 `[claude] Shell has ANTHROPIC_BASE_URL: ${claudeEnv.ANTHROPIC_BASE_URL}`,
               )
             }
+
+            // Account rotation is now handled automatically in selectAvailableAccount()
+            // which is called by getClaudeCodeToken() / getClaudeCodeTokenFresh()
 
             // Build final env with CLAUDE_CODE_OAUTH_TOKEN for direct inference.
             //
@@ -2751,6 +2814,42 @@ ${prompt}
                       errorCategory = "USAGE_POLICY_VIOLATION"
                     }
 
+                    // Auto-switch to alternate Anthropic account on rate limit (no mid-stream retry)
+                    if (
+                      errorCategory === "RATE_LIMIT_SDK" &&
+                      !isOpenRouter &&
+                      !hasExistingApiConfig
+                    ) {
+                      const accountId = getCurrentActiveAccountId()
+                      if (accountId) {
+                        markAccountRateLimited(accountId)
+                        console.log(`[claude] Marked account ${accountId} as rate-limited`)
+                      }
+
+                      // Clear token cache so next request re-selects available account
+                      tokenRefreshCache = null
+
+                      // Check if another account is available
+                      const db = getDatabase()
+                      const allAccounts = db.select().from(anthropicAccounts).all()
+                      const hasAlternate = allAccounts.some(
+                        (acc) => acc.id !== accountId && !isAccountRateLimited(acc.id)
+                      )
+
+                      if (hasAlternate) {
+                        safeEmit({
+                          type: "retry-notification",
+                          message: "Rate limit reached. Another account will be used automatically — start a new chat to continue.",
+                        } as UIMessageChunk)
+                        errorContext = "Rate limit reached. Another account will be used automatically — start a new chat to continue."
+                        console.log(`[claude] Rate limit on ${accountId} - alternate account available for next session`)
+                      } else {
+                        errorContext = "All connected accounts have reached their rate limit. Please wait and try again later."
+                        console.log(`[claude] All accounts are rate-limited`)
+                      }
+                      // Falls through to normal error emit — session ends, no retry
+                    }
+
                     // Auto-retry on false-positive policy violations (gateway-level rejections)
                     if (
                       errorCategory === "USAGE_POLICY_VIOLATION" &&
@@ -3104,10 +3203,22 @@ ${prompt}
                   errorCategory = "INVALID_API_KEY"
                 } else if (
                   err.message?.includes("rate_limit") ||
-                  err.message?.includes("429")
+                  err.message?.includes("429") ||
+                  stderrOutput?.includes("rate_limit") ||
+                  stderrOutput?.includes("429") ||
+                  stderrOutput?.includes("rate limit")
                 ) {
                   errorContext = "Session limit reached"
                   errorCategory = "RATE_LIMIT"
+
+                  // Mark account as rate-limited if using native Anthropic auth
+                  if (!isOpenRouter && !hasExistingApiConfig) {
+                    const accountId = getCurrentActiveAccountId()
+                    if (accountId) {
+                      markAccountRateLimited(accountId)
+                      console.log(`[claude] Marked account ${accountId} as rate-limited (from catch block)`)
+                    }
+                  }
                 } else if (
                   err.message?.includes("network") ||
                   err.message?.includes("ECONNREFUSED") ||

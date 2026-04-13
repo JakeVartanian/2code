@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect, useRef, type MutableRefObject, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, type MutableRefObject, type ReactNode } from "react"
 import { Chat, useChat } from "@ai-sdk/react"
 import { useSetAtom } from "jotai"
 import { syncMessagesWithStatusAtom, type Message } from "../stores/message-store"
@@ -128,6 +128,31 @@ export function ChatDataSync({
     }
     prevIsActiveRef.current = isActive
   }, [isActive, messages, status, subChatId, syncMessagesAtom])
+
+  // SUBAGENT PROGRESS POLLING:
+  // The AI SDK mutates the messages array in place during streaming. When only
+  // tool parts change (e.g., during subagent/Task tool execution), the messages
+  // reference stays the same, so the useLayoutEffect above may not re-fire.
+  // This interval forces periodic syncs during active streaming so that nested
+  // tool progress from subagents appears in real-time instead of all at once
+  // when the subagent completes.
+  // The syncMessagesWithStatusAtom function has internal caching that makes
+  // redundant syncs cheap — it only clones messages that actually changed.
+  useEffect(() => {
+    if (!isActive) return
+    if (status !== "streaming" && status !== "submitted") return
+
+    const interval = setInterval(() => {
+      syncMessagesAtom({
+        messages: messagesRef.current as Message[],
+        status,
+        subChatId,
+        updateGlobal: true,
+      })
+    }, 100) // 10fps polling — smooth enough for tool progress, light on CPU
+
+    return () => clearInterval(interval)
+  }, [isActive, status, subChatId, syncMessagesAtom])
 
   // Sync status to global streaming status store for queue processing.
   // CRITICAL: Do NOT clear status on unmount — this causes a race condition when

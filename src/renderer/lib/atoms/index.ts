@@ -444,10 +444,12 @@ export const effortLevelAtom = atomWithStorage<EffortLevel>(
 )
 
 // Preferences - Auto Compact
-// Automatically trigger /compact when context usage exceeds the threshold
+// Automatically trigger /compact when context usage exceeds the threshold.
+// Disabled by default — auto-compact can interrupt background agents/tasks
+// by wiping context about running subprocesses when the main stream finishes.
 export const autoCompactEnabledAtom = atomWithStorage<boolean>(
   "preferences:auto-compact-enabled",
-  true,
+  false,
   undefined,
   { getOnInit: true },
 )

@@ -75,6 +75,7 @@ export function ClaudeLoginModal({
   const startAuthMutation = trpc.claudeCode.startAuth.useMutation()
   const submitCodeMutation = trpc.claudeCode.submitCode.useMutation()
   const openOAuthUrlMutation = trpc.claudeCode.openOAuthUrl.useMutation()
+  const renameMutation = trpc.anthropicAccounts.rename.useMutation()
   const trpcUtils = trpc.useUtils()
 
   const isPolling = flowState.step === "waiting_url" || flowState.step === "has_url"
@@ -210,6 +211,9 @@ export function ClaudeLoginModal({
   }
 
   const handleAuthSuccess = () => {
+    // Grab newAccountId before closing (from pollStatus or getIntegration)
+    const newAccountId = pollStatusQuery.data?.newAccountId || integrationQuery.data?.accountId || null
+
     triggerAuthRetry()
     setAnthropicOnboardingCompleted(true)
     setOpen(false)
@@ -218,6 +222,24 @@ export function ClaudeLoginModal({
       trpcUtils.anthropicAccounts.getActive.invalidate(),
       trpcUtils.claudeCode.getIntegration.invalidate(),
     ])
+
+    // Prompt user to name the new account (helps distinguish multiple accounts)
+    if (newAccountId) {
+      setTimeout(() => {
+        const name = window.prompt("Name this account (e.g., 'Work' or 'Personal'):")
+        if (name?.trim()) {
+          renameMutation.mutate(
+            { accountId: newAccountId, displayName: name.trim() },
+            {
+              onSuccess: () => {
+                trpcUtils.anthropicAccounts.list.invalidate()
+                trpcUtils.anthropicAccounts.getActive.invalidate()
+              },
+            },
+          )
+        }
+      }, 300)
+    }
   }
 
   // Check if the code looks like a valid Claude auth code (format: XXX#YYY)
