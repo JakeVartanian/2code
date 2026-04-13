@@ -1316,6 +1316,32 @@ const UsageButton = memo(function UsageButton() {
     retry: 1, // Retry once on failure
   })
 
+  // Account switcher queries
+  const { data: accounts } = trpc.anthropicAccounts.list.useQuery(undefined, {
+    enabled: open,
+  })
+  const { data: activeAccount } = trpc.anthropicAccounts.getActive.useQuery(undefined, {
+    enabled: open,
+  })
+  const { data: settings } = trpc.anthropicAccounts.getSettings.useQuery(undefined, {
+    enabled: open,
+  })
+  const trpcUtils = trpc.useUtils()
+
+  const setActiveMutation = trpc.anthropicAccounts.setActive.useMutation({
+    onSuccess: () => {
+      trpcUtils.anthropicAccounts.getActive.invalidate()
+      trpcUtils.claude.getUsage.invalidate()
+      toast.success("Account switched")
+      refetch() // Refresh usage data for new account
+    },
+    onError: (err) => {
+      toast.error(`Failed to switch account: ${err.message}`)
+    },
+  })
+
+  const hasMultipleAccounts = accounts && accounts.length > 1
+
   // Auto-fetch when popover opens
   useEffect(() => {
     if (open && !isFetching && !data) {
@@ -1458,6 +1484,56 @@ const UsageButton = memo(function UsageButton() {
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* Account Switcher (only show if multiple accounts) */}
+              {hasMultipleAccounts && (
+                <>
+                  <DropdownMenuSeparator className="my-2" />
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[10px] font-medium text-muted-foreground/70 uppercase tracking-wider px-0.5">
+                      Accounts
+                    </span>
+                    {accounts?.map((account) => {
+                      const isActive = activeAccount?.id === account.id
+                      const isPinned = settings?.forceAccountOverride && isActive
+                      return (
+                        <button
+                          key={account.id}
+                          type="button"
+                          onClick={() => {
+                            if (!isActive) {
+                              setActiveMutation.mutate({ accountId: account.id })
+                            }
+                          }}
+                          disabled={isActive || setActiveMutation.isPending}
+                          className={cn(
+                            "flex items-center justify-between px-2 py-1.5 rounded-md text-left transition-colors",
+                            isActive
+                              ? "bg-primary/10 cursor-default"
+                              : "hover:bg-muted/50 cursor-pointer",
+                          )}
+                        >
+                          <div className="flex flex-col min-w-0 flex-1">
+                            <span className="text-xs font-medium truncate">
+                              {account.displayName || "Anthropic Account"}
+                            </span>
+                            {account.email && (
+                              <span className="text-[10px] text-muted-foreground truncate">
+                                {account.email}
+                              </span>
+                            )}
+                          </div>
+                          {isActive && (
+                            <span className="text-[10px] text-primary font-medium ml-2 shrink-0">
+                              {isPinned ? "Active (Pinned)" : "Active"}
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
               )}
             </DropdownMenuContent>
           </DropdownMenu>

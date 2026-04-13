@@ -1079,6 +1079,9 @@ if (gotTheLock) {
       await abortAllClaudeSessions()
       cancelAllPendingOAuth()
       await cleanupGitWatchers()
+
+      // Flush all pending database writes synchronously before closing
+      flushAllPendingWrites()
       await closeDatabase()
 
       // Mark shutdown as clean (AFTER all cleanup, BEFORE quit)

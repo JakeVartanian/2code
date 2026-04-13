@@ -124,7 +124,9 @@ export function initDatabase() {
     console.log("[DB] SQLite connection opened")
 
     sqlite.pragma("journal_mode = WAL")
-    sqlite.pragma("busy_timeout = 5000")
+    // Increased from 5000ms to 15000ms to handle concurrent writes from multiple sessions
+    // With 3-5 concurrent Claude sessions, database lock contention is common
+    sqlite.pragma("busy_timeout = 15000")
     sqlite.pragma("synchronous = NORMAL")
     sqlite.pragma("foreign_keys = ON")
 

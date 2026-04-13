@@ -223,14 +223,42 @@ export function getCurrentAccountId(): string | null {
 
 /**
  * Select an available (non-rate-limited) account for the next Claude request.
- * Rotates through accounts ordered by lastUsedAt (oldest first = fair rotation).
+ * Honors forceAccountOverride flag first, then rotates through accounts ordered by lastUsedAt.
  * Returns account ID or null if all accounts are rate-limited.
  */
 function selectAvailableAccount(): string | null {
   try {
     const db = getDatabase()
 
-    // Get all accounts ordered by lastUsedAt (oldest first for fair rotation)
+    // Check if user has forced an account override (pin feature)
+    const settings = db
+      .select()
+      .from(anthropicSettings)
+      .where(eq(anthropicSettings.id, "singleton"))
+      .get()
+
+    if (settings?.forceAccountOverride && settings.activeAccountId) {
+      const account = db
+        .select()
+        .from(anthropicAccounts)
+        .where(eq(anthropicAccounts.id, settings.activeAccountId))
+        .get()
+
+      if (account) {
+        // Honor forced account (even if rate-limited)
+        console.log(`[claude-auth-rotation] Using pinned account ${account.id} (${account.displayName || account.email})`)
+        return settings.activeAccountId
+      } else {
+        // Forced account was deleted - disable override and fall through
+        console.warn("[claude-auth-rotation] Pinned account deleted, disabling override")
+        db.update(anthropicSettings)
+          .set({ forceAccountOverride: false })
+          .where(eq(anthropicSettings.id, "singleton"))
+          .run()
+      }
+    }
+
+    // Existing rotation logic (unchanged)
     const accounts = db
       .select()
       .from(anthropicAccounts)
@@ -527,8 +555,11 @@ const getClaudeQuery = async () => {
 }
 
 // Active sessions for cancellation (onAbort handles stash + abort + restore)
-// Active sessions for cancellation
-const activeSessions = new Map<string, AbortController>()
+// Active sessions for cancellation (with window tracking to prevent cross-window interference)
+const activeSessions = new Map<
+  string,
+  { abortController: AbortController; windowId: number | null }
+>()
 
 // Track session completion promises for graceful shutdown
 const sessionCompletionPromises = new Map<string, Promise<void>>()
@@ -542,28 +573,80 @@ export function registerSessionCompletion(subChatId: string, promise: Promise<vo
 /** Maximum number of concurrent Claude agent sessions */
 const MAX_CONCURRENT_AGENTS = 5
 
+/** Maximum messages to keep per sub-chat (prevents memory bloat with long conversations) */
+const MAX_MESSAGES_PER_CHAT = 500
+
+/**
+ * Prune message history to prevent unbounded growth
+ * Keeps only the latest MAX_MESSAGES_PER_CHAT messages
+ */
+function pruneMessageHistory(messages: any[], subChatId: string): any[] {
+  if (messages.length <= MAX_MESSAGES_PER_CHAT) {
+    return messages
+  }
+  const pruneCount = messages.length - MAX_MESSAGES_PER_CHAT
+  console.log(
+    `[claude] Pruning ${pruneCount} old messages from sub-chat ${subChatId} (${messages.length} -> ${MAX_MESSAGES_PER_CHAT})`,
+  )
+  return messages.slice(-MAX_MESSAGES_PER_CHAT)
+}
+
 /** Check if there are any active Claude streaming sessions */
 export function hasActiveClaudeSessions(): boolean {
   return activeSessions.size > 0
 }
 
-/** Abort all active Claude sessions and wait for their cleanup to complete */
-export async function abortAllClaudeSessions(): Promise<void> {
+/**
+ * Abort all active Claude sessions and wait for their cleanup to complete
+ * @param windowId Optional - if provided, only abort sessions from this window
+ */
+export async function abortAllClaudeSessions(windowId?: number): Promise<void> {
   // Capture completion promises BEFORE aborting (abort triggers the catch blocks)
-  const pendingCompletions = [...sessionCompletionPromises.values()]
+  const pendingCompletions: Promise<void>[] = []
 
-  for (const [subChatId, controller] of activeSessions) {
-    console.log(`[claude] Aborting session ${subChatId} before reload`)
-    controller.abort()
+  for (const [subChatId, session] of activeSessions) {
+    // If windowId filter is provided, only abort sessions from that window
+    if (windowId !== undefined && session.windowId !== windowId) {
+      continue
+    }
+
+    console.log(
+      `[claude] Aborting session ${subChatId} from window ${session.windowId || "unknown"}`,
+    )
+    session.abortController.abort()
+
+    // Capture the completion promise for this session
+    const promise = sessionCompletionPromises.get(subChatId)
+    if (promise) {
+      pendingCompletions.push(promise)
+    }
+
+    activeSessions.delete(subChatId)
   }
-  activeSessions.clear()
 
   // Wait for all session async functions to finish their catch/finally blocks
   // This ensures flushPendingWrite() calls from abort handlers complete
   if (pendingCompletions.length > 0) {
-    console.log(`[claude] Waiting for ${pendingCompletions.length} session(s) to finish cleanup...`)
-    await Promise.allSettled(pendingCompletions)
-    console.log(`[claude] All sessions cleaned up`)
+    console.log(
+      `[claude] Waiting for ${pendingCompletions.length} session(s) to finish cleanup...`,
+    )
+    const cleanupStart = Date.now()
+    const results = await Promise.allSettled(pendingCompletions)
+
+    const cleanupDuration = Date.now() - cleanupStart
+    const failedCount = results.filter((r) => r.status === "rejected").length
+
+    if (failedCount > 0) {
+      console.warn(
+        `[claude] ${failedCount} session(s) failed during cleanup (took ${cleanupDuration}ms)`,
+      )
+    } else if (cleanupDuration > 5000) {
+      console.warn(
+        `[claude] All sessions cleaned up but took unusually long (${cleanupDuration}ms) - possible subprocess leak`,
+      )
+    } else {
+      console.log(`[claude] All sessions cleaned up (${cleanupDuration}ms)`)
+    }
   }
 
   // Flush any remaining debounced writes
@@ -1294,14 +1377,25 @@ export const claudeRouter = router({
 
         // Abort any existing session for this subChatId before starting a new one
         // This prevents race conditions if two messages are sent in quick succession
-        const existingController = activeSessions.get(input.subChatId)
-        if (existingController) {
-          existingController.abort()
+        const existingSession = activeSessions.get(input.subChatId)
+        if (existingSession) {
+          existingSession.abortController.abort()
         }
+
+        // Get window ID for cross-window session tracking
+        // This prevents a crash in window A from aborting sessions in window B
+        const windowId = (() => {
+          try {
+            const window = BrowserWindow.getFocusedWindow()
+            return window?.id || null
+          } catch {
+            return null
+          }
+        })()
 
         const abortController = new AbortController()
         const streamId = crypto.randomUUID()
-        activeSessions.set(input.subChatId, abortController)
+        activeSessions.set(input.subChatId, { abortController, windowId })
 
         // Stream debug logging
         const subId = input.subChatId.slice(-8) // Short ID for logs
@@ -1450,7 +1544,10 @@ export const claudeRouter = router({
                 role: "user",
                 parts,
               }
-              messagesToSave = [...existingMessages, userMessage]
+              messagesToSave = pruneMessageHistory(
+                [...existingMessages, userMessage],
+                input.subChatId,
+              )
 
               // Debounced write: user message + streamId will be persisted within 100ms.
               // The stream takes longer to start, and the final save will flush anyway.
@@ -2577,7 +2674,9 @@ ${prompt}
               // 5. Run Claude SDK
               let stream
               try {
+                console.log(`[SD] M:SPAWN_SUBPROCESS sub=${subId}`)
                 stream = claudeQuery(queryOptions)
+                console.log(`[SD] M:SUBPROCESS_STARTED sub=${subId}`)
               } catch (queryError) {
                 // If the signal was aborted, this is expected — bail silently
                 if (abortController.signal.aborted) {
@@ -3090,6 +3189,11 @@ ${prompt}
                   }
                 }
 
+                // Stream iteration complete - subprocess should cleanup automatically via AbortSignal
+                console.log(
+                  `[SD] M:STREAM_COMPLETE sub=${subId} msgs=${messageCount} aborted=${abortController.signal.aborted}`,
+                )
+
                 // Warn if stream yielded no messages (offline mode issue)
                 const streamDuration = Date.now() - streamIterationStart
                 if (isUsingOllama) {
@@ -3260,7 +3364,10 @@ ${prompt}
                     parts,
                     metadata,
                   }
-                  const finalMessages = [...messagesToSave, assistantMessage]
+                  const finalMessages = pruneMessageHistory(
+                    [...messagesToSave, assistantMessage],
+                    input.subChatId,
+                  )
                   // Flush immediately: session is ending, data must be persisted now
                   flushPendingWrite(input.subChatId, {
                     messages: JSON.stringify(finalMessages),
@@ -3350,7 +3457,10 @@ ${prompt}
                 metadata,
               }
 
-              const finalMessages = [...messagesToSave, assistantMessage]
+              const finalMessages = pruneMessageHistory(
+                [...messagesToSave, assistantMessage],
+                input.subChatId,
+              )
 
               // Flush immediately: session is ending, data must be persisted now
               flushPendingWrite(input.subChatId, {
@@ -3526,14 +3636,14 @@ ${prompt}
   cancel: publicProcedure
     .input(z.object({ subChatId: z.string() }))
     .mutation(({ input }) => {
-      const controller = activeSessions.get(input.subChatId)
-      if (controller) {
-        controller.abort()
+      const session = activeSessions.get(input.subChatId)
+      if (session) {
+        session.abortController.abort()
         activeSessions.delete(input.subChatId)
         clearPendingApprovals("Session cancelled.", input.subChatId)
       }
 
-      return { cancelled: !!controller }
+      return { cancelled: !!session }
     }),
 
   /**

@@ -32,6 +32,7 @@ import {
 import { Input } from "../../ui/input"
 import { Label } from "../../ui/label"
 import { Switch } from "../../ui/switch"
+import { RenameDialog } from "../../rename-dialog"
 
 // Hook to detect narrow screen
 function useIsNarrowScreen(): boolean {
@@ -54,9 +55,11 @@ function useIsNarrowScreen(): boolean {
 function AccountRow({
   account,
   isActive,
+  isPinned,
   onSetActive,
   onRename,
   onRemove,
+  onTogglePin,
   isLoading,
 }: {
   account: {
@@ -66,65 +69,83 @@ function AccountRow({
     connectedAt: string | null
   }
   isActive: boolean
+  isPinned: boolean
   onSetActive: () => void
   onRename: () => void
   onRemove: () => void
+  onTogglePin: (checked: boolean) => void
   isLoading: boolean
 }) {
   return (
-    <div className="flex items-center justify-between p-3 hover:bg-muted/50">
-      <div className="flex items-center gap-3">
-        <div>
-          <div className="text-sm font-medium">
-            {account.displayName || "Anthropic Account"}
-          </div>
-          {account.email && (
-            <div className="text-xs text-muted-foreground">{account.email}</div>
-          )}
-          {!account.email && account.connectedAt && (
-            <div className="text-xs text-muted-foreground">
-              Connected{" "}
-              {new Date(account.connectedAt).toLocaleDateString(undefined, {
-                dateStyle: "short",
-              })}
+    <div className="p-3 hover:bg-muted/50">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div>
+            <div className="text-sm font-medium">
+              {account.displayName || "Anthropic Account"}
             </div>
+            {account.email && (
+              <div className="text-xs text-muted-foreground">{account.email}</div>
+            )}
+            {!account.email && account.connectedAt && (
+              <div className="text-xs text-muted-foreground">
+                Connected{" "}
+                {new Date(account.connectedAt).toLocaleDateString(undefined, {
+                  dateStyle: "short",
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {!isActive && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onSetActive}
+              disabled={isLoading}
+            >
+              Switch
+            </Button>
           )}
+          {isActive && (
+            <Badge variant="secondary" className="text-xs">
+              {isPinned ? "Active (Pinned)" : "Active"}
+            </Badge>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon" variant="ghost" className="h-7 w-7">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={onRename}>Rename</DropdownMenuItem>
+              <DropdownMenuItem
+                className="data-[highlighted]:bg-red-500/15 data-[highlighted]:text-red-400"
+                onClick={onRemove}
+              >
+                Remove
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        {!isActive && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={onSetActive}
+      {/* Pin toggle (only visible on active account) */}
+      {isActive && (
+        <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border">
+          <Switch
+            checked={isPinned}
+            onCheckedChange={onTogglePin}
             disabled={isLoading}
-          >
-            Switch
-          </Button>
-        )}
-        {isActive && (
-          <Badge variant="secondary" className="text-xs">
-            Active
-          </Badge>
-        )}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="icon" variant="ghost" className="h-7 w-7">
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={onRename}>Rename</DropdownMenuItem>
-            <DropdownMenuItem
-              className="data-[highlighted]:bg-red-500/15 data-[highlighted]:text-red-400"
-              onClick={onRemove}
-            >
-              Remove
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+          />
+          <span className="text-xs text-muted-foreground">
+            Pin this account (disable auto-rotation)
+          </span>
+        </div>
+      )}
     </div>
   )
 }
@@ -142,7 +163,15 @@ function AnthropicAccountsSection() {
       staleTime: 0,
     })
   const { data: claudeCodeIntegration } = trpc.claudeCode.getIntegration.useQuery()
+  const { data: settings } = trpc.anthropicAccounts.getSettings.useQuery()
   const trpcUtils = trpc.useUtils()
+
+  // Rename dialog state
+  const [renameTarget, setRenameTarget] = useState<{
+    id: string
+    displayName: string | null
+    email: string | null
+  } | null>(null)
 
   // Auto-migrate legacy account if needed
   const migrateLegacy = trpc.anthropicAccounts.migrateLegacy.useMutation({
@@ -210,17 +239,31 @@ function AnthropicAccountsSection() {
     },
   })
 
-  const handleRename = (accountId: string, currentName: string | null) => {
-    // TODO: Replace window.prompt with proper dialog component
-    console.warn("Rename feature temporarily disabled (window.prompt not supported in Electron)")
-    console.log("Account ID:", accountId, "Current name:", currentName)
-    // const newName = window.prompt(
-    //   "Enter new name for this account:",
-    //   currentName || "Anthropic Account"
-    // )
-    // if (newName && newName.trim()) {
-    //   renameMutation.mutate({ accountId, displayName: newName.trim() })
-    // }
+  const setForceOverrideMutation = trpc.anthropicAccounts.setForceOverride.useMutation({
+    onSuccess: (_, variables) => {
+      trpcUtils.anthropicAccounts.getSettings.invalidate()
+      toast.success(
+        variables.forceOverride
+          ? "Auto-rotation disabled. This account will stay active even if rate-limited."
+          : "Auto-rotation enabled."
+      )
+    },
+    onError: (err) => {
+      toast.error(`Failed to update pin setting: ${err.message}`)
+    },
+  })
+
+  const handleRename = (account: { id: string; displayName: string | null; email: string | null }) => {
+    setRenameTarget(account)
+  }
+
+  const handleRenameSave = async (newName: string) => {
+    if (!renameTarget) return
+    await renameMutation.mutateAsync({
+      accountId: renameTarget.id,
+      displayName: newName,
+    })
+    setRenameTarget(null)
   }
 
   const handleRemove = (accountId: string, displayName: string | null) => {
@@ -238,7 +281,8 @@ function AnthropicAccountsSection() {
   const isLoading =
     setActiveMutation.isPending ||
     renameMutation.isPending ||
-    removeMutation.isPending
+    removeMutation.isPending ||
+    setForceOverrideMutation.isPending
 
   // Don't show section if no accounts
   if (!isAccountsLoading && (!accounts || accounts.length === 0)) {
@@ -246,7 +290,8 @@ function AnthropicAccountsSection() {
   }
 
   return (
-    <div className="bg-background rounded-lg border border-border overflow-hidden divide-y divide-border">
+    <>
+      <div className="bg-background rounded-lg border border-border overflow-hidden divide-y divide-border">
         {isAccountsLoading ? (
           <div className="p-4 text-center text-sm text-muted-foreground">
             Loading accounts...
@@ -257,14 +302,28 @@ function AnthropicAccountsSection() {
               key={account.id}
               account={account}
               isActive={activeAccount?.id === account.id}
+              isPinned={settings?.forceAccountOverride ?? false}
               onSetActive={() => setActiveMutation.mutate({ accountId: account.id })}
-              onRename={() => handleRename(account.id, account.displayName)}
+              onRename={() => handleRename(account)}
               onRemove={() => handleRemove(account.id, account.displayName)}
+              onTogglePin={(checked) => setForceOverrideMutation.mutate({ forceOverride: checked })}
               isLoading={isLoading}
             />
           ))
         )}
-    </div>
+      </div>
+
+      {/* Rename Dialog */}
+      <RenameDialog
+        isOpen={!!renameTarget}
+        onClose={() => setRenameTarget(null)}
+        onSave={handleRenameSave}
+        currentName={renameTarget?.displayName || renameTarget?.email || "Anthropic Account"}
+        isLoading={renameMutation.isPending}
+        title="Rename Account"
+        placeholder="Account name"
+      />
+    </>
   )
 }
 

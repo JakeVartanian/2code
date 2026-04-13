@@ -12,6 +12,12 @@ export class TerminalManager extends EventEmitter {
 	private sessions = new Map<string, TerminalSession>()
 	private pendingSessions = new Map<string, Promise<SessionResult>>()
 
+	constructor() {
+		super()
+		// Increase max listeners to prevent warnings with many terminals
+		this.setMaxListeners(50)
+	}
+
 	async createOrAttach(params: CreateSessionParams): Promise<SessionResult> {
 		const { paneId, cols, rows } = params
 

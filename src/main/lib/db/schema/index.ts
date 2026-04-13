@@ -128,6 +128,7 @@ export const anthropicAccounts = sqliteTable("anthropic_accounts", {
 export const anthropicSettings = sqliteTable("anthropic_settings", {
   id: text("id").primaryKey().default("singleton"), // Single row
   activeAccountId: text("active_account_id"), // References anthropicAccounts.id
+  forceAccountOverride: integer("force_account_override", { mode: "boolean" }).$default(() => false),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(
     () => new Date(),
   ),

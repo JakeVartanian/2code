@@ -33,13 +33,21 @@ interface PendingWrite {
 }
 
 const pendingWrites = new Map<string, PendingWrite>()
+// Track retry timeouts so they can be cancelled during shutdown
+const activeRetryTimeouts = new Set<ReturnType<typeof setTimeout>>()
 
 /**
- * Execute a single pending write against the database.
+ * Execute a single pending write against the database with retry logic.
  * Runs the subChat update and optional chat timestamp update
  * inside a single synchronous block (better-sqlite3 is sync).
+ *
+ * Retries up to 3 times on SQLITE_BUSY errors with exponential backoff
+ * to handle lock contention from concurrent sessions.
  */
-function executePendingWrite(pending: PendingWrite): void {
+function executePendingWrite(pending: PendingWrite, retryCount = 0): void {
+  const MAX_RETRIES = 3
+  const RETRY_DELAY_MS = 100 * Math.pow(2, retryCount) // 100ms, 200ms, 400ms
+
   try {
     const db = getDatabase()
     db.update(subChats)
@@ -53,9 +61,23 @@ function executePendingWrite(pending: PendingWrite): void {
         .where(eq(chats.id, pending.chatId))
         .run()
     }
-  } catch (error) {
+  } catch (error: any) {
+    // Retry on database lock errors if we haven't exceeded max retries
+    const isDatabaseBusy = error?.code === "SQLITE_BUSY" || error?.message?.includes("database is locked")
+    if (isDatabaseBusy && retryCount < MAX_RETRIES) {
+      console.warn(
+        `[debounced-writer] Database locked for subChat ${pending.subChatId}, retry ${retryCount + 1}/${MAX_RETRIES} after ${RETRY_DELAY_MS}ms`,
+      )
+      const retryTimeout = setTimeout(() => {
+        activeRetryTimeouts.delete(retryTimeout)
+        executePendingWrite(pending, retryCount + 1)
+      }, RETRY_DELAY_MS)
+      activeRetryTimeouts.add(retryTimeout)
+      return
+    }
+
     console.error(
-      `[debounced-writer] Failed to write subChat ${pending.subChatId}:`,
+      `[debounced-writer] Failed to write subChat ${pending.subChatId} after ${retryCount} retries:`,
       error,
     )
   }
@@ -151,14 +173,40 @@ export function flushPendingWrite(
 /**
  * Flush all pending writes immediately.
  * Call this at app shutdown to ensure no data is lost.
+ *
+ * Cancels all retry timeouts and performs synchronous writes
+ * without retry logic to ensure completion before database close.
  */
 export function flushAllPendingWrites(): void {
+  // Cancel all retry timeouts first
+  for (const timeout of activeRetryTimeouts) {
+    clearTimeout(timeout)
+  }
+  activeRetryTimeouts.clear()
+
+  // Flush all pending writes synchronously without retry
+  const db = getDatabase()
   for (const [subChatId, pending] of pendingWrites) {
     if (pending.timer) {
       clearTimeout(pending.timer)
     }
     pendingWrites.delete(subChatId)
-    executePendingWrite(pending)
+
+    try {
+      db.update(subChats)
+        .set(pending.data)
+        .where(eq(subChats.id, pending.subChatId))
+        .run()
+
+      if (pending.chatId) {
+        db.update(chats)
+          .set({ updatedAt: new Date() })
+          .where(eq(chats.id, pending.chatId))
+          .run()
+      }
+    } catch (error) {
+      console.error(`[debounced-writer] Failed to flush subChat ${pending.subChatId} during shutdown:`, error)
+    }
   }
 }
 

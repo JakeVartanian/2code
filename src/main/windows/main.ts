@@ -29,6 +29,13 @@ export function setIsQuitting(value: boolean): void {
   isQuitting = value
 }
 
+// Track active stream readers for cleanup/cancellation
+interface ActiveStream {
+  reader: ReadableStreamDefaultReader<Uint8Array>
+  abortController: AbortController
+}
+const activeStreamReaders = new Map<string, ActiveStream>()
+
 // Helper to get window from IPC event
 function getWindowFromEvent(
   event: Electron.IpcMainInvokeEvent,
@@ -494,6 +501,8 @@ function registerIpcHandlers(): void {
       }
 
       try {
+        const abortController = new AbortController()
+
         const response = await fetch(url, {
           method: options?.method || "POST",
           body: options?.body,
@@ -502,6 +511,7 @@ function registerIpcHandlers(): void {
             "X-Desktop-Token": token,
             "Content-Type": "application/json",
           },
+          signal: abortController.signal,
         })
 
         console.log("[StreamFetch] Response:", response.status, response.ok)
@@ -517,21 +527,37 @@ function registerIpcHandlers(): void {
           return { ok: false, status: 500, error: "No response body" }
         }
 
+        // Track active stream for cancellation
+        activeStreamReaders.set(streamId, { reader, abortController })
+
         // Send chunks asynchronously
         ;(async () => {
           try {
             while (true) {
               const { done, value } = await reader.read()
               if (done) {
-                event.sender.send(`stream:${streamId}:done`)
+                if (!event.sender.isDestroyed()) {
+                  event.sender.send(`stream:${streamId}:done`)
+                }
                 break
               }
-              // Send chunk to renderer
-              event.sender.send(`stream:${streamId}:chunk`, value)
+              // Send chunk to renderer only if window still exists
+              if (!event.sender.isDestroyed()) {
+                event.sender.send(`stream:${streamId}:chunk`, value)
+              } else {
+                // Window closed, cancel the reader
+                reader.cancel()
+                break
+              }
             }
           } catch (err) {
             console.error("[StreamFetch] Stream error:", err)
-            event.sender.send(`stream:${streamId}:error`, err instanceof Error ? err.message : "Stream error")
+            if (!event.sender.isDestroyed()) {
+              event.sender.send(`stream:${streamId}:error`, err instanceof Error ? err.message : "Stream error")
+            }
+          } finally {
+            // Clean up active stream
+            activeStreamReaders.delete(streamId)
           }
         })()
 
@@ -546,6 +572,24 @@ function registerIpcHandlers(): void {
       }
     },
   )
+
+  // Cancel an active stream
+  ipcMain.handle("api:cancel-stream", async (_event, streamId: string) => {
+    const stream = activeStreamReaders.get(streamId)
+    if (stream) {
+      try {
+        stream.abortController.abort()
+        await stream.reader.cancel()
+        activeStreamReaders.delete(streamId)
+        console.log("[StreamFetch] Cancelled stream:", streamId)
+        return { ok: true }
+      } catch (err) {
+        console.error("[StreamFetch] Error cancelling stream:", err)
+        return { ok: false, error: err instanceof Error ? err.message : "Unknown error" }
+      }
+    }
+    return { ok: false, error: "Stream not found" }
+  })
 
   // Preview edit mode — inject/disable editing overlay in preview iframe
   ipcMain.handle("preview:inject-edit-mode", (event, previewBaseUrl: string) => {
@@ -805,7 +849,8 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
           })
           .then(async ({ response }) => {
             if (response === 1) {
-              await abortAllClaudeSessions()
+              // Only abort sessions from THIS window before reload
+              await abortAllClaudeSessions(window.id)
               window.webContents.reloadIgnoringCache()
             }
           })
@@ -839,8 +884,10 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     // Skip confirmation if app quit was already confirmed by the user
     if (isQuitting) {
       // Still abort sessions gracefully so partial state is saved
+      // Only abort sessions from THIS window (not all windows)
       event.preventDefault()
-      abortAllClaudeSessions().finally(() => {
+      const windowId = window.id
+      abortAllClaudeSessions(windowId).finally(() => {
         window.destroy()
       })
       return
@@ -848,6 +895,7 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
 
     if (hasActiveClaudeSessions()) {
       event.preventDefault()
+      const windowId = window.id
       dialog
         .showMessageBox(window, {
           type: "warning",
@@ -861,7 +909,8 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
         })
         .then(async ({ response }) => {
           if (response === 1) {
-            await abortAllClaudeSessions()
+            // Only abort sessions from THIS window
+            await abortAllClaudeSessions(windowId)
             window.destroy()
           }
         })
@@ -929,8 +978,10 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
   // preventing a flood of "Render frame was disposed" errors from trpc-electron
   // trying to stream to a dead frame.
   window.webContents.on("render-process-gone", (_event, details) => {
-    console.error("[Main] Renderer process gone in window", window.id, details)
-    abortAllClaudeSessions().catch((err) => {
+    const windowId = window.id
+    console.error("[Main] Renderer process gone in window", windowId, details)
+    // Only abort sessions from the crashed window (not other windows)
+    abortAllClaudeSessions(windowId).catch((err) => {
       console.error("[Main] Error aborting sessions after renderer crash:", err)
     })
   })

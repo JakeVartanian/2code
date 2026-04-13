@@ -78,6 +78,13 @@
       "when": 1775700000000,
       "tag": "0010_token_expires_at",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1776123289683,
+      "tag": "0011_clever_devos",
+      "breakpoints": true
     }
   ]
 }

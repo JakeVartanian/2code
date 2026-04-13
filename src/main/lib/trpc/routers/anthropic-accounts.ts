@@ -205,7 +205,7 @@ export const anthropicAccountsRouter = router({
         throw new Error("Account not found")
       }
 
-      // Update or insert settings
+      // Update or insert settings (keep forceAccountOverride as-is)
       db.insert(anthropicSettings)
         .values({
           id: "singleton",
@@ -244,6 +244,49 @@ export const anthropicAccountsRouter = router({
       clearClaudeCaches()
 
       console.log(`[AnthropicAccounts] Switched to account: ${input.accountId}`)
+      return { success: true }
+    }),
+
+  /**
+   * Get account override settings
+   */
+  getSettings: publicProcedure.query(() => {
+    const db = getDatabase()
+    const settings = db
+      .select()
+      .from(anthropicSettings)
+      .where(eq(anthropicSettings.id, "singleton"))
+      .get()
+
+    return {
+      forceAccountOverride: settings?.forceAccountOverride ?? false,
+    }
+  }),
+
+  /**
+   * Toggle account override (pin/unpin)
+   */
+  setForceOverride: publicProcedure
+    .input(z.object({ forceOverride: z.boolean() }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+
+      db.insert(anthropicSettings)
+        .values({
+          id: "singleton",
+          forceAccountOverride: input.forceOverride,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: anthropicSettings.id,
+          set: {
+            forceAccountOverride: input.forceOverride,
+            updatedAt: new Date(),
+          },
+        })
+        .run()
+
+      console.log(`[AnthropicAccounts] Force override ${input.forceOverride ? "enabled" : "disabled"}`)
       return { success: true }
     }),
 

@@ -1,0 +1,1 @@
+ALTER TABLE `anthropic_settings` ADD `force_account_override` integer;
