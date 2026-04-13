@@ -6,6 +6,33 @@ import { router, publicProcedure } from "../index"
 
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), ".claude", "settings.json")
 
+/**
+ * Parse enabledPlugins from settings.json — handles both formats:
+ * - CLI format (object): { "key": true, "key2": true }
+ * - Legacy 2Code format (array): ["key", "key2"]
+ */
+export function parseEnabledPlugins(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw as string[]
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return Object.entries(raw as Record<string, unknown>)
+      .filter(([, v]) => v === true)
+      .map(([k]) => k)
+  }
+  return []
+}
+
+/**
+ * Convert a list of enabled plugin keys to the CLI-compatible object format
+ * { "key": true, "key2": true }
+ */
+function toEnabledPluginsObject(plugins: string[]): Record<string, true> {
+  const obj: Record<string, true> = {}
+  for (const key of plugins) {
+    obj[key] = true
+  }
+  return obj
+}
+
 // Cache for enabled plugins to avoid repeated filesystem reads
 let enabledPluginsCache: { plugins: string[]; timestamp: number } | null = null
 const ENABLED_PLUGINS_CACHE_TTL_MS = 5000 // 5 seconds
@@ -57,7 +84,7 @@ export async function getEnabledPlugins(): Promise<string[]> {
   }
 
   const settings = await readClaudeSettings()
-  const plugins = Array.isArray(settings.enabledPlugins) ? settings.enabledPlugins as string[] : []
+  const plugins = parseEnabledPlugins(settings.enabledPlugins)
 
   enabledPluginsCache = { plugins, timestamp: Date.now() }
   return plugins
@@ -156,9 +183,7 @@ export const claudeSettingsRouter = router({
     )
     .mutation(async ({ input }) => {
       const settings = await readClaudeSettings()
-      const enabledPlugins = Array.isArray(settings.enabledPlugins)
-        ? (settings.enabledPlugins as string[])
-        : []
+      const enabledPlugins = parseEnabledPlugins(settings.enabledPlugins)
 
       if (input.enabled && !enabledPlugins.includes(input.pluginSource)) {
         enabledPlugins.push(input.pluginSource)
@@ -167,7 +192,7 @@ export const claudeSettingsRouter = router({
         if (index > -1) enabledPlugins.splice(index, 1)
       }
 
-      settings.enabledPlugins = enabledPlugins
+      settings.enabledPlugins = toEnabledPluginsObject(enabledPlugins)
       await writeClaudeSettings(settings)
       invalidateEnabledPluginsCache()
       return { success: true }

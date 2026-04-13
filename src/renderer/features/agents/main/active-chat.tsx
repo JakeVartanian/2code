@@ -2778,22 +2778,41 @@ const ChatViewInner = memo(function ChatViewInner({
     }
   }, [isStreaming, subChatId, pendingQuestions, setPendingQuestionsMap])
 
-  // Auto-compact: fire /compact when context exceeds threshold after stream completes
+  // Auto-compact: fire /compact when context exceeds threshold after stream completes.
+  //
+  // Guard against infinite loop: in plan mode (and sometimes agent mode), /compact may
+  // not reduce context below the threshold. Without guards, the cycle is:
+  //   compact → still over threshold → compact → ... (crashes the app)
+  //
+  // Two-layer protection:
+  //   1. Track pre-compact token count — if compact didn't reduce context, don't retry
+  //   2. Cooldown timer — never auto-compact more than once per 60s regardless
   const autoCompactEnabled = useAtomValue(autoCompactEnabledAtom)
   const autoCompactThreshold = useAtomValue(autoCompactThresholdAtom)
   const prevIsStreamingForCompactRef = useRef(isStreaming)
+  const lastAutoCompactTimeRef = useRef(0)
+  const preCompactTokensRef = useRef(0) // token count before last auto-compact
+  const AUTO_COMPACT_COOLDOWN_MS = 60_000
   useEffect(() => {
     const wasStreaming = prevIsStreamingForCompactRef.current
     prevIsStreamingForCompactRef.current = isStreaming
 
-    // Only trigger on stream stop, when auto-compact is on and we're not already compacting
     if (!wasStreaming || isStreaming || !autoCompactEnabled || isCompacting) return
 
     const contextTokens = messageTokenData.contextInputTokens ?? messageTokenData.totalInputTokens
     const contextWindow = 200_000
-    if (contextTokens > 0 && contextTokens / contextWindow >= autoCompactThreshold) {
-      handleCompact()
-    }
+    if (contextTokens <= 0 || contextTokens / contextWindow < autoCompactThreshold) return
+
+    // Guard 1: if we auto-compacted recently and tokens didn't decrease, don't retry —
+    // compact failed to free context (common in plan mode where compact may be a no-op)
+    if (preCompactTokensRef.current > 0 && contextTokens >= preCompactTokensRef.current) return
+
+    // Guard 2: time-based cooldown as a safety net
+    if (Date.now() - lastAutoCompactTimeRef.current < AUTO_COMPACT_COOLDOWN_MS) return
+
+    preCompactTokensRef.current = contextTokens
+    lastAutoCompactTimeRef.current = Date.now()
+    handleCompact()
   }, [isStreaming, autoCompactEnabled, autoCompactThreshold, isCompacting, messageTokenData, handleCompact])
 
   // After compact: automatically continue Claude's work when compact session ends.

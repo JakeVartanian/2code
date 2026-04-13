@@ -173,6 +173,11 @@ export async function initAutoUpdater(getWindows: () => BrowserWindow[]) {
 
   // Event: Error
   autoUpdater.on("error", (error: Error) => {
+    // 404 just means no manifest has been uploaded yet — not a real error
+    if (error.message?.includes("404")) {
+      log.info("[AutoUpdater] Update manifest not found (no release published yet)")
+      return
+    }
     log.error("[AutoUpdater] Error:", error.message)
     sendToAllRenderers("update:error", error.message)
   })
@@ -341,6 +346,8 @@ export function setupFocusUpdateCheck(_getWindows: () => BrowserWindow[]) {
   app.on("browser-window-focus", () => {
     log.info("[AutoUpdater] Window focused - checking for updates")
     checkForUpdates().catch((err) => {
+      // 404 = no manifest uploaded yet, not worth logging as error
+      if (err?.message?.includes("404")) return
       log.error("[AutoUpdater] Focus check failed:", err)
     })
   })

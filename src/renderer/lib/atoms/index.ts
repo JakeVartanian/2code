@@ -433,8 +433,8 @@ export const extendedThinkingEnabledAtom = atom(
 
 // Preferences - Effort Level
 // Controls how much computational effort Claude puts into responses
-// "low" = fast, minimal reasoning; "high" = default; "max" = deepest reasoning (Opus 4.6)
-export type EffortLevel = "low" | "medium" | "high" | "max"
+// "low" = fast, minimal reasoning; "medium" = balanced; "high" = deepest reasoning
+export type EffortLevel = "low" | "medium" | "high"
 
 export const effortLevelAtom = atomWithStorage<EffortLevel>(
   "preferences:effort-level",

@@ -289,12 +289,34 @@ function PluginListItem({
 function DiscoverTab() {
   const [searchQuery, setSearchQuery] = useState("")
   const [installingSource, setInstallingSource] = useState<string | null>(null)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const hasSynced = useRef(false)
+  const utils = trpc.useUtils()
 
   const { data: marketplacePlugins = [], isLoading, refetch } = trpc.plugins.listMarketplace.useQuery(undefined, {
     staleTime: 5 * 60 * 1000,
   })
   const installMutation = trpc.plugins.install.useMutation()
   const clearCacheMutation = trpc.plugins.clearCache.useMutation()
+  const syncMarketplacesMutation = trpc.plugins.syncMarketplaces.useMutation()
+
+  // Auto-sync known marketplaces on first mount
+  useEffect(() => {
+    if (hasSynced.current) return
+    hasSynced.current = true
+    setIsSyncing(true)
+    syncMarketplacesMutation.mutateAsync()
+      .then((result) => {
+        const synced = result.results.filter((r) => r.status === "synced")
+        if (synced.length > 0) {
+          refetch()
+        }
+      })
+      .catch(() => {
+        // Sync failure is non-fatal — marketplace list just won't include missing repos
+      })
+      .finally(() => setIsSyncing(false))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredPlugins = useMemo(() => {
     const uninstalled = marketplacePlugins.filter((p) => !p.isInstalled)
@@ -315,13 +337,17 @@ function DiscoverTab() {
       await installMutation.mutateAsync({ source })
       await clearCacheMutation.mutateAsync()
       toast.success(`${formatPluginName(name)} installed and enabled`)
-      await refetch()
+      // Invalidate both the Discover list and the Installed list so switching tabs shows the new plugin
+      await Promise.all([
+        refetch(),
+        utils.plugins.list.invalidate(),
+      ])
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Install failed")
     } finally {
       setInstallingSource(null)
     }
-  }, [installMutation, clearCacheMutation, refetch])
+  }, [installMutation, clearCacheMutation, refetch, utils])
 
   // Group by marketplace
   const grouped = useMemo(() => {
@@ -348,9 +374,10 @@ function DiscoverTab() {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto px-4 pb-4">
-        {isLoading ? (
-          <div className="flex items-center justify-center h-32">
+        {isSyncing || isLoading ? (
+          <div className="flex items-center justify-center h-32 gap-2">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            {isSyncing && <span className="text-xs text-muted-foreground">Syncing marketplaces...</span>}
           </div>
         ) : filteredPlugins.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 text-center">

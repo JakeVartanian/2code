@@ -14,9 +14,10 @@ import {
   discoverPluginMcpServers,
   clearPluginCache,
   writeInstalledPluginsJson,
+  syncKnownMarketplaces,
   type InstalledPluginsJson,
 } from "../../plugins"
-import { getEnabledPlugins, invalidateEnabledPluginsCache } from "./claude-settings"
+import { getEnabledPlugins, invalidateEnabledPluginsCache, parseEnabledPlugins } from "./claude-settings"
 
 const execAsync = promisify(exec)
 
@@ -242,6 +243,17 @@ export const pluginsRouter = router({
   }),
 
   /**
+   * Sync known marketplaces from known_marketplaces.json.
+   * Clones any GitHub-sourced marketplaces that haven't been cloned yet.
+   * Fast no-op when all marketplaces already exist on disk.
+   */
+  syncMarketplaces: publicProcedure.mutation(async () => {
+    const results = await syncKnownMarketplaces()
+    clearPluginCache()
+    return { results }
+  }),
+
+  /**
    * List all available plugins from marketplaces (installed + not installed)
    * Returns each plugin with isInstalled and isEnabled flags
    */
@@ -350,10 +362,10 @@ export const pluginsRouter = router({
       // Path-based plugins are already on disk — just enable them
       if (typeof src === "string") {
         const settings = await readSettings()
-        const enabledPlugins: string[] = Array.isArray(settings.enabledPlugins) ? settings.enabledPlugins as string[] : []
+        const enabledPlugins = parseEnabledPlugins(settings.enabledPlugins)
         if (!enabledPlugins.includes(input.source)) {
           enabledPlugins.push(input.source)
-          settings.enabledPlugins = enabledPlugins
+          settings.enabledPlugins = Object.fromEntries(enabledPlugins.map((k) => [k, true]))
           await writeSettings(settings)
           invalidateEnabledPluginsCache()
         }
@@ -431,10 +443,10 @@ export const pluginsRouter = router({
 
       // Add to enabledPlugins in settings.json
       const settings = await readSettings()
-      const enabledPlugins: string[] = Array.isArray(settings.enabledPlugins) ? settings.enabledPlugins as string[] : []
+      const enabledPlugins = parseEnabledPlugins(settings.enabledPlugins)
       if (!enabledPlugins.includes(input.source)) {
         enabledPlugins.push(input.source)
-        settings.enabledPlugins = enabledPlugins
+        settings.enabledPlugins = Object.fromEntries(enabledPlugins.map((k) => [k, true]))
         await writeSettings(settings)
         invalidateEnabledPluginsCache()
       }

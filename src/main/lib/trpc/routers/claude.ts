@@ -1209,7 +1209,7 @@ export const claudeRouter = router({
           ])
           .optional(),
         maxThinkingTokens: z.number().optional(), // Deprecated — kept for backwards compat
-        effort: z.enum(["low", "medium", "high", "max"]).optional(),
+        effort: z.enum(["low", "medium", "high"]).optional(),
         images: z.array(imageAttachmentSchema).optional(), // Image attachments
         historyEnabled: z.boolean().optional(),
         offlineModeEnabled: z.boolean().optional(), // Whether offline mode (Ollama) is enabled in settings

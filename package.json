@@ -1,6 +1,6 @@
 {
   "name": "2code",
-  "version": "0.0.96",
+  "version": "0.0.99",
   "private": true,
   "description": "Local-first desktop app for AI-powered code assistance. Fork of 1Code.",
   "sideEffects": [

@@ -130,19 +130,22 @@ export function ChatDataSync({
   }, [isActive, messages, status, subChatId, syncMessagesAtom])
 
   // Sync status to global streaming status store for queue processing.
-  // Clear on unmount so evicted/archived sub-chats don't leave stale entries.
+  // CRITICAL: Do NOT clear status on unmount — this causes a race condition when
+  // switching workspaces. The sequence is: ChatDataSync unmounts → clearStatus →
+  // StreamingKeepAlive sees isStreaming=false → stops rendering headless ChatDataSync →
+  // Chat transport orphaned → Claude subprocess dies. Status is cleared explicitly by
+  // agentChatStore.delete() and removeFromOpenSubChats instead.
   const setStreamingStatus = useStreamingStatusStore((s) => s.setStatus)
   useLayoutEffect(() => {
     setStreamingStatus(subChatId, status as "ready" | "streaming" | "submitted" | "error")
-    return () => {
-      // Use getState() to avoid adding clearStatus to deps (stable store reference)
-      useStreamingStatusStore.getState().clearStatus(subChatId)
-    }
   }, [subChatId, status, setStreamingStatus])
 
   // Sync loading state to loadingSubChatsAtom so ALL tabs (active AND inactive)
   // show sidebar loading indicators when streaming. Previously only ChatViewInner
   // did this, so background tabs never showed loading dots in the sidebar.
+  // CRITICAL: Do NOT clear loading on unmount — same race condition as streaming status.
+  // Loading is cleared when status changes to non-streaming (the else branch below),
+  // and explicitly by agentChatStore.delete() / removeFromOpenSubChats.
   const setLoadingSubChats = useSetAtom(loadingSubChatsAtom)
   const isStreaming = status === "streaming" || status === "submitted"
   useLayoutEffect(() => {
@@ -151,9 +154,6 @@ export function ChatDataSync({
     if (isStreaming) {
       setLoading(setLoadingSubChats, subChatId, parentChatId)
     } else {
-      clearLoading(setLoadingSubChats, subChatId)
-    }
-    return () => {
       clearLoading(setLoadingSubChats, subChatId)
     }
   }, [isStreaming, subChatId, setLoadingSubChats])

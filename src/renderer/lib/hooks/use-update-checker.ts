@@ -106,6 +106,12 @@ export function useUpdateChecker() {
     // Error during update
     unsubs.push(
       api.onUpdateError?.((error) => {
+        // 404 = no manifest uploaded yet, not a real error
+        if (typeof error === "string" && error.includes("404")) {
+          console.log("[Update] No update manifest found (no release published yet)")
+          setState({ status: "idle" })
+          return
+        }
         console.error("[Update] Error:", error)
         setState({
           status: "error",

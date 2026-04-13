@@ -2,8 +2,12 @@ import * as fs from "fs/promises"
 import type { Dirent } from "fs"
 import * as path from "path"
 import * as os from "os"
+import { exec } from "child_process"
+import { promisify } from "util"
 import type { McpServerConfig } from "../claude-config"
 import { isDirentDirectory } from "../fs/dirent"
+
+const execAsync = promisify(exec)
 
 export interface PluginInfo {
   name: string
@@ -327,4 +331,74 @@ export async function discoverPluginMcpServers(): Promise<PluginMcpConfig[]> {
   // Cache the result
   mcpCache = { configs, timestamp: Date.now() }
   return configs
+}
+
+// --- Marketplace Sync ---
+
+interface KnownMarketplaceEntry {
+  source: { source: string; repo?: string }
+  installLocation: string
+  lastUpdated?: string
+}
+
+export interface MarketplaceSyncResult {
+  name: string
+  status: "synced" | "exists" | "failed"
+  error?: string
+}
+
+/**
+ * Sync known marketplaces from known_marketplaces.json.
+ * For each GitHub-sourced marketplace whose installLocation is missing
+ * (or lacks .claude-plugin/marketplace.json), runs a shallow git clone.
+ * Skips marketplaces that already exist on disk.
+ */
+export async function syncKnownMarketplaces(): Promise<MarketplaceSyncResult[]> {
+  const knownPath = path.join(os.homedir(), ".claude", "plugins", "known_marketplaces.json")
+  let knownMap: Record<string, KnownMarketplaceEntry>
+  try {
+    const content = await fs.readFile(knownPath, "utf-8")
+    knownMap = JSON.parse(content)
+  } catch {
+    return [] // no known_marketplaces.json — nothing to sync
+  }
+
+  const results: MarketplaceSyncResult[] = []
+
+  for (const [name, entry] of Object.entries(knownMap)) {
+    if (entry.source?.source !== "github" || !entry.source.repo) {
+      continue // only sync GitHub-sourced marketplaces
+    }
+
+    const installDir = entry.installLocation
+    const markerFile = path.join(installDir, ".claude-plugin", "marketplace.json")
+
+    // Check if already installed (has the marker file)
+    try {
+      await fs.access(markerFile)
+      results.push({ name, status: "exists" })
+      continue
+    } catch {
+      // needs sync
+    }
+
+    // Clone the repo
+    const gitUrl = `https://github.com/${entry.source.repo}.git`
+    try {
+      // Ensure parent dir exists
+      await fs.mkdir(path.dirname(installDir), { recursive: true })
+      // Remove any partial previous attempt
+      await fs.rm(installDir, { recursive: true, force: true }).catch(() => {})
+      await execAsync(`git clone --depth 1 ${gitUrl} "${installDir}"`, { timeout: 30000 })
+      results.push({ name, status: "synced" })
+    } catch (err) {
+      results.push({
+        name,
+        status: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  return results
 }

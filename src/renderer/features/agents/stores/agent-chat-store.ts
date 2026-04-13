@@ -1,4 +1,5 @@
 import type { Chat } from "@ai-sdk/react"
+import { useStreamingStatusStore } from "./streaming-status-store"
 
 /**
  * Simple module-level storage for Chat objects.
@@ -47,6 +48,9 @@ export const agentChatStore = {
     parentChatIds.delete(id)
     manuallyAborted.delete(id)
     lastAccessedAt.delete(id)
+    // Clear streaming status — ChatDataSync intentionally does NOT clear on unmount
+    // to prevent the workspace-switch race condition. This is the correct place to clean up.
+    useStreamingStatusStore.getState().clearStatus(id)
   },
 
   // Get the ORIGINAL parentChatId that was set when the Chat was created

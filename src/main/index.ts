@@ -997,6 +997,7 @@ if (gotTheLock) {
       // Check for updates 5 seconds after startup (force to bypass interval check)
       setTimeout(() => {
         checkForUpdates(true).catch((err) => {
+          if (err?.message?.includes("404")) return
           console.error("[AutoUpdater] Startup check failed:", err)
         })
       }, 5000)

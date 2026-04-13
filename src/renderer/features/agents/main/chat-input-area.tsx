@@ -1570,7 +1570,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                       className="!min-w-[120px] !w-[120px]"
                       onCloseAutoFocus={(e) => e.preventDefault()}
                     >
-                      {(["low", "medium", "high", "max"] as const).map((level) => (
+                      {(["low", "medium", "high"] as const).map((level) => (
                         <DropdownMenuItem
                           key={level}
                           onClick={() => {

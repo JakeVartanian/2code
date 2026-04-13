@@ -15,7 +15,7 @@ import { type ClaudeModel, CLAUDE_MODELS, estimateCost, formatCost } from "./mod
 
 export type TaskComplexity = "simple" | "moderate" | "complex"
 
-export type EffortLevel = "low" | "medium" | "high" | "max"
+export type EffortLevel = "low" | "medium" | "high"
 export type ThinkingMode = "adaptive" | "enabled" | "disabled"
 
 export type TaskClassificationContext = {
@@ -310,7 +310,7 @@ export function recommendSettings(
   const suggestions: SettingsRecommendation[] = []
 
   // Effort adjustments
-  if (complexity === "simple" && (currentEffort === "max" || currentEffort === "high")) {
+  if (complexity === "simple" && currentEffort === "high") {
     suggestions.push({
       type: "effort",
       current: currentEffort,

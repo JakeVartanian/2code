@@ -228,7 +228,7 @@ export function AgentsPreferencesTab() {
             </span>
           </div>
           <div className="flex items-center rounded-md border border-input bg-muted/30 p-0.5">
-            {(["low", "medium", "high", "max"] as const).map((level) => (
+            {(["low", "medium", "high"] as const).map((level) => (
               <button
                 key={level}
                 type="button"
