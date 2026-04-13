@@ -1256,6 +1256,19 @@ export const pageReviewAtomFamily = atomFamily((chatId: string) =>
   ),
 )
 
+// Preview edit mode - inline text editing in preview iframe
+const previewEditModeStorageAtom = atom<Record<string, boolean>>({})
+
+export const previewEditModeAtomFamily = atomFamily((chatId: string) =>
+  atom(
+    (get) => get(previewEditModeStorageAtom)[chatId] ?? false,
+    (get, set, enabled: boolean) => {
+      const current = get(previewEditModeStorageAtom)
+      set(previewEditModeStorageAtom, { ...current, [chatId]: enabled })
+    },
+  ),
+)
+
 // Preview admin mode - bypasses order-of-operations in previewed app
 // When enabled, appends ?__admin=1 to iframe navigation URLs
 const previewAdminModeStorageAtom = atomWithStorage<Record<string, boolean>>(
@@ -1297,6 +1310,7 @@ export function clearChatAtomCaches(chatId: string) {
   compareDevicesAtomFamily.remove(chatId)
   pageReviewAtomFamily.remove(chatId)
   previewAdminModeAtomFamily.remove(chatId)
+  previewEditModeAtomFamily.remove(chatId)
 }
 
 /**

@@ -240,6 +240,12 @@ contextBridge.exposeInMainWorld("desktopApi", {
   // VS Code theme scanning
   scanVSCodeThemes: () => ipcRenderer.invoke("vscode:scan-themes"),
   loadVSCodeTheme: (themePath: string) => ipcRenderer.invoke("vscode:load-theme", themePath),
+
+  // Preview edit mode
+  injectEditMode: (previewBaseUrl: string) =>
+    ipcRenderer.invoke("preview:inject-edit-mode", previewBaseUrl) as Promise<{ success: boolean; error?: string }>,
+  disableEditMode: (previewBaseUrl: string) =>
+    ipcRenderer.invoke("preview:disable-edit-mode", previewBaseUrl) as Promise<{ success: boolean; error?: string }>,
 })
 
 // Type definitions
@@ -383,6 +389,9 @@ export interface DesktopApi {
   // VS Code theme scanning
   scanVSCodeThemes: () => Promise<DiscoveredTheme[]>
   loadVSCodeTheme: (themePath: string) => Promise<VSCodeThemeData>
+  // Preview edit mode
+  injectEditMode: (previewBaseUrl: string) => Promise<{ success: boolean; error?: string }>
+  disableEditMode: (previewBaseUrl: string) => Promise<{ success: boolean; error?: string }>
 }
 
 declare global {

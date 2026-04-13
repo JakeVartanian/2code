@@ -4,6 +4,10 @@ import { readFile, readdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { createConnection } from "node:net"
 import http from "node:http"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+
+const execFileAsync = promisify(execFile)
 
 // Framework → default port mapping (shared with renderer constants)
 const FRAMEWORK_PORT_MAP: Record<string, number> = {
@@ -125,6 +129,76 @@ function isHttpServer(port: number): Promise<boolean> {
       resolve(false)
     })
   })
+}
+
+/**
+ * Get the PID(s) listening on a given port (macOS/Linux only).
+ * Returns an array of PIDs, or empty if lookup fails.
+ */
+async function getListeningPids(port: number): Promise<number[]> {
+  if (process.platform === "win32") return []
+  try {
+    const { stdout } = await execFileAsync("lsof", [
+      "-i", `:${port}`, "-sTCP:LISTEN", "-Fn", "-n", "-P",
+    ], { timeout: 3000 })
+    const pids: number[] = []
+    for (const line of stdout.split("\n")) {
+      if (line.startsWith("p")) {
+        const pid = parseInt(line.slice(1), 10)
+        if (!isNaN(pid)) pids.push(pid)
+      }
+    }
+    return pids
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Get the current working directory for a given PID (macOS/Linux only).
+ */
+async function getProcessCwd(pid: number): Promise<string | null> {
+  if (process.platform === "win32") return null
+  try {
+    if (process.platform === "darwin") {
+      // macOS: use lsof -p PID -Fn -d cwd
+      const { stdout } = await execFileAsync("lsof", [
+        "-p", String(pid), "-Fn", "-d", "cwd",
+      ], { timeout: 3000 })
+      for (const line of stdout.split("\n")) {
+        if (line.startsWith("n") && line.length > 1) {
+          return line.slice(1)
+        }
+      }
+    } else {
+      // Linux: readlink /proc/PID/cwd
+      const { stdout } = await execFileAsync("readlink", [
+        `-f`, `/proc/${pid}/cwd`,
+      ], { timeout: 3000 })
+      const cwd = stdout.trim()
+      if (cwd) return cwd
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Check if any process listening on the given port has a cwd
+ * that is within (or is) the specified projectPath.
+ */
+async function isPortOwnedByProject(port: number, projectPath: string): Promise<boolean> {
+  const pids = await getListeningPids(port)
+  if (pids.length === 0) return false // Can't verify — allow it as a fallback
+
+  for (const pid of pids) {
+    const cwd = await getProcessCwd(pid)
+    if (cwd && (cwd === projectPath || cwd.startsWith(projectPath + "/"))) {
+      return true
+    }
+  }
+  return false
 }
 
 /**
@@ -393,6 +467,24 @@ export const devServerRouter = router({
 
       for (const result of results) {
         if (result) servers.push(result)
+      }
+
+      // If multiple servers detected, verify ownership via process cwd
+      // to avoid showing another workspace's server
+      if (servers.length > 1) {
+        const verified: DetectedServer[] = []
+        for (const server of servers) {
+          const owned = await isPortOwnedByProject(server.port, projectPath)
+          if (owned) verified.push(server)
+        }
+        // If at least one server is verified, return only verified ones
+        // Otherwise fall back to framework-expected port, then all results
+        if (verified.length > 0) return verified
+        // Fallback: prefer expected port server
+        if (expectedPort) {
+          const expected = servers.find((s) => s.port === expectedPort)
+          if (expected) return [expected]
+        }
       }
 
       return servers

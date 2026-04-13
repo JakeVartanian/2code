@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { useAtom } from "jotai"
 import { Button } from "../../../components/ui/button"
-import { RotateCw, Terminal, SquareArrowOutUpRight } from "lucide-react"
+import { RotateCw, Terminal, SquareArrowOutUpRight, Pencil } from "lucide-react"
 import {
   ExternalLinkIcon,
   IconDoubleChevronRight,
@@ -14,6 +14,7 @@ import {
   viewportModeAtomFamily,
   previewScaleAtomFamily,
   mobileDeviceAtomFamily,
+  previewEditModeAtomFamily,
 } from "../atoms"
 import { cn } from "../../../lib/utils"
 import { Logo } from "../../../components/ui/logo"
@@ -126,6 +127,7 @@ export function AgentPreview({
   )
   const [scale, setScale] = useAtom(previewScaleAtomFamily(chatId))
   const [device, setDevice] = useAtom(mobileDeviceAtomFamily(chatId))
+  const [isEditMode, setIsEditMode] = useAtom(previewEditModeAtomFamily(chatId))
 
   // Local state for resizing
   const [isResizing, setIsResizing] = useState(false)
@@ -261,6 +263,72 @@ export function AgentPreview({
     window.addEventListener("message", handleMessage)
     return () => window.removeEventListener("message", handleMessage)
   }, [setPersistedPath])
+
+  // Edit mode toggle
+  const toggleEditMode = useCallback(async () => {
+    if (!previewBaseUrl) return
+    if (isEditMode) {
+      await window.desktopApi.disableEditMode(previewBaseUrl)
+      setIsEditMode(false)
+    } else {
+      const result = await window.desktopApi.injectEditMode(previewBaseUrl)
+      if (result.success) {
+        setIsEditMode(true)
+      } else {
+        toast.error("Failed to enter edit mode", { description: result.error })
+      }
+    }
+  }, [previewBaseUrl, isEditMode, setIsEditMode])
+
+  // Re-inject edit mode after iframe reload/navigation
+  const handleIframeLoad = useCallback(() => {
+    setIsLoaded(true)
+    if (isEditMode && previewBaseUrl) {
+      // Small delay to let the page finish rendering
+      setTimeout(() => {
+        window.desktopApi.injectEditMode(previewBaseUrl)
+      }, 500)
+    }
+  }, [isEditMode, previewBaseUrl])
+
+  // Handle __2CODE_EDIT messages from the injected script
+  const applyEditMutation = trpc.previewEdit.applyTextEdit.useMutation({
+    onSuccess: (result) => {
+      if ("success" in result && result.success) {
+        toast.success(`Updated ${result.filePath}`)
+      } else if ("error" in result) {
+        if (result.error === "not-found") {
+          toast.warning("Text not found in source files")
+        } else if (result.error === "multiple-matches" && "matches" in result) {
+          toast.warning(`Found ${result.matches?.length} matches — edit was ambiguous`)
+        } else {
+          toast.error("Failed to apply edit")
+        }
+      }
+    },
+    onError: (err) => {
+      toast.error("Edit failed", { description: err.message })
+    },
+  })
+
+  useEffect(() => {
+    const handleEditMessage = (event: MessageEvent) => {
+      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) return
+      if (event.data?.type !== "__2CODE_EDIT") return
+      if (!projectPath) return
+
+      applyEditMutation.mutate({
+        projectPath,
+        originalText: event.data.originalText,
+        newText: event.data.newText,
+        newHtml: event.data.newHtml,
+        parentContext: event.data.parentText,
+      })
+    }
+
+    window.addEventListener("message", handleEditMessage)
+    return () => window.removeEventListener("message", handleEditMessage)
+  }, [projectPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Calculate max width on mount and window resize
   useEffect(() => {
@@ -492,8 +560,23 @@ export function AgentPreview({
             />
           </div>
 
-          {/* Right: External link + Close */}
+          {/* Right: Edit + External link + Close */}
           <div className="flex items-center justify-end gap-1 flex-1">
+            {previewUrl && isLocalhost && (
+              <Button
+                variant={isEditMode ? "default" : "ghost"}
+                onClick={toggleEditMode}
+                className={cn(
+                  "h-7 px-2 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] rounded-md gap-1",
+                  isEditMode
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                    : "hover:bg-muted",
+                )}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                <span className="text-xs">Edit</span>
+              </Button>
+            )}
             {previewUrl && <ExternalLinkDropdown url={previewUrl} />}
 
             {onClose && (
@@ -574,7 +657,7 @@ export function AgentPreview({
                 title="Preview"
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                 allow="clipboard-write"
-                onLoad={() => setIsLoaded(true)}
+                onLoad={handleIframeLoad}
                 onError={() => setIsLoaded(true)}
               />
             </div>
@@ -649,7 +732,7 @@ export function AgentPreview({
                     borderRadius: viewportMode === "desktop" ? "8px" : "24px",
                   }}
                   sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-                  onLoad={() => setIsLoaded(true)}
+                  onLoad={handleIframeLoad}
                   title="Preview"
                   tabIndex={-1}
                 />

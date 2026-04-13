@@ -3482,14 +3482,24 @@ const ChatViewInner = memo(function ChatViewInner({
   const messagesForForkRef = messagesRef
   const handleForkFromMessage = useCallback(
     async (messageId: string) => {
-      if (isStreaming || isForkingRef.current) return
+      if (isForkingRef.current) return
       isForkingRef.current = true
 
       try {
         // Pass messageIndex as fallback: AI SDK generates its own message IDs
         // which differ from the server-generated IDs stored in the DB.
         // The index lets the server find the correct cutoff even when IDs don't match.
-        const messageIndex = messagesForForkRef.current.findIndex(m => m.id === messageId)
+        const currentMessages = messagesForForkRef.current
+        const messageIndex = currentMessages.findIndex(m => m.id === messageId)
+
+        // Sync current messages to DB before forking — during streaming the DB
+        // may be stale (only synced on stream finish), so fork would read old data.
+        if (currentMessages.length > 0) {
+          await trpcClient.chats.updateSubChatMessages
+            .mutate({ id: subChatId, messages: JSON.stringify(currentMessages) })
+            .catch(() => { /* best-effort, fork will still try */ })
+        }
+
         const result = await trpcClient.chats.forkSubChat.mutate({
           subChatId,
           messageId,
@@ -3534,7 +3544,7 @@ const ChatViewInner = memo(function ChatViewInner({
         isForkingRef.current = false
       }
     },
-    [isStreaming, subChatId, parentChatId, utils],
+    [subChatId, parentChatId, utils],
   )
 
   // Sync local isRollingBack state to global atom (prevents multiple rollbacks across chats)

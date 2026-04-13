@@ -21,6 +21,7 @@ import { voiceRouter } from "./voice"
 import { pluginsRouter } from "./plugins"
 import { envToolsRouter } from "./env-tools"
 import { devServerRouter } from "./dev-server"
+import { previewEditRouter } from "./preview-edit"
 import { secureStoreRouter } from "./secure-store"
 import { createGitRouter } from "../../git"
 import { BrowserWindow } from "electron"
@@ -53,6 +54,7 @@ export function createAppRouter(getWindow: () => BrowserWindow | null) {
     plugins: pluginsRouter,
     envTools: envToolsRouter,
     devServer: devServerRouter,
+    previewEdit: previewEditRouter,
     secureStore: secureStoreRouter,
     // Git operations - named "changes" to match Superset API
     changes: createGitRouter(),

@@ -9,6 +9,7 @@ import {
   session,
   nativeImage,
   dialog,
+  type WebFrameMain,
 } from "electron"
 import { join } from "path"
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs"
@@ -19,6 +20,7 @@ import { registerGitWatcherIPC, cleanupWindowSubscriptions } from "../lib/git/wa
 import { hasActiveClaudeSessions, abortAllClaudeSessions } from "../lib/trpc/routers/claude"
 import { registerThemeScannerIPC } from "../lib/vscode-theme-scanner"
 import { windowManager } from "./window-manager"
+import { EDIT_MODE_SCRIPT, DISABLE_EDIT_MODE_SCRIPT } from "../lib/preview-edit/edit-mode-script"
 
 // Flag to bypass close confirmation when app.quit() has already been confirmed
 let isQuitting = false
@@ -34,6 +36,20 @@ function getWindowFromEvent(
   const webContents = event.sender
   const win = BrowserWindow.fromWebContents(webContents)
   return win && !win.isDestroyed() ? win : null
+}
+
+/**
+ * Find the preview iframe's WebFrameMain by matching its URL against the preview base URL.
+ */
+function findPreviewFrame(webContents: Electron.WebContents, baseUrl: string): WebFrameMain | null {
+  try {
+    for (const frame of webContents.mainFrame.framesInSubtree) {
+      if (frame.url.startsWith(baseUrl)) return frame
+    }
+  } catch {
+    // framesInSubtree can throw if the frame tree is being destroyed
+  }
+  return null
 }
 
 // Register IPC handlers for window operations (only once)
@@ -530,6 +546,29 @@ function registerIpcHandlers(): void {
       }
     },
   )
+
+  // Preview edit mode — inject/disable editing overlay in preview iframe
+  ipcMain.handle("preview:inject-edit-mode", (event, previewBaseUrl: string) => {
+    try {
+      const frame = findPreviewFrame(event.sender, previewBaseUrl)
+      if (!frame) return { success: false, error: "Preview frame not found" }
+      frame.executeJavaScript(EDIT_MODE_SCRIPT)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : "Unknown error" }
+    }
+  })
+
+  ipcMain.handle("preview:disable-edit-mode", (event, previewBaseUrl: string) => {
+    try {
+      const frame = findPreviewFrame(event.sender, previewBaseUrl)
+      if (!frame) return { success: false, error: "Preview frame not found" }
+      frame.executeJavaScript(DISABLE_EDIT_MODE_SCRIPT)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : "Unknown error" }
+    }
+  })
 
   // Register git watcher IPC handlers
   registerGitWatcherIPC()
