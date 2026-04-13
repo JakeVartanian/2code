@@ -113,6 +113,29 @@ export function AgentsLayout() {
   const { data: projects, isLoading: isLoadingProjects } =
     trpc.projects.list.useQuery()
 
+  // Fetch chats to sync selectedProject with selectedChatId
+  const { data: chats } = trpc.chats.list.useQuery({})
+
+  // Sync selectedProject with selectedChatId
+  useEffect(() => {
+    if (!selectedChatId || !chats || !projects) return
+
+    const selectedChat = chats.find((c) => c.id === selectedChatId)
+    if (!selectedChat?.projectId) return
+
+    const chatProject = projects.find((p) => p.id === selectedChat.projectId)
+    if (!chatProject) return
+
+    // Only update if different to avoid unnecessary re-renders
+    if (selectedProject?.id !== chatProject.id) {
+      setSelectedProject({
+        id: chatProject.id,
+        name: chatProject.name,
+        path: chatProject.path,
+      })
+    }
+  }, [selectedChatId, chats, projects, selectedProject, setSelectedProject])
+
   // Validated project - only valid if exists in DB
   // While loading, trust localStorage value to prevent clearing on app restart
   const validatedProject = useMemo(() => {

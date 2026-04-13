@@ -223,23 +223,8 @@ export function ClaudeLoginModal({
       trpcUtils.claudeCode.getIntegration.invalidate(),
     ])
 
-    // Prompt user to name the new account (helps distinguish multiple accounts)
-    if (newAccountId) {
-      setTimeout(() => {
-        const name = window.prompt("Name this account (e.g., 'Work' or 'Personal'):")
-        if (name?.trim()) {
-          renameMutation.mutate(
-            { accountId: newAccountId, displayName: name.trim() },
-            {
-              onSuccess: () => {
-                trpcUtils.anthropicAccounts.list.invalidate()
-                trpcUtils.anthropicAccounts.getActive.invalidate()
-              },
-            },
-          )
-        }
-      }, 300)
-    }
+    // TODO: Add proper dialog UI for naming accounts (window.prompt not supported in Electron)
+    // For now, account uses default name from backend (can be renamed in settings)
   }
 
   // Check if the code looks like a valid Claude auth code (format: XXX#YYY)

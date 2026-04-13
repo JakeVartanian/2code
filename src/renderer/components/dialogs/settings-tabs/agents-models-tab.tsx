@@ -211,22 +211,28 @@ function AnthropicAccountsSection() {
   })
 
   const handleRename = (accountId: string, currentName: string | null) => {
-    const newName = window.prompt(
-      "Enter new name for this account:",
-      currentName || "Anthropic Account"
-    )
-    if (newName && newName.trim()) {
-      renameMutation.mutate({ accountId, displayName: newName.trim() })
-    }
+    // TODO: Replace window.prompt with proper dialog component
+    console.warn("Rename feature temporarily disabled (window.prompt not supported in Electron)")
+    console.log("Account ID:", accountId, "Current name:", currentName)
+    // const newName = window.prompt(
+    //   "Enter new name for this account:",
+    //   currentName || "Anthropic Account"
+    // )
+    // if (newName && newName.trim()) {
+    //   renameMutation.mutate({ accountId, displayName: newName.trim() })
+    // }
   }
 
   const handleRemove = (accountId: string, displayName: string | null) => {
-    const confirmed = window.confirm(
-      `Are you sure you want to remove "${displayName || "this account"}"? You will need to re-authenticate to use it again.`
-    )
-    if (confirmed) {
-      removeMutation.mutate({ accountId })
-    }
+    // TODO: Replace window.confirm with proper dialog component
+    console.warn("Remove feature temporarily disabled (window.confirm not supported in Electron)")
+    console.log("Account ID:", accountId, "Display name:", displayName)
+    // const confirmed = window.confirm(
+    //   `Are you sure you want to remove "${displayName || "this account"}"? You will need to re-authenticate to use it again.`
+    // )
+    // if (confirmed) {
+    //   removeMutation.mutate({ accountId })
+    // }
   }
 
   const isLoading =
