@@ -1,5 +1,6 @@
 import { atom } from "jotai"
-import { atomFamily, atomWithStorage } from "jotai/utils"
+import { atomWithStorage } from "jotai/utils"
+import { atomFamily } from "jotai-family"
 import { atomWithWindowStorage } from "../../../lib/window-storage"
 import type { LucideIcon } from "lucide-react"
 import { Box, FileText, Terminal, FileDiff, ListTodo } from "lucide-react"

@@ -26,6 +26,7 @@ import { appStore } from "./lib/jotai-store"
 import { VSCodeThemeProvider } from "./lib/themes/theme-provider"
 import { trpc } from "./lib/trpc"
 import { SecureApiKeysSyncer } from "./lib/secure-api-keys-syncer"
+import { CrashRecoveryBanner } from "./features/crash-recovery/crash-recovery-banner"
 
 /**
  * Top-level error boundary to prevent white-screen crashes.
@@ -291,6 +292,7 @@ export function App() {
                   >
                     <AppReadyGate />
                   </div>
+                  <CrashRecoveryBanner />
                   <ThemedToaster />
                 </TRPCProvider>
               </TooltipProvider>

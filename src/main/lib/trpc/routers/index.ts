@@ -23,6 +23,7 @@ import { envToolsRouter } from "./env-tools"
 import { devServerRouter } from "./dev-server"
 import { previewEditRouter } from "./preview-edit"
 import { secureStoreRouter } from "./secure-store"
+import { crashRecoveryRouter } from "./crash-recovery"
 import { createGitRouter } from "../../git"
 import { BrowserWindow } from "electron"
 
@@ -56,6 +57,7 @@ export function createAppRouter(getWindow: () => BrowserWindow | null) {
     devServer: devServerRouter,
     previewEdit: previewEditRouter,
     secureStore: secureStoreRouter,
+    crashRecovery: crashRecoveryRouter,
     // Git operations - named "changes" to match Superset API
     changes: createGitRouter(),
   })

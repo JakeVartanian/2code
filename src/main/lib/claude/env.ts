@@ -315,13 +315,34 @@ export function buildClaudeEnv(options?: {
     env.PATH = shellPath
   }
 
-  // 2b. Strip sensitive keys again (process.env may have re-added them)
+  // 2b. Apply custom overrides FIRST (before stripping) so they can provide
+  // custom API tokens for OpenRouter, Ollama, etc. that override the shell env
+  const explicitlySetKeys = new Set<string>()
+  if (options?.ghToken) {
+    env.GH_TOKEN = options.ghToken
+    explicitlySetKeys.add("GH_TOKEN")
+  }
+  if (options?.customEnv) {
+    for (const [key, value] of Object.entries(options.customEnv)) {
+      if (value === "") {
+        delete env[key]
+      } else {
+        env[key] = value
+        explicitlySetKeys.add(key)
+      }
+    }
+  }
+
+  // 2c. Strip sensitive keys (process.env may have re-added them)
   // ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN from the user's shell would
-  // override the OAuth flow. customEnv (step 4) can re-inject them if needed.
+  // override the OAuth flow. BUT: if customEnv explicitly provided a value,
+  // keep it (e.g. ANTHROPIC_AUTH_TOKEN for OpenRouter or ANTHROPIC_API_KEY for custom proxies)
   for (const key of STRIPPED_ENV_KEYS) {
-    if (key in env) {
+    if (key in env && !explicitlySetKeys.has(key)) {
       console.log(`[claude-env] Stripped ${key} from final environment`)
       delete env[key]
+    } else if (key in env && explicitlySetKeys.has(key)) {
+      console.log(`[claude-env] Preserved ${key} (explicitly provided via customEnv)`)
     }
   }
 
@@ -335,20 +356,6 @@ export function buildClaudeEnv(options?: {
   // Windows-specific: ensure USERPROFILE is set
   if (isWindows() && !env.USERPROFILE) {
     env.USERPROFILE = os.homedir()
-  }
-
-  // 4. Add custom overrides
-  if (options?.ghToken) {
-    env.GH_TOKEN = options.ghToken
-  }
-  if (options?.customEnv) {
-    for (const [key, value] of Object.entries(options.customEnv)) {
-      if (value === "") {
-        delete env[key]
-      } else {
-        env[key] = value
-      }
-    }
   }
 
   // 5. Enable/disable task management tools based on user preference (default: enabled)
@@ -383,6 +390,15 @@ export function logClaudeEnv(
     `${prefix}[claude-env] CLAUDE_CODE_OAUTH_TOKEN: ${env.CLAUDE_CODE_OAUTH_TOKEN ? "set" : "not set"}`
   )
   console.log(
-    `${prefix}[claude-env] ANTHROPIC_AUTH_TOKEN: ${env.ANTHROPIC_AUTH_TOKEN ? "set (WARNING: should be stripped!)" : "not set"}`
+    `${prefix}[claude-env] ANTHROPIC_AUTH_TOKEN: ${env.ANTHROPIC_AUTH_TOKEN ? "set" : "not set"}`
+  )
+  console.log(
+    `${prefix}[claude-env] ANTHROPIC_BASE_URL: ${env.ANTHROPIC_BASE_URL || "(not set)"}`
+  )
+  console.log(
+    `${prefix}[claude-env] ANTHROPIC_DEFAULT_SONNET_MODEL: ${env.ANTHROPIC_DEFAULT_SONNET_MODEL || "(not set)"}`
+  )
+  console.log(
+    `${prefix}[claude-env] CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: ${env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS || "(not set)"}`
   )
 }

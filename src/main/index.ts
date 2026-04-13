@@ -28,6 +28,12 @@ import { flushAllPendingWrites } from "./lib/db/debounced-writer"
 import { warmupShellEnvironment } from "./lib/claude/env"
 import { cleanupOrphanedProcesses, writePidFile } from "./lib/process-cleanup"
 import {
+  initCrashRecovery,
+  markCleanShutdown,
+  startCrashRecoveryTracking,
+  stopCrashRecoveryTracking,
+} from "./lib/crash-recovery"
+import {
   createMainWindow,
   createWindow,
   getWindow,
@@ -987,6 +993,21 @@ if (gotTheLock) {
       console.error("[App] Failed to initialize database:", error)
     }
 
+    // Initialize crash recovery and check for previous crash
+    const crashRecoveryInfo = initCrashRecovery()
+    if (crashRecoveryInfo.didCrash) {
+      console.log(
+        `[App] ⚠️  Previous session crashed - ${crashRecoveryInfo.crashedSubChatIds.length} sessions available for recovery`,
+      )
+    }
+    // Store crash info globally so tRPC router can access it
+    ;(global as any).__crashRecoveryInfo = crashRecoveryInfo
+
+    // Start periodic crash recovery tracking (every 5 seconds)
+    const crashRecoveryInterval = startCrashRecoveryTracking()
+    // Store interval handle for cleanup on quit
+    ;(global as any).__crashRecoveryInterval = crashRecoveryInterval
+
     // Signal renderer that main process is fully initialized
     setAppReady()
 
@@ -1048,11 +1069,20 @@ if (gotTheLock) {
     event.preventDefault()
     console.log("[App] Shutting down...")
     try {
+      // Stop crash recovery tracking
+      const crashRecoveryInterval = (global as any).__crashRecoveryInterval
+      if (crashRecoveryInterval) {
+        stopCrashRecoveryTracking(crashRecoveryInterval)
+      }
+
       // Abort all sessions and wait for their cleanup (flushPendingWrite) to complete
       await abortAllClaudeSessions()
       cancelAllPendingOAuth()
       await cleanupGitWatchers()
       await closeDatabase()
+
+      // Mark shutdown as clean (AFTER all cleanup, BEFORE quit)
+      markCleanShutdown()
     } catch (error) {
       console.error("[App] Cleanup error:", error)
     }
