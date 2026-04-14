@@ -107,7 +107,7 @@ import {
   agentsChangesPanelWidthAtom,
   agentsDiffSidebarWidthAtom,
   agentsPlanSidebarWidthAtom,
-  agentsPreviewSidebarOpenAtom,
+  previewSidebarOpenAtomFamily,
   agentsPreviewSidebarWidthAtom,
   agentsSubChatsSidebarModeAtom,
   agentsSubChatUnseenChangesAtom,
@@ -4875,8 +4875,14 @@ export function ChatView({
   // Check if any chat has unseen changes
   const hasAnyUnseenChanges = unseenChanges.size > 0
   const [, forceUpdate] = useState({})
+
+  // Per-chat preview sidebar state - each chat remembers its own open/close state
+  const previewSidebarAtom = useMemo(
+    () => previewSidebarOpenAtomFamily(chatId),
+    [chatId],
+  )
   const [isPreviewSidebarOpen, setIsPreviewSidebarOpen] = useAtom(
-    agentsPreviewSidebarOpenAtom,
+    previewSidebarAtom,
   )
   // Per-chat diff sidebar state - each chat remembers its own open/close state
   const diffSidebarAtom = useMemo(

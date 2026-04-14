@@ -15,7 +15,7 @@ import {
   selectedDraftIdAtom,
   showNewChatFormAtom,
   agentsMobileViewModeAtom,
-  agentsPreviewSidebarOpenAtom,
+  previewSidebarOpenAtomFamily,
   agentsSidebarOpenAtom,
   agentsSubChatsSidebarModeAtom,
   agentsSubChatsSidebarWidthAtom,
@@ -91,9 +91,16 @@ export function AgentsContent() {
   )
   const setApiKeyOnboardingCompleted = useSetAtom(apiKeyOnboardingCompletedAtom)
   const [sidebarOpen, setSidebarOpen] = useAtom(agentsSidebarOpenAtom)
-  const [previewSidebarOpen, setPreviewSidebarOpen] = useAtom(
-    agentsPreviewSidebarOpenAtom,
+
+  // Per-chat preview sidebar state
+  const previewSidebarAtom = useMemo(
+    () => previewSidebarOpenAtomFamily(selectedChatId || ""),
+    [selectedChatId],
   )
+  const [previewSidebarOpen, setPreviewSidebarOpen] = useAtom(
+    previewSidebarAtom,
+  )
+
   const [mobileViewMode, setMobileViewMode] = useAtom(agentsMobileViewModeAtom)
   const [subChatsSidebarMode, setSubChatsSidebarMode] = useAtom(
     agentsSubChatsSidebarModeAtom,

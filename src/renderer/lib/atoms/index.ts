@@ -37,7 +37,7 @@ export {
   previewScaleAtomFamily,
   mobileDeviceAtomFamily,
   agentsPreviewSidebarWidthAtom,
-  agentsPreviewSidebarOpenAtom,
+  previewSidebarOpenAtomFamily,
 
   // Diff atoms
   agentsDiffSidebarWidthAtom,

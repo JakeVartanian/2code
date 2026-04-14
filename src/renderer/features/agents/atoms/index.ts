@@ -357,7 +357,7 @@ export const agentsSidebarWidthAtom = atomWithStorage<number>(
   { getOnInit: true },
 )
 
-// Preview sidebar (right) width and open state
+// Preview sidebar (right) width (global - same width for all chats)
 export const agentsPreviewSidebarWidthAtom = atomWithStorage<number>(
   "agents-preview-sidebar-width",
   500,
@@ -365,11 +365,23 @@ export const agentsPreviewSidebarWidthAtom = atomWithStorage<number>(
   { getOnInit: true },
 )
 
-// Preview sidebar open state - window-scoped
-export const agentsPreviewSidebarOpenAtom = atomWithWindowStorage<boolean>(
-  "agents-preview-sidebar-open",
-  true,
+// Preview sidebar open state - per-chat storage
+const previewSidebarOpenStorageAtom = atomWithStorage<Record<string, boolean>>(
+  "agents:previewSidebarOpen",
+  {},
+  undefined,
   { getOnInit: true },
+)
+
+// atomFamily to get/set preview sidebar open state per chatId
+export const previewSidebarOpenAtomFamily = atomFamily((chatId: string) =>
+  atom(
+    (get) => get(previewSidebarOpenStorageAtom)[chatId] ?? false,
+    (get, set, isOpen: boolean) => {
+      const current = get(previewSidebarOpenStorageAtom)
+      set(previewSidebarOpenStorageAtom, { ...current, [chatId]: isOpen })
+    },
+  ),
 )
 
 // Diff sidebar (right) width (global - same width for all chats)
@@ -1298,6 +1310,7 @@ export function clearChatAtomCaches(chatId: string) {
   viewportModeAtomFamily.remove(chatId)
   previewScaleAtomFamily.remove(chatId)
   mobileDeviceAtomFamily.remove(chatId)
+  previewSidebarOpenAtomFamily.remove(chatId)
   diffSidebarOpenAtomFamily.remove(chatId)
   diffFilesCollapsedAtomFamily.remove(chatId)
   viewedFilesAtomFamily.remove(chatId)
