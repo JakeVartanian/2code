@@ -1,5 +1,4 @@
 import { eq, sql } from "drizzle-orm"
-import { safeStorage } from "electron"
 import { z } from "zod"
 import { getAuthManager } from "../../../index"
 import { anthropicAccounts, anthropicSettings, claudeCodeCredentials, getDatabase } from "../../db"
@@ -8,28 +7,23 @@ import { publicProcedure, router } from "../index"
 import { clearClaudeCaches } from "./claude"
 
 /**
- * Encrypt token using Electron's safeStorage
+ * Encode token as base64 for DB storage.
+ * No safeStorage — it ties encryption to the app's code signature,
+ * so every unsigned rebuild produces a different key and old tokens
+ * become permanently undecryptable.
  */
 function encryptToken(token: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    console.warn("[AnthropicAccounts] Encryption not available, storing as base64")
-    return Buffer.from(token).toString("base64")
-  }
-  return safeStorage.encryptString(token).toString("base64")
+  return Buffer.from(token).toString("base64")
 }
 
 /**
- * Decrypt token using Electron's safeStorage
+ * Decode token from base64 storage
  */
 function decryptToken(encrypted: string): string {
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
-      return Buffer.from(encrypted, "base64").toString("utf-8")
-    }
-    const buffer = Buffer.from(encrypted, "base64")
-    return safeStorage.decryptString(buffer)
+    return Buffer.from(encrypted, "base64").toString("utf-8")
   } catch (error) {
-    console.error("[decryptToken] Failed to decrypt:", error)
+    console.error("[AnthropicAccounts] Failed to decode:", error)
     return ""
   }
 }
