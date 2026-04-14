@@ -223,20 +223,24 @@ export function getCurrentAccountId(): string | null {
 
 /**
  * Select an available (non-rate-limited) account for the next Claude request.
- * Honors forceAccountOverride flag first, then rotates through accounts ordered by lastUsedAt.
+ * Priority order:
+ * 1. Pinned account (forceAccountOverride=true) - even if rate-limited
+ * 2. Manually selected account (activeAccountId) - if not rate-limited
+ * 3. Fair rotation through all accounts ordered by lastUsedAt
  * Returns account ID or null if all accounts are rate-limited.
  */
 function selectAvailableAccount(): string | null {
   try {
     const db = getDatabase()
 
-    // Check if user has forced an account override (pin feature)
+    // Get settings and accounts in one place
     const settings = db
       .select()
       .from(anthropicSettings)
       .where(eq(anthropicSettings.id, "singleton"))
       .get()
 
+    // Priority 1: Check if user has forced an account override (pin feature)
     if (settings?.forceAccountOverride && settings.activeAccountId) {
       const account = db
         .select()
@@ -258,7 +262,40 @@ function selectAvailableAccount(): string | null {
       }
     }
 
-    // Existing rotation logic (unchanged)
+    // Priority 2: Check if user has manually selected an account (not pinned)
+    if (settings?.activeAccountId && !settings.forceAccountOverride) {
+      const activeAccount = db
+        .select()
+        .from(anthropicAccounts)
+        .where(eq(anthropicAccounts.id, settings.activeAccountId))
+        .get()
+
+      if (activeAccount) {
+        // Use manually selected account if not rate-limited
+        if (!isAccountRateLimited(activeAccount.id)) {
+          console.log(`[claude-auth-rotation] Using manually selected account ${activeAccount.id} (${activeAccount.displayName || activeAccount.email})`)
+
+          // Update lastUsedAt
+          db.update(anthropicAccounts)
+            .set({ lastUsedAt: new Date() })
+            .where(eq(anthropicAccounts.id, activeAccount.id))
+            .run()
+
+          return activeAccount.id
+        } else {
+          console.warn(`[claude-auth-rotation] Manually selected account ${activeAccount.id} is rate-limited, falling back to rotation`)
+        }
+      } else {
+        // Selected account was deleted - clear activeAccountId
+        console.warn("[claude-auth-rotation] Manually selected account deleted, clearing selection")
+        db.update(anthropicSettings)
+          .set({ activeAccountId: null })
+          .where(eq(anthropicSettings.id, "singleton"))
+          .run()
+      }
+    }
+
+    // Priority 3: Fair rotation logic (oldest lastUsedAt first)
     const accounts = db
       .select()
       .from(anthropicAccounts)
@@ -279,7 +316,7 @@ function selectAvailableAccount(): string | null {
           .where(eq(anthropicAccounts.id, account.id))
           .run()
 
-        console.log(`[claude-auth-rotation] Selected account ${account.id} (${account.displayName || account.email || "unnamed"})`)
+        console.log(`[claude-auth-rotation] Selected account via rotation ${account.id} (${account.displayName || account.email || "unnamed"})`)
         return account.id
       }
     }
