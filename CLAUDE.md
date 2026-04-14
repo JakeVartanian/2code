@@ -54,6 +54,24 @@ bun run db:generate      # Generate migrations from schema
 bun run db:push          # Push schema directly (dev only)
 ```
 
+## Versioning Convention
+
+**Format:** `MAJOR.MINOR.PATCH.HOTFIX`
+
+- **MAJOR** (0.x.x.x): Breaking changes, major rewrites
+- **MINOR** (x.1.x.x): New features, significant additions
+- **PATCH** (x.x.1.x): Standard bugfixes, minor improvements
+- **HOTFIX** (x.x.x.1): Trivial/critical bugfixes, typos, small tweaks
+
+**Examples:**
+- `0.1.4 → 0.1.5`: Adding new feature (e.g., voice input, new UI panel)
+- `0.1.4 → 0.1.41`: Trivial bugfix (e.g., encryption fix, typo, crash fix)
+- `0.1.4 → 0.1.42`: Another trivial fix on top of 0.1.41
+
+**When bumping versions:**
+- Use `npm version patch` for PATCH (0.1.4 → 0.1.5)
+- Manually edit package.json for HOTFIX (0.1.4 → 0.1.41)
+
 ## Architecture
 
 ```
