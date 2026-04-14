@@ -1,4 +1,5 @@
 import "./lib/logger"
+import { initCrashDump } from "./lib/crash-dump"
 import { app, BrowserWindow, dialog, Menu, nativeImage, session } from "electron"
 import { existsSync, readFileSync, readlinkSync, unlinkSync } from "fs"
 import { createServer } from "http"
@@ -73,6 +74,9 @@ if (IS_DEV) {
 // Increase V8 old-space limit for renderer/main processes to reduce OOM frequency
 // under heavy multi-chat workloads. Must be set before app readiness/window creation.
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=8192")
+
+// Initialize crash dump logging as early as possible to capture any startup errors
+initCrashDump()
 
 
 // URL configuration (exported for use in other modules)

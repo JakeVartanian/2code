@@ -24,6 +24,14 @@ import {
   CollapsibleTrigger,
 } from "../../ui/collapsible"
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog"
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -173,52 +181,78 @@ function AnthropicAccountsSection() {
     email: string | null
   } | null>(null)
 
+  // Remove confirmation dialog state
+  const [removeTarget, setRemoveTarget] = useState<{
+    id: string
+    displayName: string | null
+  } | null>(null)
+
   // Auto-migrate legacy account if needed
   const migrateLegacy = trpc.anthropicAccounts.migrateLegacy.useMutation({
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      console.log("[Account Migration] Legacy account migrated:", result)
       await refetchList()
       await refetchActive()
+    },
+    onError: (err) => {
+      console.error("[Account Migration] Failed to migrate legacy account:", err)
     },
   })
 
   // Trigger migration if: no accounts, not loading, has legacy connection, not already migrating
   useEffect(() => {
-    if (
+    const shouldMigrate =
       !isAccountsLoading &&
       accounts?.length === 0 &&
       claudeCodeIntegration?.isConnected &&
       !migrateLegacy.isPending &&
       !migrateLegacy.isSuccess
-    ) {
+
+    console.log("[Account Migration] Checking conditions:", {
+      isAccountsLoading,
+      accountsCount: accounts?.length,
+      isConnected: claudeCodeIntegration?.isConnected,
+      isPending: migrateLegacy.isPending,
+      isSuccess: migrateLegacy.isSuccess,
+      shouldMigrate,
+    })
+
+    if (shouldMigrate) {
+      console.log("[Account Migration] Triggering legacy account migration...")
       migrateLegacy.mutate()
     }
   }, [isAccountsLoading, accounts, claudeCodeIntegration, migrateLegacy])
 
   const setActiveMutation = trpc.anthropicAccounts.setActive.useMutation({
-    onSuccess: () => {
+    onSuccess: (_, { accountId }) => {
+      console.log("[Account Switch] Successfully switched to account:", accountId)
       trpcUtils.anthropicAccounts.list.invalidate()
       trpcUtils.anthropicAccounts.getActive.invalidate()
       trpcUtils.claudeCode.getIntegration.invalidate()
       toast.success("Account switched")
     },
-    onError: (err) => {
+    onError: (err, { accountId }) => {
+      console.error("[Account Switch] Failed to switch to account:", accountId, err)
       toast.error(`Failed to switch account: ${err.message}`)
     },
   })
 
   const renameMutation = trpc.anthropicAccounts.rename.useMutation({
-    onSuccess: () => {
+    onSuccess: (_, { accountId, displayName }) => {
+      console.log("[Account Rename] Successfully renamed account:", accountId, "to", displayName)
       trpcUtils.anthropicAccounts.list.invalidate()
       trpcUtils.anthropicAccounts.getActive.invalidate()
       toast.success("Account renamed")
     },
-    onError: (err) => {
+    onError: (err, { accountId }) => {
+      console.error("[Account Rename] Failed to rename account:", accountId, err)
       toast.error(`Failed to rename account: ${err.message}`)
     },
   })
 
   const removeMutation = trpc.anthropicAccounts.remove.useMutation({
-    onSuccess: () => {
+    onSuccess: (_, { accountId }) => {
+      console.log("[Account Remove] Successfully removed account:", accountId)
       // Optimistically mark as disconnected NOW (synchronously) so the migrateLegacy
       // effect doesn't race: if list settles before getIntegration refetches, it would
       // see accounts=[] + isConnected=true (stale) and re-create the account from the
@@ -234,13 +268,15 @@ function AnthropicAccountsSection() {
       trpcUtils.claudeCode.getIntegration.invalidate()
       toast.success("Account removed")
     },
-    onError: (err) => {
+    onError: (err, { accountId }) => {
+      console.error("[Account Remove] Failed to remove account:", accountId, err)
       toast.error(`Failed to remove account: ${err.message}`)
     },
   })
 
   const setForceOverrideMutation = trpc.anthropicAccounts.setForceOverride.useMutation({
     onSuccess: (_, variables) => {
+      console.log("[Account Pin] Set force override to:", variables.forceOverride)
       trpcUtils.anthropicAccounts.getSettings.invalidate()
       toast.success(
         variables.forceOverride
@@ -248,7 +284,8 @@ function AnthropicAccountsSection() {
           : "Auto-rotation enabled."
       )
     },
-    onError: (err) => {
+    onError: (err, variables) => {
+      console.error("[Account Pin] Failed to set force override:", variables.forceOverride, err)
       toast.error(`Failed to update pin setting: ${err.message}`)
     },
   })
@@ -267,15 +304,15 @@ function AnthropicAccountsSection() {
   }
 
   const handleRemove = (accountId: string, displayName: string | null) => {
-    // TODO: Replace window.confirm with proper dialog component
-    console.warn("Remove feature temporarily disabled (window.confirm not supported in Electron)")
-    console.log("Account ID:", accountId, "Display name:", displayName)
-    // const confirmed = window.confirm(
-    //   `Are you sure you want to remove "${displayName || "this account"}"? You will need to re-authenticate to use it again.`
-    // )
-    // if (confirmed) {
-    //   removeMutation.mutate({ accountId })
-    // }
+    console.log("[Account Remove] Opening confirmation dialog for account:", accountId, displayName)
+    setRemoveTarget({ id: accountId, displayName })
+  }
+
+  const handleRemoveConfirm = () => {
+    if (!removeTarget) return
+    console.log("[Account Remove] Confirming removal of account:", removeTarget.id)
+    removeMutation.mutate({ accountId: removeTarget.id })
+    setRemoveTarget(null)
   }
 
   const isLoading =
@@ -323,6 +360,26 @@ function AnthropicAccountsSection() {
         title="Rename Account"
         placeholder="Account name"
       />
+
+      {/* Remove Confirmation Dialog */}
+      <AlertDialog open={!!removeTarget} onOpenChange={(open) => !open && setRemoveTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogTitle>Remove Account</AlertDialogTitle>
+          <AlertDialogDescription>
+            Are you sure you want to remove "{removeTarget?.displayName || "this account"}"? You will need to re-authenticate to use it again.
+          </AlertDialogDescription>
+          <div className="flex gap-2 justify-end">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleRemoveConfirm}
+              disabled={removeMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {removeMutation.isPending ? "Removing..." : "Remove"}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

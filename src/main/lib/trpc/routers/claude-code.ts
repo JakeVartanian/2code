@@ -267,6 +267,7 @@ export const claudeCodeRouter = router({
   /**
    * Check if user has Claude Code connected (local check)
    * Now uses multi-account system - checks for active account
+   * Only checks keychain on FIRST LAUNCH to trigger one-time migration
    */
   getIntegration: publicProcedure.query(() => {
     const db = getDatabase()
@@ -312,9 +313,22 @@ export const claudeCodeRouter = router({
 
     // Also validate legacy token is decryptable
     const legacyToken = cred?.oauthToken ? decryptToken(cred.oauthToken) : ""
+    if (legacyToken) {
+      return {
+        isConnected: true,
+        connectedAt: cred?.connectedAt?.toISOString() ?? null,
+        accountId: null,
+        displayName: null,
+      }
+    }
+
+    // NOTE: Keychain is NOT checked here. It's only checked during migrateLegacy
+    // on first launch. After migration, all credentials come from DB.
+    // This ensures that removing an account truly disconnects with no fallback.
+
     return {
-      isConnected: !!legacyToken,
-      connectedAt: cred?.connectedAt?.toISOString() ?? null,
+      isConnected: false,
+      connectedAt: null,
       accountId: null,
       displayName: null,
     }

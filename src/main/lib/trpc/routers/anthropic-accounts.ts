@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm"
 import { z } from "zod"
 import { getAuthManager } from "../../../index"
+import { getExistingClaudeCredentials } from "../../claude-token"
 import { anthropicAccounts, anthropicSettings, claudeCodeCredentials, getDatabase } from "../../db"
 import { createId } from "../../db/utils"
 import { publicProcedure, router } from "../index"
@@ -456,14 +457,33 @@ export const anthropicAccountsRouter = router({
       return { migrated: false, reason: "accounts_exist" }
     }
 
-    // Check for legacy credential
+    // Check for legacy credential in database
     const legacyCred = db
       .select()
       .from(claudeCodeCredentials)
       .where(eq(claudeCodeCredentials.id, "default"))
       .get()
 
-    if (!legacyCred?.oauthToken) {
+    let tokenToMigrate: string | null = null
+    let connectedAt: Date | null = null
+
+    if (legacyCred?.oauthToken) {
+      // Use legacy DB token
+      tokenToMigrate = legacyCred.oauthToken
+      connectedAt = legacyCred.connectedAt || null
+      console.log("[migrateLegacy] Found legacy token in database")
+    } else {
+      // Fallback: check system keychain (for users with claude CLI installed)
+      console.log("[migrateLegacy] No legacy DB token, checking system keychain...")
+      const keychainCreds = getExistingClaudeCredentials()
+      if (keychainCreds?.accessToken) {
+        console.log("[migrateLegacy] Found token in system keychain, migrating...")
+        tokenToMigrate = keychainCreds.accessToken
+        connectedAt = new Date() // Use current time since keychain doesn't track connectedAt
+      }
+    }
+
+    if (!tokenToMigrate) {
       return { migrated: false, reason: "no_legacy" }
     }
 
@@ -473,10 +493,10 @@ export const anthropicAccountsRouter = router({
     db.insert(anthropicAccounts)
       .values({
         id: newId,
-        oauthToken: legacyCred.oauthToken,
+        oauthToken: tokenToMigrate,
         displayName: "Anthropic Account",
-        connectedAt: legacyCred.connectedAt,
-        desktopUserId: legacyCred.userId,
+        connectedAt: connectedAt,
+        desktopUserId: legacyCred?.userId || null,
       })
       .run()
 
@@ -496,6 +516,7 @@ export const anthropicAccountsRouter = router({
       })
       .run()
 
+    console.log("[migrateLegacy] Successfully migrated account:", newId)
     return { migrated: true, accountId: newId }
   }),
 })
