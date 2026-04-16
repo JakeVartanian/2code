@@ -52,7 +52,7 @@ export function useJustUpdated() {
     if (api) {
       // Link to changelog with anchor to current version
       const version = justUpdatedVersion ? `#v${justUpdatedVersion}` : ""
-      api.openExternal(`https://github.com`) // TODO: Set 2Code changelog URL
+      api.openExternal(`https://github.com/JakeVartanian/2code/releases${version}`)
     }
     dismissJustUpdated()
   }, [justUpdatedVersion, dismissJustUpdated])

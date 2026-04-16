@@ -13,6 +13,7 @@ import fs from "node:fs"
 import path from "node:path"
 import https from "node:https"
 import crypto from "node:crypto"
+import { execSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -206,6 +207,16 @@ async function downloadPlatform(version, platformKey, manifest) {
   // Make executable (Unix)
   if (process.platform !== "win32") {
     fs.chmodSync(targetPath, 0o755)
+  }
+
+  // Ad-hoc codesign on macOS — prevents Gatekeeper SIGKILL for standalone binaries
+  if (process.platform === "darwin" && platformKey.startsWith("darwin")) {
+    try {
+      execSync(`codesign --force --sign - "${targetPath}"`, { stdio: "pipe" })
+      console.log(`  Ad-hoc codesigned for macOS`)
+    } catch (e) {
+      console.warn(`  Warning: ad-hoc codesign failed: ${e.message}`)
+    }
   }
 
   console.log(`  Saved to: ${targetPath}`)

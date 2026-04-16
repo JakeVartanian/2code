@@ -136,7 +136,7 @@ export function UpdateBanner() {
 
   const handleOpenChangelog = () => {
     // Open changelog URL
-    window.desktopApi?.openExternal("https://github.com") // TODO: Set 2Code changelog URL
+    window.desktopApi?.openExternal("https://github.com/JakeVartanian/2code/releases")
     // Dismiss the banner
     if (isMocking) {
       setMockStatus("dismissed")
