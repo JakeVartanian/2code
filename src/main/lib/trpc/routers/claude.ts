@@ -2509,11 +2509,6 @@ ${prompt}
                             'Only ".md" files can be modified in plan mode.',
                         }
                       }
-                    } else if (toolName == "ExitPlanMode") {
-                      return {
-                        behavior: "deny",
-                        message: `IMPORTANT: DONT IMPLEMENT THE PLAN UNTIL THE EXPLIT COMMAND. THE PLAN WAS **ONLY** PRESENTED TO USER, FINISH CURRENT MESSAGE AS SOON AS POSSIBLE`,
-                      }
                     } else if (PLAN_MODE_BLOCKED_TOOLS.has(toolName)) {
                       return {
                         behavior: "deny",
@@ -3217,6 +3212,12 @@ ${prompt}
                               }
                             }
                           }
+                        }
+
+                        // Plan mode: stop stream after ExitPlanMode completes
+                        if (exitPlanModeToolCallId && chunk.toolCallId === exitPlanModeToolCallId) {
+                          console.log(`[SD] M:PLAN_EXIT_STOP sub=${subId} - stopping stream after ExitPlanMode`)
+                          abortController.abort()
                         }
                         break
                       case "message-metadata":
