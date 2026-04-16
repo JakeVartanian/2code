@@ -1,5 +1,4 @@
 import { cn } from "../../../lib/utils"
-import { api } from "../../../lib/mock-api"
 import { trpc } from "../../../lib/trpc"
 import { keepPreviousData } from "@tanstack/react-query"
 import {
@@ -775,22 +774,16 @@ export const AgentsFileMention = memo(function AgentsFileMention({
     isLoading,
     isFetching,
     error,
-  } = api.github.searchFiles.useQuery(
+  } = trpc.files.search.useQuery(
     {
-      teamId: teamId!,
-      repository: repository!,
+      projectPath: projectPath || "",
       query: apiSearchQuery,
       limit: 50,
-      sandboxId: sandboxId,
-      branch: branch, // Pass branch for GitHub API fetch
-      projectPath: projectPath, // For local project file search (desktop)
     },
     {
-      // Enable if we have projectPath (desktop) OR teamId with repository/sandboxId/branch (web)
-      enabled: isOpen && (!!projectPath || (!!teamId && (!!repository || !!sandboxId || !!branch))),
+      enabled: isOpen && !!projectPath,
       staleTime: 5000,
       refetchOnWindowFocus: false,
-      // Keep showing previous results while fetching new ones
       placeholderData: keepPreviousData,
     },
   )

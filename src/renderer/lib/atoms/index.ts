@@ -434,7 +434,7 @@ export const extendedThinkingEnabledAtom = atom(
 // Preferences - Effort Level
 // Controls how much computational effort Claude puts into responses
 // "low" = fast, minimal reasoning; "medium" = balanced; "high" = deepest reasoning
-export type EffortLevel = "low" | "medium" | "high"
+export type EffortLevel = "low" | "medium" | "high" | "xhigh"
 
 export const effortLevelAtom = atomWithStorage<EffortLevel>(
   "preferences:effort-level",
@@ -525,7 +525,7 @@ export const betaGitFeaturesEnabledAtom = atomWithStorage<boolean>(
 // When enabled, shows Kanban button in sidebar to view workspaces as a board
 export const betaKanbanEnabledAtom = atomWithStorage<boolean>(
   "preferences:beta-kanban-enabled",
-  true, // Default ON — graduated from beta
+  false, // Default OFF — disabled per user preference
   undefined,
   { getOnInit: true },
 )

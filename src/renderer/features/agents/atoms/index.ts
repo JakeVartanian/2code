@@ -338,6 +338,7 @@ export const subChatModeAtomFamily = atomFamily((subChatId: string) =>
 // Model ID to full Claude model string mapping
 export const MODEL_ID_MAP: Record<string, string> = {
   opus: "opus",
+  opus46: "claude-opus-4-6",
   sonnet: "sonnet",
   haiku: "haiku",
 }

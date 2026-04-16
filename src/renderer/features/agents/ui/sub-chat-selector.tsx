@@ -45,7 +45,6 @@ import {
   ContextMenuTrigger,
 } from "../../../components/ui/context-menu"
 import { InlineEdit } from "./inline-edit"
-import { api } from "../../../lib/mock-api"
 import { toast } from "sonner"
 import { SearchCombobox } from "../../../components/ui/search-combobox"
 import { SubChatContextMenu } from "./sub-chat-context-menu"
@@ -390,12 +389,12 @@ export const SubChatSelector = memo(function SubChatSelector({
   const [editName, setEditName] = useState("")
   const [editLoading, setEditLoading] = useState(false)
 
-  const renameMutation = api.agents.renameSubChat.useMutation({
+  const renameMutation = trpc.chats.renameSubChat.useMutation({
     onSuccess: (_, variables) => {
       // Update local store
       useAgentSubChatStore
         .getState()
-        .updateSubChatName(variables.subChatId, variables.name)
+        .updateSubChatName(variables.id, variables.name)
     },
     onError: (error) => {
       // Show helpful error message (like Canvas)
@@ -442,7 +441,7 @@ export const SubChatSelector = memo(function SubChatSelector({
 
       try {
         await renameMutation.mutateAsync({
-          subChatId: subChat.id,
+          id: subChat.id,
           name: trimmedName,
         })
       } catch {

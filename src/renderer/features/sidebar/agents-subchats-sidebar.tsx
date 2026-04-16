@@ -35,7 +35,7 @@ import {
   chatSourceModeAtom,
   defaultAgentModeAtom,
 } from "../../lib/atoms"
-import { trpc } from "../../lib/trpc"
+import { trpc, trpcClient } from "../../lib/trpc"
 import { appStore } from "../../lib/jotai-store"
 import {
   useAgentSubChatStore,
@@ -82,8 +82,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../components/ui/alert-dialog"
-import { api } from "../../lib/mock-api"
-import { trpcClient } from "../../lib/trpc"
 import { toast } from "sonner"
 import { AgentsRenameSubChatDialog } from "../agents/components/agents-rename-subchat-dialog"
 import { SearchCombobox } from "../../components/ui/search-combobox"
@@ -273,10 +271,7 @@ export function AgentsSubChatsSidebar({
   const previousChatId = useAtomValue(previousAgentChatIdAtom)
 
   // Fetch agent chats for navigation after archive
-  const { data: agentChats } = api.agents.getAgentChats.useQuery(
-    { teamId: selectedTeamId! },
-    { enabled: !!selectedTeamId },
-  )
+  const { data: agentChats } = trpc.chats.list.useQuery({})
 
   const utils = trpc.useUtils()
 
@@ -692,7 +687,7 @@ export function AgentsSubChatsSidebar({
     }
   }, [parentChatId, setUndoStack])
 
-  const renameMutation = api.agents.renameSubChat.useMutation({
+  const renameMutation = trpc.chats.renameSubChat.useMutation({
     // Note: store is updated optimistically in handleRenameSave, no need for onSuccess
     onError: (error) => {
       if (error.data?.code === "NOT_FOUND") {
@@ -732,7 +727,7 @@ export function AgentsSubChatsSidebar({
 
       try {
         await renameMutation.mutateAsync({
-          subChatId,
+          id: subChatId,
           name: newName,
         })
       } catch {

@@ -1389,7 +1389,7 @@ export const claudeRouter = router({
           ])
           .optional(),
         maxThinkingTokens: z.number().optional(), // Deprecated — kept for backwards compat
-        effort: z.enum(["low", "medium", "high"]).optional(),
+        effort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
         images: z.array(imageAttachmentSchema).optional(), // Image attachments
         historyEnabled: z.boolean().optional(),
         offlineModeEnabled: z.boolean().optional(), // Whether offline mode (Ollama) is enabled in settings
@@ -2688,6 +2688,10 @@ ${prompt}
             const MAX_OPENROUTER_RATE_LIMIT_RETRIES = 3
             let openRouterRateLimitRetryCount = 0
             let openRouterRateLimitRetryNeeded = false
+            // Auto-retry on empty response (stream closed with no messages received)
+            const MAX_EMPTY_RESPONSE_RETRIES = 2
+            let emptyResponseRetryCount = 0
+            let emptyResponseRetryNeeded = false
             let messageCount = 0
             let pendingFinishChunk: UIMessageChunk | null = null
 
@@ -2696,6 +2700,7 @@ ${prompt}
               policyRetryNeeded = false
               authRetryNeeded = false
               openRouterRateLimitRetryNeeded = false
+              emptyResponseRetryNeeded = false
               messageCount = 0
               pendingFinishChunk = null
 
@@ -3456,21 +3461,39 @@ ${prompt}
                 continue
               }
 
+              // Retry if empty response received (transient stream closure)
+              if (emptyResponseRetryNeeded) {
+                console.log(
+                  `[claude] Empty response retry ${emptyResponseRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES} - restarting stream`,
+                )
+                continue
+              }
+
               break
             } // end policyRetryLoop
 
             // 6. Check if we got any response
             if (messageCount === 0 && !abortController.signal.aborted) {
-              emitError(
-                new Error("No response received from Claude"),
-                "Empty response",
-              )
-              console.log(
-                `[SD] M:END sub=${subId} reason=no_response n=${chunkCount}`,
-              )
-              safeEmit({ type: "finish" } as UIMessageChunk)
-              safeComplete()
-              return
+              // Retry on empty response - stream may have closed prematurely due to transient issues
+              if (emptyResponseRetryCount < MAX_EMPTY_RESPONSE_RETRIES) {
+                emptyResponseRetryCount++
+                console.log(
+                  `[claude] Empty response retry ${emptyResponseRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES} - restarting stream`,
+                )
+                emptyResponseRetryNeeded = true
+              } else {
+                // Max retries reached, emit error
+                emitError(
+                  new Error("No response received from Claude"),
+                  "Empty response",
+                )
+                console.log(
+                  `[SD] M:END sub=${subId} reason=no_response n=${chunkCount}`,
+                )
+                safeEmit({ type: "finish" } as UIMessageChunk)
+                safeComplete()
+                return
+              }
             }
 
             // 7. Save final messages to DB

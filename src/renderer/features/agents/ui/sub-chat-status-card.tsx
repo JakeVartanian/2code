@@ -210,7 +210,9 @@ export const SubChatStatusCard = memo(function SubChatStatusCard({
               size="sm"
               onClick={(e) => {
                 e.stopPropagation()
-                onStop()
+                onStop().catch((err) => {
+                  console.error("Error stopping chat:", err)
+                })
               }}
               className="h-6 px-2 text-xs font-normal rounded-md transition-transform duration-150 active:scale-[0.97]"
             >

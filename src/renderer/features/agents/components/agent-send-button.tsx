@@ -80,10 +80,10 @@ export function AgentSendButton({
   const shouldShowQueueArrow = isStreaming && hasContent
 
   // Determine the actual click handler based on state
-  const handleClick = () => {
+  const handleClick = async () => {
     if (isStreaming && !hasContent && onStop) {
       // Stop only when streaming and no content to queue
-      onStop()
+      await onStop()
     } else {
       // Send (or add to queue if streaming)
       onClick()
@@ -248,7 +248,11 @@ export function AgentSendButton({
       // Starting is handled by mouseDown
       return
     }
-    handleClick()
+    // handleClick is async, but we don't need to await it in the click handler
+    // The promise will execute in the background
+    handleClick().catch((err) => {
+      console.error("Error in send/stop action:", err)
+    })
   }
 
   return (

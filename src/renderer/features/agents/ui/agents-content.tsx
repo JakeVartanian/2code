@@ -39,7 +39,7 @@ import { NewChatForm } from "../main/new-chat-form"
 import { KanbanView } from "../../kanban"
 import { AutomationsView, AutomationsDetailView, InboxView } from "../../automations"
 import { ChatView } from "../main/active-chat"
-import { api } from "../../../lib/mock-api"
+import { useAgentChat } from "../hooks/use-agent-chat"
 import { trpc } from "../../../lib/trpc"
 import { useIsMobile } from "../../../lib/hooks/use-mobile"
 import { StreamingKeepAlive } from "../components/streaming-keep-alive"
@@ -186,11 +186,9 @@ export function AgentsContent() {
     }
   }, [activeSubChatName])
 
-  // Fetch teams for header
-  const { data: teams } = api.teams.getUserTeams.useQuery(undefined, {
-    enabled: !!selectedTeamId,
-  })
-  const selectedTeam = teams?.find((t: any) => t.id === selectedTeamId) as any
+  // Desktop: no teams
+  const teams: any[] = []
+  const selectedTeam = null as any
 
   // Auto-activate automations & inbox if user has any automations configured
   // One-shot check on app startup — no refetches, no polling
@@ -211,10 +209,7 @@ export function AgentsContent() {
   }, [betaAutomationsEnabled, automationsData, setBetaAutomationsEnabled])
 
   // Fetch agent chats for keyboard navigation and mobile view
-  const { data: agentChats } = api.agents.getAgentChats.useQuery(
-    { teamId: selectedTeamId! },
-    { enabled: !!selectedTeamId },
-  )
+  const { data: agentChats } = trpc.chats.list.useQuery({})
 
   // Fetch all projects for git info (like sidebar does)
   const { data: projects } = trpc.projects.list.useQuery()
@@ -226,8 +221,8 @@ export function AgentsContent() {
   }, [projects])
 
   // Fetch current chat data for preview info
-  const { data: chatData } = api.agents.getAgentChat.useQuery(
-    { chatId: selectedChatId! },
+  const { data: chatData } = useAgentChat(
+    selectedChatId,
     { enabled: !!selectedChatId },
   )
 

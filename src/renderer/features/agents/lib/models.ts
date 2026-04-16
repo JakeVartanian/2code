@@ -17,11 +17,20 @@ export const CLAUDE_MODELS: ClaudeModel[] = [
   {
     id: "opus",
     name: "Opus",
+    version: "4.7",
+    costTier: "$$$",
+    inputCostPer1M: 5,
+    outputCostPer1M: 25,
+    tagline: "Most capable",
+  },
+  {
+    id: "opus46",
+    name: "Opus",
     version: "4.6",
     costTier: "$$$",
     inputCostPer1M: 15,
     outputCostPer1M: 75,
-    tagline: "Most capable",
+    tagline: "Previous gen",
   },
   {
     id: "sonnet",
