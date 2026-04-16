@@ -425,12 +425,28 @@ Make the system prompt specific and actionable, not generic. Include concrete ex
     .input(z.object({ apiKey: z.string() }))
     .mutation(async ({ input }) => {
       console.log("[agents-router] fetchOpenRouterModels called, key present:", !!input.apiKey)
-      const res = await fetch("https://openrouter.ai/api/v1/models", {
-        headers: { Authorization: `Bearer ${input.apiKey}` },
-      })
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 15_000)
+      let res: Response
+      try {
+        res = await fetch("https://openrouter.ai/api/v1/models", {
+          headers: { Authorization: `Bearer ${input.apiKey}` },
+          signal: controller.signal,
+        })
+      } catch (err: any) {
+        clearTimeout(timeout)
+        if (err?.name === "AbortError") {
+          throw new Error("Request timed out — OpenRouter did not respond in time")
+        }
+        throw new Error(`Failed to reach OpenRouter: ${err?.message || "network error"}`)
+      }
+      clearTimeout(timeout)
       console.log("[agents-router] OpenRouter API response status:", res.status)
       if (!res.ok) {
         console.error("[agents-router] OpenRouter API error:", res.status)
+        if (res.status === 401) throw new Error("Invalid API key")
+        if (res.status === 429) throw new Error("Rate limited — try again shortly")
+        if (res.status >= 500) throw new Error("OpenRouter is temporarily unavailable")
         throw new Error(`OpenRouter API error: ${res.status}`)
       }
       const data = (await res.json()) as {

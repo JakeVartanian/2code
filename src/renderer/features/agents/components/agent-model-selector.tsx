@@ -255,7 +255,7 @@ export function AgentModelSelector({
           />
 
           {/* Claude thinking toggle — hide when no Claude models are visible (e.g. OpenRouter-locked conv) */}
-          {!claude.isOffline && !claude.hasCustomModelConfig && claude.models.length > 0 && (
+          {!claude.isOffline && !claude.hasCustomModelConfig && claude.models.length > 0 && !openRouter?.selectedModelId && (
             <>
               <div
                 className="flex items-center justify-between min-h-[32px] py-[5px] px-1.5 mx-1"

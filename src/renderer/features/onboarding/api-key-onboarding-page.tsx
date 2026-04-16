@@ -10,6 +10,7 @@ import {
   apiKeyOnboardingCompletedAtom,
   billingMethodAtom,
   customClaudeConfigAtom,
+  openRouterApiKeyAtom,
   type CustomClaudeConfig,
 } from "../../lib/atoms"
 import { cn } from "../../lib/utils"
@@ -25,6 +26,7 @@ export function ApiKeyOnboardingPage() {
   const billingMethod = useAtomValue(billingMethodAtom)
   const setBillingMethod = useSetAtom(billingMethodAtom)
   const setApiKeyOnboardingCompleted = useSetAtom(apiKeyOnboardingCompletedAtom)
+  const setOpenRouterApiKey = useSetAtom(openRouterApiKeyAtom)
 
   const isCustomModel = billingMethod === "custom-model"
   const isOpenRouter = billingMethod === "openrouter"
@@ -92,6 +94,9 @@ export function ApiKeyOnboardingPage() {
       baseUrl: trimmedBaseUrl,
     }
     setStoredConfig(config)
+    if (isOpenRouter) {
+      setOpenRouterApiKey(trimmedToken)
+    }
     setApiKeyOnboardingCompleted(true)
 
     setIsSubmitting(false)

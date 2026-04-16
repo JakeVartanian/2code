@@ -185,6 +185,14 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     // immediately hit SESSION_EXPIRED again, and loop forever.
     const sessionId = rawSessionId && expiredSessionIds.has(rawSessionId) ? undefined : rawSessionId
 
+    // Read model selection dynamically per sub-chat (so split panes stay independent)
+    const selectedModelId = appStore.get(subChatModelIdAtomFamily(this.config.subChatId))
+    const modelString = MODEL_ID_MAP[selectedModelId]
+    if (!modelString && !selectedModelId?.includes("/")) {
+      console.warn(`[ipc-chat-transport] Unknown model ID "${selectedModelId}" — defaulting to sonnet. Check model selection.`)
+    }
+    const finalModelString = modelString || MODEL_ID_MAP["sonnet"]
+
     // Read thinking config dynamically (so toggle applies to existing chats)
     const thinkingMode = appStore.get(thinkingModeAtom)
     // Thinking is an Anthropic-only feature — disable it for non-Anthropic models to prevent crashes
@@ -193,11 +201,14 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     // thinking/effort for Claude subscription sessions.
     const _selectedORModel = appStore.get(subChatOpenRouterModelAtomFamily(this.config.subChatId))
     const _usingNonAnthropicConfig = Boolean(_selectedORModel)
+    // Opus 4.7 only supports adaptive thinking — force override to prevent 400 errors
+    const _isOpus47 = selectedModelId === "opus"
+    const _effectiveThinkingMode = _isOpus47 && thinkingMode === "enabled" ? "adaptive" : thinkingMode
     const thinkingConfig = _usingNonAnthropicConfig
       ? ({ type: "disabled" as const })
-      : thinkingMode === "adaptive"
+      : _effectiveThinkingMode === "adaptive"
         ? ({ type: "adaptive" as const })
-        : thinkingMode === "enabled"
+        : _effectiveThinkingMode === "enabled"
           ? ({ type: "enabled" as const })
           : ({ type: "disabled" as const })
 
@@ -210,14 +221,6 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     const enableTasks = appStore.get(enableTasksAtom)
     const browserAccessEnabled = appStore.get(browserAccessEnabledAtom)
 
-    // Read model selection dynamically per sub-chat (so split panes stay independent)
-    const selectedModelId = appStore.get(subChatModelIdAtomFamily(this.config.subChatId))
-    const modelString = MODEL_ID_MAP[selectedModelId]
-    if (!modelString && !selectedModelId?.includes("/")) {
-      console.warn(`[ipc-chat-transport] Unknown model ID "${selectedModelId}" — defaulting to sonnet. Check model selection.`)
-    }
-    const finalModelString = modelString || MODEL_ID_MAP["sonnet"]
-
     // Check if user selected an OpenRouter model for this sub-chat
     const selectedOpenRouterModelId = appStore.get(subChatOpenRouterModelAtomFamily(this.config.subChatId))
 
@@ -229,12 +232,11 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     if (selectedOpenRouterModelId) {
       // Build OpenRouter customConfig using the selected model.
-      // Prefer the API key stored during onboarding (customClaudeConfigAtom.token when its baseUrl
-      // points at openrouter.ai), otherwise fall back to the separately-stored openRouterApiKeyAtom.
-      const isStoredConfigOpenRouter = storedCustomConfig?.baseUrl?.includes("openrouter.ai")
+      // Prefer the Settings-editable key (openRouterApiKeyAtom) so updates take effect immediately.
+      // Fall back to onboarding key (customClaudeConfigAtom.token) for legacy users.
       const openRouterToken =
-        (isStoredConfigOpenRouter ? storedCustomConfig.token : undefined) ||
         appStore.get(openRouterApiKeyAtom) ||
+        (storedCustomConfig?.baseUrl?.includes("openrouter.ai") ? storedCustomConfig.token : undefined) ||
         ""
 
       if (openRouterToken) {

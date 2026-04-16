@@ -2662,8 +2662,11 @@ ${prompt}
                 // fallbackModel: "claude-opus-4-5-20251101",
                 // Thinking config and effort are Anthropic-only features.
                 // Don't send them to OpenRouter or other non-Anthropic endpoints — they cause invalid_request errors.
+                // Safety net: Opus 4.7 only supports adaptive thinking — force override if "enabled" was sent.
                 ...(!isNonAnthropicEndpoint && !isUsingOllama && input.thinkingConfig
-                  ? { thinking: input.thinkingConfig }
+                  ? { thinking: resolvedModel === "opus" && input.thinkingConfig.type === "enabled"
+                      ? { type: "adaptive" as const }
+                      : input.thinkingConfig }
                   : !isNonAnthropicEndpoint && !isUsingOllama && input.maxThinkingTokens
                     ? { maxThinkingTokens: input.maxThinkingTokens }
                     : {}),
