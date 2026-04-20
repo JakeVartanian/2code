@@ -169,6 +169,7 @@ interface PendingOAuth {
   tokenEndpoint: string;
   clientId: string;
   clientSecret?: string;
+  resource?: string;
   redirectUri: string;
   resolve: (result: { success: boolean; error?: string }) => void;
   timeoutId: NodeJS.Timeout;
@@ -212,13 +213,14 @@ export async function startMcpOAuth(
   }
 
   // 2. Use CraftOAuth for OAuth logic
+  // Pass both base URL (for metadata fallback) and full server URL (for PRM discovery)
   const redirectUri = getMcpOAuthRedirectUri();
   const oauth = new CraftOAuth(
-    { mcpBaseUrl: getMcpBaseUrl(serverConfig.url), redirectUri },
+    { mcpBaseUrl: getMcpBaseUrl(serverConfig.url), mcpServerUrl: serverConfig.url, redirectUri },
     { onStatus: (msg) => console.log(`[MCP OAuth] ${msg}`), onError: (err) => console.error(`[MCP OAuth] ${err}`) }
   );
 
-  // 3. Start OAuth flow (fetches metadata from .well-known, then gets auth URL)
+  // 3. Start OAuth flow (PRM discovery → metadata → registration → auth URL)
   let authFlowResult;
   try {
     authFlowResult = await oauth.startAuthFlow();
@@ -228,7 +230,7 @@ export async function startMcpOAuth(
     return { success: false, error: msg };
   }
 
-  const { authUrl, state, codeVerifier, tokenEndpoint, clientId, clientSecret } = authFlowResult;
+  const { authUrl, state, codeVerifier, tokenEndpoint, clientId, clientSecret, resource } = authFlowResult;
 
   // 4. Store pending flow and wait for callback
   return new Promise((resolve) => {
@@ -244,6 +246,7 @@ export async function startMcpOAuth(
       tokenEndpoint,
       clientId,
       clientSecret,
+      resource,
       redirectUri,
       resolve,
       timeoutId,
@@ -287,11 +290,12 @@ export async function handleMcpOAuthCallback(code: string, state: string): Promi
       pending.codeVerifier,
       pending.tokenEndpoint,
       pending.clientId,
-      pending.clientSecret
+      pending.clientSecret,
+      pending.resource
     );
 
-    // 3. Save to ~/.claude.json
-    await saveTokensToClaudeJson(pending.serverName, pending.projectPath, tokens, pending.clientId);
+    // 3. Save to ~/.claude.json (include resource for token refresh)
+    await saveTokensToClaudeJson(pending.serverName, pending.projectPath, tokens, pending.clientId, pending.resource);
 
     // 4. Notify renderer (tools will be fetched on demand via tRPC)
     BrowserWindow.getAllWindows().forEach((win) => {
@@ -355,6 +359,7 @@ export async function refreshMcpToken(
       refreshToken?: string;
       clientId?: string;
       expiresAt?: number;
+      resource?: string;
     } | undefined;
 
     if (!oauth?.refreshToken || !oauth?.clientId) {
@@ -368,7 +373,7 @@ export async function refreshMcpToken(
       { onStatus: () => {}, onError: () => {} }
     );
 
-    const tokens = await craftOAuth.refreshAccessToken(oauth.refreshToken, oauth.clientId);
+    const tokens = await craftOAuth.refreshAccessToken(oauth.refreshToken, oauth.clientId, oauth.resource);
 
     // Update ~/.claude.json with new tokens
     await saveTokensToClaudeJson(serverName, resolvedProjectPath, tokens, oauth.clientId);
@@ -437,7 +442,8 @@ async function saveTokensToClaudeJson(
   serverName: string,
   projectPath: string,
   tokens: OAuthTokens,
-  clientId?: string
+  clientId?: string,
+  resource?: string
 ): Promise<void> {
   await updateClaudeConfigAtomic((config) => {
     // Get existing server config to preserve existing headers and determine type
@@ -454,6 +460,10 @@ async function saveTokensToClaudeJson(
       Authorization: `Bearer ${tokens.accessToken}`,
     };
 
+    // Preserve existing resource if not provided (e.g. during refresh)
+    const existingOAuth = existingConfig._oauth as { resource?: string } | undefined;
+    const resolvedResource = resource ?? existingOAuth?.resource;
+
     return updateMcpServerConfig(config, projectPath, serverName, {
       // SDK-required fields
       type: serverType,
@@ -464,6 +474,7 @@ async function saveTokensToClaudeJson(
         refreshToken: tokens.refreshToken,
         clientId,
         expiresAt: tokens.expiresAt,
+        resource: resolvedResource,
       },
     });
   });

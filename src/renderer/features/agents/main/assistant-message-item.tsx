@@ -394,7 +394,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     isLastMessage &&
     contentParts.length === 0
 
-  const { nestedToolsMap, nestedToolIds, orphanTaskGroups, orphanToolCallIds, orphanFirstToolCallIds } = useMemo(() => {
+  const { nestedToolsMap, nestedToolIds } = useMemo(() => {
     const nestedToolsMap = new Map<string, any[]>()
     const nestedToolIds = new Set<string>()
     const taskPartIds = new Set(
@@ -402,9 +402,6 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
         .filter((p: any) => p.type === "tool-Task" && p.toolCallId)
         .map((p: any) => p.toolCallId)
     )
-    const orphanTaskGroups = new Map<string, { parts: any[]; firstToolCallId: string }>()
-    const orphanToolCallIds = new Set<string>()
-    const orphanFirstToolCallIds = new Set<string>()
 
     for (const part of messageParts) {
       if (part.toolCallId?.includes(":")) {
@@ -415,20 +412,13 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
           }
           nestedToolsMap.get(parentId)!.push(part)
           nestedToolIds.add(part.toolCallId)
-        } else {
-          let group = orphanTaskGroups.get(parentId)
-          if (!group) {
-            group = { parts: [], firstToolCallId: part.toolCallId }
-            orphanTaskGroups.set(parentId, group)
-            orphanFirstToolCallIds.add(part.toolCallId)
-          }
-          group.parts.push(part)
-          orphanToolCallIds.add(part.toolCallId)
         }
+        // Tools with composite IDs but no matching Task parent (orphans)
+        // are rendered as normal standalone tools — no special handling needed.
       }
     }
 
-    return { nestedToolsMap, nestedToolIds, orphanTaskGroups, orphanToolCallIds, orphanFirstToolCallIds }
+    return { nestedToolsMap, nestedToolIds }
   }, [messageParts])
 
   // Collect all plan operations (Write/Edit) for unified handling
@@ -497,13 +487,12 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
       if (p.type === "tool-TaskOutput") return false
       if (p.type === "tool-ExitPlanMode") return false
       if (p.toolCallId && nestedToolIds.has(p.toolCallId)) return false
-      if (p.toolCallId && orphanToolCallIds.has(p.toolCallId) && !orphanFirstToolCallIds.has(p.toolCallId)) return false
       if (p.type === "text" && !p.text?.trim()) return false
       return true
     }).length
 
     return { shouldCollapse, visibleStepsCount, collapseBeforeIndex }
-  }, [messageParts, isStreaming, isLastMessage, nestedToolIds, orphanToolCallIds, orphanFirstToolCallIds])
+  }, [messageParts, isStreaming, isLastMessage, nestedToolIds])
 
   // Check if any plan operation is in collapsed steps (before collapseBeforeIndex)
   const hasPlanInCollapsedSteps = useMemo(() => {
@@ -538,26 +527,6 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
   const renderPart = useCallback((part: any, idx: number, isFinal = false) => {
     if (part.type === "step-start") return null
     if (part.type === "tool-TaskOutput") return null
-
-    if (part.toolCallId && orphanToolCallIds.has(part.toolCallId)) {
-      if (!orphanFirstToolCallIds.has(part.toolCallId)) return null
-      const parentId = part.toolCallId.split(":")[0]
-      const group = orphanTaskGroups.get(parentId)
-      if (group) {
-        return (
-          <AgentTaskTool
-            key={idx}
-            part={{
-              type: "tool-Task",
-              toolCallId: parentId,
-              input: { subagent_type: "unknown-agent", description: "Incomplete task" },
-            }}
-            nestedTools={group.parts}
-            chatStatus={status}
-          />
-        )
-      }
-    }
 
     if (part.toolCallId && nestedToolIds.has(part.toolCallId)) return null
     if (part.type === "exploring-group") return null
@@ -727,7 +696,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     }
 
     return null
-  }, [nestedToolsMap, nestedToolIds, orphanToolCallIds, orphanFirstToolCallIds, orphanTaskGroups, collapseBeforeIndex, visibleStepsCount, status, isLastMessage, isStreaming, subChatId, message.id, planOpsSummary, shouldCollapse, lastCollapsedPlanOp])
+  }, [nestedToolsMap, nestedToolIds, collapseBeforeIndex, visibleStepsCount, status, isLastMessage, isStreaming, subChatId, message.id, planOpsSummary, shouldCollapse, lastCollapsedPlanOp])
 
   if (!message) return null
 

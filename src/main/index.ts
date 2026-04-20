@@ -1100,6 +1100,15 @@ if (gotTheLock) {
   process.on("uncaughtException", (error) => {
     console.error("[App] Uncaught exception:", error)
     try { flushAllPendingWrites() } catch {}
+
+    // EPIPE errors occur when a Claude subprocess exits unexpectedly (e.g. native CLI
+    // commands like /mcp) and the SDK tries to write to the dead pipe. These are
+    // non-fatal — the streaming error handler will emit a user-facing error message.
+    // Don't let them crash the entire Electron app.
+    if ((error as NodeJS.ErrnoException).code === "EPIPE") {
+      console.warn("[App] EPIPE from subprocess pipe — suppressed (non-fatal)")
+      return
+    }
   })
 
   process.on("unhandledRejection", (reason, promise) => {

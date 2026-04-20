@@ -7,6 +7,7 @@ export interface OAuthMetadata {
   authorization_endpoint: string;
   token_endpoint: string;
   registration_endpoint?: string;
+  scopes_supported?: string[];
 }
 
 /**
@@ -27,8 +28,47 @@ export async function fetchOAuthMetadata(mcpBaseUrl: string): Promise<OAuthMetad
   }
 }
 
+export interface ProtectedResourceMetadata {
+  resource: string;
+  authorization_servers?: string[];
+  scopes_supported?: string[];
+}
+
+/**
+ * Fetch Protected Resource Metadata per RFC 9728
+ * Tries path-aware first (e.g. /mcp → /.well-known/oauth-protected-resource/mcp)
+ * Then falls back to root (/.well-known/oauth-protected-resource)
+ */
+export async function fetchProtectedResourceMetadata(
+  mcpServerUrl: string
+): Promise<ProtectedResourceMetadata | null> {
+  const url = new URL(mcpServerUrl);
+
+  // Path-aware: /.well-known/oauth-protected-resource{path}
+  const pathAwareUrl = `${url.origin}/.well-known/oauth-protected-resource${url.pathname}`;
+  // Root fallback: /.well-known/oauth-protected-resource
+  const rootUrl = `${url.origin}/.well-known/oauth-protected-resource`;
+
+  for (const candidateUrl of [pathAwareUrl, rootUrl]) {
+    try {
+      const response = await fetch(candidateUrl);
+      if (response.ok) {
+        const data = (await response.json()) as ProtectedResourceMetadata;
+        if (data.resource) {
+          return data;
+        }
+      }
+    } catch {
+      // Try next candidate
+    }
+  }
+
+  return null;
+}
+
 export interface OAuthConfig {
   mcpBaseUrl: string; // e.g., http://localhost:3000/v1/links/abc123
+  mcpServerUrl?: string; // Full MCP server URL for PRM discovery (e.g., https://mcp.figma.com/mcp)
   redirectUri?: string; // Optional custom redirect URI for deeplinks
 }
 
@@ -47,9 +87,9 @@ export interface OAuthCallbacks {
 const CALLBACK_PORT = 8914;
 const CALLBACK_PATH = '/callback';
 // Client names for OAuth registration
-// Some MCP servers (like Figma) have an allowlist - try '2code' first, fall back to 'claude'
+// Some MCP servers (like Figma) have an allowlist - try '2code' first, fall back to known-good name
 const CLIENT_NAME = '2code';
-const FALLBACK_CLIENT_NAME = 'claude';
+const FALLBACK_CLIENT_NAME = 'Claude Code (figma)';
 
 /**
  * Generate a styled OAuth callback page with terminal emulator aesthetic
@@ -520,12 +560,15 @@ export class CraftOAuth {
   }
 
   // Get OAuth server metadata
-  private async getServerMetadata(): Promise<{
+  // authServerBaseUrl overrides mcpBaseUrl when PRM provides an authorization_servers entry
+  private async getServerMetadata(authServerBaseUrl?: string): Promise<{
     authorization_endpoint: string;
     token_endpoint: string;
     registration_endpoint?: string;
+    scopes_supported?: string[];
   }> {
-    const metadataUrl = `${this.config.mcpBaseUrl}/.well-known/oauth-authorization-server`;
+    const baseUrl = authServerBaseUrl || this.config.mcpBaseUrl;
+    const metadataUrl = `${baseUrl}/.well-known/oauth-authorization-server`;
 
     const response = await fetch(metadataUrl);
     if (!response.ok) {
@@ -536,26 +579,32 @@ export class CraftOAuth {
       authorization_endpoint: string;
       token_endpoint: string;
       registration_endpoint?: string;
+      scopes_supported?: string[];
     }>;
   }
 
   // Register OAuth client dynamically
-  private async registerClient(registrationEndpoint: string, clientName: string): Promise<{
+  private async registerClient(registrationEndpoint: string, clientName: string, scope?: string): Promise<{
     client_id: string;
     client_secret?: string;
   }> {
     const redirectUri = this.config.redirectUri || `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
 
+    const body: Record<string, unknown> = {
+      client_name: clientName,
+      redirect_uris: [redirectUri],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none', // Public client
+    };
+    if (scope) {
+      body.scope = scope;
+    }
+
     const response = await fetch(registrationEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        client_name: clientName,
-        redirect_uris: [redirectUri],
-        grant_types: ['authorization_code', 'refresh_token'],
-        response_types: ['code'],
-        token_endpoint_auth_method: 'none', // Public client
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -576,7 +625,8 @@ export class CraftOAuth {
     codeVerifier: string,
     clientId: string,
     redirectUri?: string,
-    clientSecret?: string
+    clientSecret?: string,
+    resource?: string
   ): Promise<OAuthTokens> {
     const uri = redirectUri || this.config.redirectUri || `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
 
@@ -591,6 +641,11 @@ export class CraftOAuth {
     // Add client_secret if provided (some servers require it)
     if (clientSecret) {
       params.set('client_secret', clientSecret);
+    }
+
+    // RFC 9728: include resource parameter for protected resource servers
+    if (resource) {
+      params.set('resource', resource);
     }
 
     const response = await fetch(tokenEndpoint, {
@@ -622,7 +677,8 @@ export class CraftOAuth {
   // Refresh access token
   async refreshAccessToken(
     refreshToken: string,
-    clientId: string
+    clientId: string,
+    resource?: string
   ): Promise<OAuthTokens> {
     const metadata = await this.getServerMetadata();
 
@@ -631,6 +687,11 @@ export class CraftOAuth {
       refresh_token: refreshToken,
       client_id: clientId,
     });
+
+    // RFC 9728: include resource parameter for protected resource servers
+    if (resource) {
+      params.set('resource', resource);
+    }
 
     const response = await fetch(metadata.token_endpoint, {
       method: 'POST',
@@ -764,6 +825,13 @@ export class CraftOAuth {
   /**
    * Start OAuth flow without waiting for callback (for deeplink-based flows)
    * Returns the authorization URL and state/verifier for later token exchange
+   *
+   * RFC 9728 flow:
+   * 1. Fetch Protected Resource Metadata (PRM) from the MCP server URL
+   * 2. Use PRM's authorization_servers[0] to find the auth server metadata
+   * 3. Resolve scope from PRM scopes_supported → auth server scopes_supported
+   * 4. Include `resource` from PRM in auth URL and token exchange
+   *
    * @param preloadedMetadata - Optional pre-fetched OAuth metadata to avoid duplicate fetch
    */
   async startAuthFlow(preloadedMetadata?: OAuthMetadata): Promise<{
@@ -773,25 +841,49 @@ export class CraftOAuth {
     tokenEndpoint: string;
     clientId: string;
     clientSecret?: string;
+    resource?: string;
   }> {
-    this.callbacks.onStatus('Fetching OAuth server configuration...');
-    const metadata = preloadedMetadata || await this.getServerMetadata();
+    // Step 1: Try PRM discovery from full MCP server URL
+    let prm: ProtectedResourceMetadata | null = null;
+    const mcpServerUrl = this.config.mcpServerUrl;
+    if (mcpServerUrl) {
+      this.callbacks.onStatus('Discovering protected resource metadata...');
+      prm = await fetchProtectedResourceMetadata(mcpServerUrl);
+      if (prm) {
+        this.callbacks.onStatus(`Found PRM: resource=${prm.resource}`);
+      }
+    }
 
-    // Register client if endpoint available
+    // Step 2: Fetch auth server metadata
+    // If PRM provides authorization_servers, use the first one as the base
+    this.callbacks.onStatus('Fetching OAuth server configuration...');
+    let authServerBaseUrl: string | undefined;
+    if (prm?.authorization_servers?.length) {
+      authServerBaseUrl = prm.authorization_servers[0];
+      this.callbacks.onStatus(`Using PRM auth server: ${authServerBaseUrl}`);
+    }
+
+    const metadata = preloadedMetadata || await this.getServerMetadata(authServerBaseUrl);
+
+    // Step 3: Resolve scope — PRM scopes_supported → metadata scopes_supported → none
+    const resolvedScopes = prm?.scopes_supported ?? metadata.scopes_supported;
+    const scopeString = resolvedScopes?.length ? resolvedScopes.join(' ') : undefined;
+
+    // Step 4: Register client if endpoint available
     let clientId: string;
     let clientSecret: string | undefined;
     if (metadata.registration_endpoint) {
       // Try primary client name first, fall back to alternative if rejected
       this.callbacks.onStatus(`Registering client as '${CLIENT_NAME}'...`);
       try {
-        const client = await this.registerClient(metadata.registration_endpoint, CLIENT_NAME);
+        const client = await this.registerClient(metadata.registration_endpoint, CLIENT_NAME, scopeString);
         clientId = client.client_id;
         clientSecret = client.client_secret;
         this.callbacks.onStatus(`Registered as client: ${clientId}`);
       } catch (error) {
         // Try fallback client name (some servers have allowlists)
         this.callbacks.onStatus(`Registration as '${CLIENT_NAME}' failed, trying '${FALLBACK_CLIENT_NAME}'...`);
-        const client = await this.registerClient(metadata.registration_endpoint, FALLBACK_CLIENT_NAME);
+        const client = await this.registerClient(metadata.registration_endpoint, FALLBACK_CLIENT_NAME, scopeString);
         clientId = client.client_id;
         clientSecret = client.client_secret;
         this.callbacks.onStatus(`Registered as client: ${clientId}`);
@@ -813,6 +905,17 @@ export class CraftOAuth {
     authUrl.searchParams.set('code_challenge', pkce.challenge);
     authUrl.searchParams.set('code_challenge_method', 'S256');
 
+    // RFC 9728: include resource parameter from PRM
+    const resource = prm?.resource;
+    if (resource) {
+      authUrl.searchParams.set('resource', resource);
+    }
+
+    // Include scopes if resolved
+    if (scopeString) {
+      authUrl.searchParams.set('scope', scopeString);
+    }
+
     return {
       authUrl: authUrl.toString(),
       state,
@@ -820,6 +923,7 @@ export class CraftOAuth {
       tokenEndpoint: metadata.token_endpoint,
       clientId,
       clientSecret,
+      resource,
     };
   }
 
@@ -831,10 +935,11 @@ export class CraftOAuth {
     codeVerifier: string,
     tokenEndpoint: string,
     clientId: string,
-    clientSecret?: string
+    clientSecret?: string,
+    resource?: string
   ): Promise<OAuthTokens> {
     const redirectUri = this.config.redirectUri || `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
-    return this.exchangeCodeForTokens(tokenEndpoint, code, codeVerifier, clientId, redirectUri, clientSecret);
+    return this.exchangeCodeForTokens(tokenEndpoint, code, codeVerifier, clientId, redirectUri, clientSecret, resource);
   }
 
   // Start local HTTP server to receive OAuth callback

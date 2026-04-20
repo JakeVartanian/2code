@@ -100,10 +100,15 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
 
   return function* transform(msg: any): Generator<UIMessageChunk> {
 
-    // Track parent_tool_use_id for nested tools
-    // Only update when explicitly present (don't reset on messages without it)
+    // Track parent_tool_use_id for nested tools.
+    // Reset when explicitly present (including null = back to top level).
+    // Also reset on new assistant messages that omit the field — a new API turn
+    // means we're back at the top level unless parent_tool_use_id says otherwise.
     if (msg.parent_tool_use_id !== undefined) {
       currentParentToolUseId = msg.parent_tool_use_id
+    } else if (msg.type === "assistant") {
+      // New assistant turn without explicit parent → back to top level
+      currentParentToolUseId = null
     }
 
     // Emit start once

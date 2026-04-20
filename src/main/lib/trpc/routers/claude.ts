@@ -3332,6 +3332,12 @@ ${prompt}
                   errorContext =
                     "Your CPU does not support AVX instructions required by the bundled runtime. Please update 2Code to the latest version for improved compatibility, or contact support."
                   errorCategory = "CPU_INCOMPATIBLE"
+                } else if (
+                  err.message?.includes("EPIPE") ||
+                  (err as NodeJS.ErrnoException).code === "EPIPE"
+                ) {
+                  errorContext = "Claude process exited unexpectedly"
+                  errorCategory = "PROCESS_CRASH"
                 } else if (err.message?.includes("exited with code")) {
                   errorContext = "Claude Code process crashed"
                   errorCategory = "PROCESS_CRASH"

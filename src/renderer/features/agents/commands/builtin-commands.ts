@@ -37,7 +37,7 @@ export function isPromptCommand(
 }
 
 /** Commands that are passed through as-is to the Claude CLI (native CLI commands) */
-export const CLI_PASSTHROUGH_COMMANDS = new Set(["usage", "doctor", "config", "memory"])
+export const CLI_PASSTHROUGH_COMMANDS = new Set(["usage", "doctor", "config", "memory", "mcp"])
 
 /**
  * Built-in slash commands that are handled client-side
@@ -97,6 +97,13 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommandOption[] = [
     name: "memory",
     command: "/memory",
     description: "Edit Claude's memory (CLAUDE.md files)",
+    category: "builtin",
+  },
+  {
+    id: "builtin:mcp",
+    name: "mcp",
+    command: "/mcp",
+    description: "Manage MCP server connections",
     category: "builtin",
   },
   // Prompt-based commands
