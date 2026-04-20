@@ -1120,5 +1120,14 @@ if (gotTheLock) {
   process.on("unhandledRejection", (reason, promise) => {
     console.error("[App] Unhandled rejection at:", promise, "reason:", reason)
     try { flushAllPendingWrites() } catch {}
+
+    // "Operation aborted" rejections occur when the Claude SDK tries to write
+    // to a subprocess after AbortController.abort() has been called (e.g. user
+    // cancels a session or the app is quitting). These are non-fatal — the
+    // session cleanup code handles the teardown.
+    if (reason instanceof Error && reason.message === "Operation aborted") {
+      console.warn("[App] Operation aborted from subprocess — suppressed (non-fatal)")
+      return
+    }
   })
 }
