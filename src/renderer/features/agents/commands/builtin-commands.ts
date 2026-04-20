@@ -106,6 +106,28 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommandOption[] = [
     description: "Manage MCP server connections",
     category: "builtin",
   },
+  // Memory commands
+  {
+    id: "builtin:memory-add",
+    name: "memory-add",
+    command: "/memory-add",
+    description: "Add a new project memory (fact, convention, or gotcha)",
+    category: "builtin",
+  },
+  {
+    id: "builtin:memory-list",
+    name: "memory-list",
+    command: "/memory-list",
+    description: "List all project memories for the current project",
+    category: "builtin",
+  },
+  {
+    id: "builtin:memory-validate",
+    name: "memory-validate",
+    command: "/memory-validate",
+    description: "Check all memories for stale file references",
+    category: "builtin",
+  },
   // Prompt-based commands
   {
     id: "builtin:review",

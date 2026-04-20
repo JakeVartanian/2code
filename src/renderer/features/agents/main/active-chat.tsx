@@ -232,6 +232,8 @@ import {
 import { CopyButton, PlayButton, PLAYBACK_SPEEDS, type PlaybackSpeed, ScrollToBottomButton, MessageGroup, CollapsibleSteps } from "./components"
 import { DiffStateContext, useDiffState, DiffSidebarContent, DiffStateProvider, DiffSidebarRenderer, type DiffSidebarContentProps } from "./diff"
 import { utf8ToBase64, base64ToUtf8 } from "../utils/base64"
+// Lazy-loaded: Orchestrator view only loads when orchestrator tab is active
+const OrchestratorView = lazy(() => import("../ui/orchestrator/orchestrator-view").then(m => ({ default: m.OrchestratorView })))
 
 // Inner chat component - only rendered when chat object is ready
 // Memoized to prevent re-renders when parent state changes (e.g., selectedFilePath)
@@ -4648,7 +4650,7 @@ Make sure to preserve all functionality from both branches when resolving confli
           createdAt ?? existingLocal?.created_at ?? new Date().toISOString(),
         updated_at: updatedAt ?? existingLocal?.updated_at,
         mode:
-          (sc.mode as "plan" | "agent" | undefined) ||
+          (sc.mode as "plan" | "agent" | "orchestrator" | undefined) ||
           existingLocal?.mode ||
           "agent",
       }
@@ -4694,6 +4696,33 @@ Make sure to preserve all functionality from both branches when resolving confli
       if (!currentActive || !validOpenIds.includes(currentActive)) {
         freshState.setActiveSubChat(validOpenIds[0])
       }
+    }
+
+    // Auto-create orchestrator tab if none exists for this workspace
+    const hasOrchestrator = allSubChats.some(sc => sc.mode === "orchestrator")
+    if (!hasOrchestrator && chatId) {
+      trpcClient.chats.createSubChat.mutate({
+        chatId,
+        name: "Orchestrator",
+        mode: "orchestrator",
+      }).then((newSc) => {
+        const store = useAgentSubChatStore.getState()
+        const orchMeta: SubChatMeta = {
+          id: newSc.id,
+          name: "Orchestrator",
+          mode: "orchestrator",
+          created_at: new Date().toISOString(),
+        }
+        store.addToAllSubChats(orchMeta)
+        // Add to open tabs at front (position 0) so it's always visible
+        const currentOpen = store.openSubChatIds
+        if (!currentOpen.includes(newSc.id)) {
+          store.setOpenSubChats([newSc.id, ...currentOpen])
+        }
+        appStore.set(subChatModeAtomFamily(newSc.id), "orchestrator" as AgentMode)
+      }).catch(() => {
+        // Silently fail — orchestrator tab creation is non-critical
+      })
     }
   }, [agentChat, chatId])
 
@@ -5952,7 +5981,10 @@ Make sure to preserve all functionality from both branches when resolving confli
                   )
                 }
 
-                // ACTIVE TAB: Full rendering with ChatViewInner
+                // ACTIVE TAB: Full rendering with ChatViewInner or OrchestratorView
+                const subChatMeta = allSubChats.find(sc => sc.id === subChatId) ?? agentSubChats.find(sc => sc.id === subChatId)
+                const isOrchestratorMode = subChatMeta?.mode === "orchestrator"
+
                 return (
                   <div
                     key={subChatId}
@@ -5965,31 +5997,47 @@ Make sure to preserve all functionality from both branches when resolving confli
                       contain: "layout style paint",
                     }}
                   >
-                    <ChatDataSync chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={true}>
-                    <ChatViewInner
-                      subChatId={subChatId}
-                      parentChatId={chatId}
-                      provider={inferProviderFromMessages(subChatId)}
-                      isFirstSubChat={isFirstSubChat}
-                      onAutoRename={handleAutoRename}
-                      onCreateNewSubChat={handleCreateNewSubChat}
-                      onProviderChange={handleProviderChange}
-                      teamId={selectedTeamId || undefined}
-                      repository={repository}
-                      isMobile={isMobileFullscreen}
-                      isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
-                      sandboxId={sandboxId || undefined}
-                      projectPath={worktreePath || undefined}
-                      isArchived={isArchived}
-                      onRestoreWorkspace={handleRestoreWorkspace}
-                      existingPrUrl={agentChat?.prUrl}
-                      isActive={true}
-                      isSplitPane={false}
-                      workspaceName={agentChat?.name ?? null}
-                      workspaceBranch={agentChat?.branch ?? null}
-                      workspaceRepoName={(agentChat as any)?.project?.gitRepo || (agentChat as any)?.project?.name || null}
-                    />
-                    </ChatDataSync>
+                    {isOrchestratorMode ? (
+                      <Suspense fallback={<div className="flex items-center justify-center h-full"><IconSpinner className="h-6 w-6 animate-spin" /></div>}>
+                        <OrchestratorView
+                          chatId={chatId}
+                          subChatId={subChatId}
+                          onNavigateToSubChat={(targetId) => {
+                            const store = useAgentSubChatStore.getState()
+                            if (!store.openSubChatIds.includes(targetId)) {
+                              store.addToOpenSubChats(targetId)
+                            }
+                            store.setActiveSubChat(targetId)
+                          }}
+                        />
+                      </Suspense>
+                    ) : (
+                      <ChatDataSync chat={chat} subChatId={subChatId} streamId={agentChatStore.getStreamId(subChatId)} isActive={true}>
+                      <ChatViewInner
+                        subChatId={subChatId}
+                        parentChatId={chatId}
+                        provider={inferProviderFromMessages(subChatId)}
+                        isFirstSubChat={isFirstSubChat}
+                        onAutoRename={handleAutoRename}
+                        onCreateNewSubChat={handleCreateNewSubChat}
+                        onProviderChange={handleProviderChange}
+                        teamId={selectedTeamId || undefined}
+                        repository={repository}
+                        isMobile={isMobileFullscreen}
+                        isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
+                        sandboxId={sandboxId || undefined}
+                        projectPath={worktreePath || undefined}
+                        isArchived={isArchived}
+                        onRestoreWorkspace={handleRestoreWorkspace}
+                        existingPrUrl={agentChat?.prUrl}
+                        isActive={true}
+                        isSplitPane={false}
+                        workspaceName={agentChat?.name ?? null}
+                        workspaceBranch={agentChat?.branch ?? null}
+                        workspaceRepoName={(agentChat as any)?.project?.gitRepo || (agentChat as any)?.project?.name || null}
+                      />
+                      </ChatDataSync>
+                    )}
                   </div>
                 )
               })

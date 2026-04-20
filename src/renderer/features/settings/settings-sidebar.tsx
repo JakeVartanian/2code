@@ -14,6 +14,7 @@ import {
 } from "../../lib/atoms"
 import { cn } from "../../lib/utils"
 import {
+  BookIcon,
   BrainFilledIcon,
   BugFilledIcon,
   CustomAgentIconFilled,
@@ -93,6 +94,11 @@ const ADVANCED_TABS_BASE = [
     id: "plugins" as SettingsTab,
     label: "Plugins",
     icon: PluginFilledIcon,
+  },
+  {
+    id: "memory" as SettingsTab,
+    label: "Memory",
+    icon: BookIcon,
   },
   {
     id: "sections" as SettingsTab,

@@ -4,10 +4,10 @@ import { atomFamily } from "jotai-family"
 import { atomWithWindowStorage } from "../../../lib/window-storage"
 import type { FileMentionOption } from "../mentions/agents-mentions-editor"
 
-// Agent mode type - extensible for future modes like "debug"
-export type AgentMode = "agent" | "plan"
+// Agent mode type - extensible for orchestrator and future modes
+export type AgentMode = "agent" | "plan" | "orchestrator"
 
-// Ordered list of modes - Shift+Tab cycles through these
+// Ordered list of modes - Shift+Tab cycles through these (orchestrator excluded — not a toggle target)
 export const AGENT_MODES: AgentMode[] = ["agent", "plan"]
 
 // Get next mode in cycle (for Shift+Tab toggle)

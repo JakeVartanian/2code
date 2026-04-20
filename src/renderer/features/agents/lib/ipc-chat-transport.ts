@@ -146,7 +146,7 @@ type IPCChatTransportConfig = {
   subChatId: string
   cwd: string
   projectPath?: string // Original project path for MCP config lookup (when using worktrees)
-  mode: "plan" | "agent"
+  mode: "plan" | "agent" | "orchestrator"
   model?: string
 }
 
@@ -273,11 +273,14 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     const autoOfflineMode = appStore.get(autoOfflineModeAtom)
     const offlineModeEnabled = showOfflineFeatures && autoOfflineMode
 
-    const currentMode =
+    const rawMode =
       useAgentSubChatStore
         .getState()
         .allSubChats.find((subChat) => subChat.id === this.config.subChatId)
         ?.mode || this.config.mode
+    // Orchestrator tabs never send messages through the chat transport,
+    // but guard against invalid mode values reaching the Claude router
+    const currentMode = rawMode === "orchestrator" ? "agent" : rawMode
 
     // Stream debug logging
     const subId = this.config.subChatId.slice(-8)

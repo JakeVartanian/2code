@@ -31,7 +31,9 @@ import {
   type ClaudeConfig,
   type McpServerConfig,
 } from "../../claude-config"
-import { anthropicAccounts, anthropicSettings, chats, claudeCodeCredentials, getDatabase, projects as projectsTable, subChats } from "../../db"
+import { anthropicAccounts, anthropicSettings, chats, claudeCodeCredentials, getDatabase, projects as projectsTable, subChats, projectMemories } from "../../db"
+import { getMemoriesForInjection } from "../../memory/injection"
+import { extractMemoriesAsync } from "../../memory/extraction"
 import { scheduleDebouncedWrite, flushPendingWrite, flushAllPendingWrites } from "../../db/debounced-writer"
 import { createRollbackStash } from "../../git/stash"
 import {
@@ -688,6 +690,20 @@ export async function abortAllClaudeSessions(windowId?: number): Promise<void> {
 
   // Flush any remaining debounced writes
   flushAllPendingWrites()
+}
+
+/**
+ * Abort a single Claude session by subChatId.
+ * Returns true if the session was found and aborted, false if not found (already finished).
+ */
+export function abortClaudeSession(subChatId: string): boolean {
+  const session = activeSessions.get(subChatId)
+  if (!session) return false
+
+  console.log(`[claude] Aborting session ${subChatId}`)
+  session.abortController.abort()
+  activeSessions.delete(subChatId)
+  return true
 }
 
 // In-memory cache of working MCP server names (resets on app restart)
@@ -2366,6 +2382,28 @@ ${prompt}
               }
               // Non-Anthropic, non-Ollama (e.g. OpenRouter): skip AGENTS.md — no caching benefit
             }
+
+            // Inject project memories into system prompt (if project has memories)
+            try {
+              const chatRecord = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+              if (chatRecord?.projectId) {
+                const memoryResult = await getMemoriesForInjection(
+                  chatRecord.projectId,
+                  input.prompt, // Use first message as context hint
+                  2000, // Default token budget
+                )
+                if (memoryResult.markdown) {
+                  systemAppend += `\n\n${memoryResult.markdown}`
+                  console.log(
+                    `[SD] Injected ${memoryResult.memoriesUsed} project memories (~${memoryResult.tokensUsed} tokens)`,
+                  )
+                }
+              }
+            } catch (err) {
+              console.error("[SD] Failed to inject project memories:", err)
+              // Non-critical — continue without memories
+            }
+
             if (disabledSections.length > 0) {
               const sectionList = disabledSections
                 .map((s) => `- ${s.name} (${s.patterns.join(", ")})`)
@@ -3551,6 +3589,25 @@ ${prompt}
             // Create snapshot stash for rollback support
             if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
               await createRollbackStash(input.cwd, metadata.sdkMessageUuid)
+            }
+
+            // Auto-extract project memories from completed session (fire-and-forget)
+            if (messageCount >= 3) {
+              try {
+                const chatForMemory = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+                if (chatForMemory?.projectId) {
+                  const msgsForExtraction = messagesToSave ?? []
+                  extractMemoriesAsync(
+                    chatForMemory.projectId,
+                    input.subChatId,
+                    msgsForExtraction,
+                  ).catch(err => {
+                    console.error("[SD] Memory extraction failed:", err)
+                  })
+                }
+              } catch (err) {
+                console.error("[SD] Failed to start memory extraction:", err)
+              }
             }
 
             const duration = ((Date.now() - streamStart) / 1000).toFixed(1)

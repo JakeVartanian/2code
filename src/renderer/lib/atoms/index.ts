@@ -198,6 +198,7 @@ export type SettingsTab =
   | "debug"
   | "beta"
   | "keyboard"
+  | "memory"
   | "sections"
 export const agentsSettingsDialogActiveTabAtom = atom<SettingsTab>("preferences")
 // Derived atom: maps settings open/close to desktopView navigation
@@ -981,6 +982,34 @@ import type { ExternalApp } from "../../../shared/external-apps"
 export const preferredEditorAtom = atomWithStorage<ExternalApp>(
   "preferences:preferred-editor",
   "cursor",
+  undefined,
+  { getOnInit: true },
+)
+
+// ============================================
+// PROJECT MEMORY ATOMS
+// ============================================
+
+// Whether auto-capture of memories from completed sessions is enabled
+export const memoryAutoCaptureEnabledAtom = atomWithStorage<boolean>(
+  "preferences:memory-auto-capture-enabled",
+  true,
+  undefined,
+  { getOnInit: true },
+)
+
+// Whether memories are injected into Claude session prompts
+export const memoryInjectionEnabledAtom = atomWithStorage<boolean>(
+  "preferences:memory-injection-enabled",
+  true,
+  undefined,
+  { getOnInit: true },
+)
+
+// Token budget for memory injection (how many tokens of memory to include)
+export const memoryTokenBudgetAtom = atomWithStorage<number>(
+  "preferences:memory-token-budget",
+  2000,
   undefined,
   { getOnInit: true },
 )

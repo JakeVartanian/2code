@@ -64,7 +64,7 @@ import { isDesktopApp, getShortcutKey } from "../../lib/utils/platform"
 import { useResolvedHotkeyDisplay } from "../../lib/hotkeys"
 import { TrafficLightSpacer } from "../agents/components/traffic-light-spacer"
 import { PopoverTrigger } from "../../components/ui/popover"
-import { AlignJustify } from "lucide-react"
+import { AlignJustify, Brain } from "lucide-react"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -132,6 +132,8 @@ const SidebarSearchHistoryPopover = memo(function SidebarSearchHistoryPopover({
             <QuestionIcon className="w-4 h-4 text-blue-500" />
           ) : isLoading ? (
             <IconSpinner className="w-4 h-4 text-muted-foreground" />
+          ) : mode === "orchestrator" ? (
+            <Brain className="w-4 h-4 text-purple-400" />
           ) : mode === "plan" ? (
             <PlanIcon className="w-4 h-4 text-muted-foreground" />
           ) : (
@@ -1429,6 +1431,8 @@ export function AgentsSubChatsSidebar({
                                       >
                                         {hasPendingQuestion ? (
                                           <QuestionIcon className="w-4 h-4 text-blue-500" />
+                                        ) : mode === "orchestrator" ? (
+                                          <Brain className="w-4 h-4 text-purple-400" />
                                         ) : mode === "plan" ? (
                                           <PlanIcon className="w-4 h-4 text-muted-foreground" />
                                         ) : (
@@ -1721,6 +1725,8 @@ export function AgentsSubChatsSidebar({
                                       >
                                         {hasPendingQuestion ? (
                                           <QuestionIcon className="w-4 h-4 text-blue-500" />
+                                        ) : mode === "orchestrator" ? (
+                                          <Brain className="w-4 h-4 text-purple-400" />
                                         ) : mode === "plan" ? (
                                           <PlanIcon className="w-4 h-4 text-muted-foreground" />
                                         ) : (

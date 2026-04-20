@@ -19,6 +19,7 @@ const AgentsProfileTab = lazy(() => import("../../components/dialogs/settings-ta
 const AgentsProjectsTab = lazy(() => import("../../components/dialogs/settings-tabs/agents-project-worktree-tab").then(m => ({ default: m.AgentsProjectsTab })))
 const AgentsSkillsTab = lazy(() => import("../../components/dialogs/settings-tabs/agents-skills-tab").then(m => ({ default: m.AgentsSkillsTab })))
 const AgentsPluginsTab = lazy(() => import("../../components/dialogs/settings-tabs/agents-plugins-tab").then(m => ({ default: m.AgentsPluginsTab })))
+const AgentsMemoryTab = lazy(() => import("../../components/dialogs/settings-tabs/agents-memory-tab").then(m => ({ default: m.AgentsMemoryTab })))
 const AgentsSectionsTab = lazy(() => import("../../components/dialogs/settings-tabs/agents-sections-tab").then(m => ({ default: m.AgentsSectionsTab })))
 
 // Check if we're in development mode
@@ -66,6 +67,8 @@ export function SettingsContent() {
         return <AgentsProjectsTab />
       case "beta":
         return <AgentsBetaTab />
+      case "memory":
+        return <AgentsMemoryTab />
       case "sections":
         return <AgentsSectionsTab />
       case "debug":
@@ -76,7 +79,7 @@ export function SettingsContent() {
   }
 
   // Two-panel tabs need full width and height, no scroll wrapper
-  const isTwoPanelTab = activeTab === "mcp" || activeTab === "skills" || activeTab === "agents" || activeTab === "projects" || activeTab === "keyboard" || activeTab === "plugins" || activeTab === "sections"
+  const isTwoPanelTab = activeTab === "mcp" || activeTab === "skills" || activeTab === "agents" || activeTab === "projects" || activeTab === "keyboard" || activeTab === "plugins" || activeTab === "memory" || activeTab === "sections"
 
   if (isTwoPanelTab) {
     return (

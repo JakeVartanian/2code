@@ -33,6 +33,7 @@ import { WindowsTitleBar } from "../../components/windows-title-bar"
 import { useUpdateChecker } from "../../lib/hooks/use-update-checker"
 import { useAgentSubChatStore } from "../agents/stores/sub-chat-store"
 import { QueueProcessor } from "../agents/components/queue-processor"
+import { OrchestrationProcessor } from "../agents/components/orchestration-processor"
 import { SettingsSidebar } from "../settings/settings-sidebar"
 
 // ============================================================================
@@ -326,6 +327,8 @@ export function AgentsLayout() {
     <TooltipProvider delayDuration={300}>
       {/* Global queue processor - handles message queues for all sub-chats */}
       <QueueProcessor />
+      {/* Global orchestration processor - drives multi-agent orchestration lifecycle */}
+      <OrchestrationProcessor />
       <ClaudeLoginModal
         hideCustomModelSettingsLink={
           claudeLoginModalConfig.hideCustomModelSettingsLink

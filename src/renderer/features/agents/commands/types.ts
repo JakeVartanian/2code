@@ -40,6 +40,11 @@ export type BuiltinCommandAction =
   | { type: "doctor" }
   | { type: "config" }
   | { type: "memory" }
+  | { type: "mcp" }
+  // Memory commands (client-side handled)
+  | { type: "memory-add" }
+  | { type: "memory-list" }
+  | { type: "memory-validate" }
   // Prompt-based commands (send to agent)
   | { type: "review" }
   | { type: "pr-comments" }

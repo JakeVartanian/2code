@@ -96,6 +96,7 @@ export function SubChatContextMenu({
   splitPaneCount = 0,
 }: SubChatContextMenuProps) {
   const closeTabShortcut = useCloseTabShortcut()
+  const isOrchestrator = subChat.mode === "orchestrator"
 
   const handleExport = useCallback((format: ExportFormat) => {
     if (!chatId) return
@@ -174,10 +175,10 @@ export function SubChatContextMenu({
           <ContextMenuItem
             onClick={() => onCloseTab?.(subChat.id)}
             className="justify-between"
-            disabled={isOnlyChat}
+            disabled={isOnlyChat || isOrchestrator}
           >
             Close chat
-            {!isOnlyChat && <Kbd>{closeTabShortcut}</Kbd>}
+            {!isOnlyChat && !isOrchestrator && <Kbd>{closeTabShortcut}</Kbd>}
           </ContextMenuItem>
           <ContextMenuItem
             onClick={() => onCloseOtherTabs?.(subChat.id)}
@@ -197,10 +198,10 @@ export function SubChatContextMenu({
           <ContextMenuItem
             onClick={() => onArchive(subChat.id)}
             className="justify-between"
-            disabled={isOnlyChat}
+            disabled={isOnlyChat || isOrchestrator}
           >
             Archive chat
-            {!isOnlyChat && <Kbd>{closeTabShortcut}</Kbd>}
+            {!isOnlyChat && !isOrchestrator && <Kbd>{closeTabShortcut}</Kbd>}
           </ContextMenuItem>
           <ContextMenuItem
             onClick={() => onArchiveAllBelow?.(subChat.id)}

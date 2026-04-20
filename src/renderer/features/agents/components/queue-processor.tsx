@@ -67,6 +67,13 @@ export function QueueProcessor() {
       }
 
       try {
+        // Pre-set streaming status to "submitted" so StreamingKeepAlive keeps
+        // ChatDataSync mounted during the gap between queue pop and stream start.
+        // Without this, popping the queue causes hasQueued=false, and since the
+        // Chat hasn't started streaming yet (isStreaming=false), ChatDataSync
+        // unmounts — breaking streaming status sync for background workers.
+        useStreamingStatusStore.getState().setStatus(subChatId, "submitted")
+
         // Build message parts from queued item
         const parts: any[] = [
           ...(item.images || []).map((img) => ({

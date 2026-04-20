@@ -18,7 +18,7 @@ type RemoteChatTransportConfig = {
   subChatId: string
   subChatName: string
   sandboxUrl: string
-  mode: "plan" | "agent"
+  mode: "plan" | "agent" | "orchestrator"
   model?: string // Claude model ID (e.g., "claude-sonnet-4-6")
 }
 

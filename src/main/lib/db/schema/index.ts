@@ -75,7 +75,7 @@ export const subChats = sqliteTable("sub_chats", {
     .references(() => chats.id, { onDelete: "cascade" }),
   sessionId: text("session_id"), // Claude SDK session ID for resume
   streamId: text("stream_id"), // Track in-progress streams
-  mode: text("mode").notNull().default("agent"), // "plan" | "agent"
+  mode: text("mode").notNull().default("agent"), // "plan" | "agent" | "orchestrator"
   messages: text("messages").notNull().default("[]"), // JSON array
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
     () => new Date(),
@@ -134,6 +134,126 @@ export const anthropicSettings = sqliteTable("anthropic_settings", {
   ),
 })
 
+// ============ PROJECT MEMORIES ============
+// Persistent project knowledge base — auto-captured + manually curated
+export const projectMemories = sqliteTable("project_memories", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  category: text("category").notNull(), // "architecture" | "convention" | "deployment" | "debugging" | "preference" | "gotcha"
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  source: text("source").notNull().default("auto"), // "auto" | "manual" | "command" | "suggested"
+  sourceSubChatId: text("source_sub_chat_id"),
+  relevanceScore: integer("relevance_score").notNull().default(50), // 0-100
+  accessCount: integer("access_count").notNull().default(0),
+  lastAccessedAt: integer("last_accessed_at", { mode: "timestamp" }),
+  validatedAt: integer("validated_at", { mode: "timestamp" }),
+  isStale: integer("is_stale", { mode: "boolean" }).$default(() => false),
+  linkedFiles: text("linked_files"), // JSON array of file paths
+  isArchived: integer("is_archived", { mode: "boolean" }).$default(() => false),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+}, (table) => [
+  index("project_memories_project_id_idx").on(table.projectId),
+  index("project_memories_category_idx").on(table.category),
+  index("project_memories_relevance_idx").on(table.relevanceScore),
+])
+
+export const projectMemoriesRelations = relations(projectMemories, ({ one }) => ({
+  project: one(projects, {
+    fields: [projectMemories.projectId],
+    references: [projects.id],
+  }),
+}))
+
+// ============ ORCHESTRATION RUNS ============
+// Top-level orchestration session — tracks goal, plan, and overall status
+export const orchestrationRuns = sqliteTable("orchestration_runs", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  chatId: text("chat_id")
+    .notNull()
+    .references(() => chats.id, { onDelete: "cascade" }),
+  controllerSubChatId: text("controller_sub_chat_id")
+    .references(() => subChats.id),
+  userGoal: text("user_goal").notNull(),
+  decomposedPlan: text("decomposed_plan").notNull(), // JSON structured plan
+  status: text("status").notNull().default("planning"), // planning | running | paused | validating | completed | failed | cancelled
+  summary: text("summary"),
+  errorMessage: text("error_message"),
+  preOrchestrationCommit: text("pre_orchestration_commit"), // git rev-parse HEAD bookmark for rollback
+  startedAt: integer("started_at", { mode: "timestamp" }),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+}, (table) => [
+  index("orchestration_runs_chat_id_idx").on(table.chatId),
+  index("orchestration_runs_status_idx").on(table.status),
+])
+
+export const orchestrationRunsRelations = relations(orchestrationRuns, ({ one, many }) => ({
+  chat: one(chats, {
+    fields: [orchestrationRuns.chatId],
+    references: [chats.id],
+  }),
+  controllerSubChat: one(subChats, {
+    fields: [orchestrationRuns.controllerSubChatId],
+    references: [subChats.id],
+  }),
+  tasks: many(orchestrationTasks),
+}))
+
+// ============ ORCHESTRATION TASKS ============
+// Individual task within an orchestration run — maps to a worker tab
+export const orchestrationTasks = sqliteTable("orchestration_tasks", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  runId: text("run_id")
+    .notNull()
+    .references(() => orchestrationRuns.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  systemPromptAppend: text("system_prompt_append"),
+  mode: text("mode").notNull().default("agent"), // "plan" | "agent"
+  subChatId: text("sub_chat_id")
+    .references(() => subChats.id),
+  status: text("status").notNull().default("pending"), // pending | blocked | queued | running | validating | completed | failed | skipped | stuck
+  sortOrder: integer("sort_order").notNull().default(0),
+  dependsOn: text("depends_on"), // JSON array of task IDs
+  autonomy: text("autonomy").notNull().default("auto"), // "auto" | "review" | "supervised" | "plan-only"
+  allowedPaths: text("allowed_paths"), // JSON array of glob patterns for scope control
+  resultSummary: text("result_summary"),
+  resultValidation: text("result_validation"),
+  validatedByTaskId: text("validated_by_task_id"),
+  startedAt: integer("started_at", { mode: "timestamp" }),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+}, (table) => [
+  index("orchestration_tasks_run_id_idx").on(table.runId),
+  index("orchestration_tasks_status_idx").on(table.status),
+])
+
+export const orchestrationTasksRelations = relations(orchestrationTasks, ({ one }) => ({
+  run: one(orchestrationRuns, {
+    fields: [orchestrationTasks.runId],
+    references: [orchestrationRuns.id],
+  }),
+  subChat: one(subChats, {
+    fields: [orchestrationTasks.subChatId],
+    references: [subChats.id],
+  }),
+}))
+
 // ============ TYPE EXPORTS ============
 export type Project = typeof projects.$inferSelect
 export type NewProject = typeof projects.$inferInsert
@@ -146,3 +266,9 @@ export type NewClaudeCodeCredential = typeof claudeCodeCredentials.$inferInsert
 export type AnthropicAccount = typeof anthropicAccounts.$inferSelect
 export type NewAnthropicAccount = typeof anthropicAccounts.$inferInsert
 export type AnthropicSettings = typeof anthropicSettings.$inferSelect
+export type ProjectMemory = typeof projectMemories.$inferSelect
+export type NewProjectMemory = typeof projectMemories.$inferInsert
+export type OrchestrationRun = typeof orchestrationRuns.$inferSelect
+export type NewOrchestrationRun = typeof orchestrationRuns.$inferInsert
+export type OrchestrationTask = typeof orchestrationTasks.$inferSelect
+export type NewOrchestrationTask = typeof orchestrationTasks.$inferInsert

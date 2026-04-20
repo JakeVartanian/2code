@@ -12,7 +12,7 @@ import {
 } from "../../details-sidebar/atoms"
 import { chatSourceModeAtom } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
-import { Plus, AlignJustify, Play, TerminalSquare, Globe, X } from "lucide-react"
+import { Plus, AlignJustify, Play, TerminalSquare, Globe, X, Brain } from "lucide-react"
 import {
   IconSpinner,
   PlanIcon,
@@ -104,6 +104,8 @@ const SearchHistoryPopover = memo(forwardRef<SearchHistoryPopoverRef, SearchHist
             <QuestionIcon className="w-4 h-4 text-blue-500" />
           ) : isLoading ? (
             <IconSpinner className="w-4 h-4 text-muted-foreground" />
+          ) : mode === "orchestrator" ? (
+            <Brain className="w-4 h-4 text-purple-400" />
           ) : mode === "plan" ? (
             <PlanIcon className="w-4 h-4 text-muted-foreground" />
           ) : (
@@ -286,17 +288,20 @@ export const SubChatSelector = memo(function SubChatSelector({
     return map
   }, [allSubChats])
 
-  // Map open IDs to metadata and sort: pinned first, then preserve user's tab order
+  // Map open IDs to metadata and sort: orchestrator first, then pinned, then preserve user's tab order
   const openSubChats = useMemo(() => {
+    const orchestratorChats: SubChatMeta[] = []
     const pinnedChats: SubChatMeta[] = []
     const unpinnedChats: SubChatMeta[] = []
 
-    // Separate pinned and unpinned while preserving order
+    // Separate orchestrator, pinned, and unpinned while preserving order
     openSubChatIds.forEach((id) => {
       const chat = allSubChatsById.get(id)
       if (!chat) return
 
-      if (pinnedSubChatIds.includes(id)) {
+      if (chat.mode === "orchestrator") {
+        orchestratorChats.push(chat)
+      } else if (pinnedSubChatIds.includes(id)) {
         pinnedChats.push(chat)
       } else {
         unpinnedChats.push(chat)
@@ -310,8 +315,8 @@ export const SubChatSelector = memo(function SubChatSelector({
       return bT - aT
     })
 
-    // Unpinned maintain their order from openSubChatIds (user's tab order)
-    const result = [...pinnedChats, ...unpinnedChats]
+    // Orchestrator always first, then pinned, then unpinned
+    const result = [...orchestratorChats, ...pinnedChats, ...unpinnedChats]
 
     // Keep split tabs adjacent when split is active.
     if (splitPaneIds.length >= 2) {
@@ -364,12 +369,20 @@ export const SubChatSelector = memo(function SubChatSelector({
   }, [])
 
   const onCloseTab = useCallback((subChatId: string) => {
+    // Prevent closing orchestrator tab
+    const meta = useAgentSubChatStore.getState().allSubChats.find(sc => sc.id === subChatId)
+    if (meta?.mode === "orchestrator") return
     useAgentSubChatStore.getState().removeFromOpenSubChats(subChatId)
   }, [])
 
   const onCloseOtherTabs = useCallback((subChatId: string) => {
     const state = useAgentSubChatStore.getState()
-    const idsToClose = state.openSubChatIds.filter((id) => id !== subChatId)
+    // Don't close orchestrator tabs
+    const idsToClose = state.openSubChatIds.filter((id) => {
+      if (id === subChatId) return false
+      const meta = state.allSubChats.find(sc => sc.id === id)
+      return meta?.mode !== "orchestrator"
+    })
     idsToClose.forEach((id) => state.removeFromOpenSubChats(id))
     state.setActiveSubChat(subChatId)
   }, [])
@@ -379,7 +392,10 @@ export const SubChatSelector = memo(function SubChatSelector({
       const state = useAgentSubChatStore.getState()
 
       // Use visual order from sorted openSubChats, not storage order
-      const idsToClose = openSubChats.slice(visualIndex + 1).map((sc) => sc.id)
+      // Don't close orchestrator tabs
+      const idsToClose = openSubChats.slice(visualIndex + 1)
+        .filter((sc) => sc.mode !== "orchestrator")
+        .map((sc) => sc.id)
       idsToClose.forEach((id) => state.removeFromOpenSubChats(id))
     },
     [openSubChats],
@@ -788,7 +804,9 @@ export const SubChatSelector = memo(function SubChatSelector({
                             ) : (
                               <>
                                 {/* Main mode icon */}
-                                {mode === "plan" ? (
+                                {mode === "orchestrator" ? (
+                                  <Brain className="w-3.5 h-3.5 text-purple-400" />
+                                ) : mode === "plan" ? (
                                   <PlanIcon className="w-3.5 h-3.5 text-muted-foreground" />
                                 ) : (
                                   <AgentIcon className="w-3.5 h-3.5 text-muted-foreground" />
@@ -854,9 +872,10 @@ export const SubChatSelector = memo(function SubChatSelector({
                           />
                         )}
 
-                        {/* Close button - only show when hovered and multiple tabs and not editing */}
+                        {/* Close button - only show when hovered and multiple tabs and not editing and not orchestrator */}
                         {openSubChats.length > 1 &&
-                          editingSubChatId !== subChat.id && (
+                          editingSubChatId !== subChat.id &&
+                          mode !== "orchestrator" && (
                             <div className="absolute right-0 top-0 bottom-0 flex items-center justify-end pr-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10">
                               <div
                                 className={cn(
