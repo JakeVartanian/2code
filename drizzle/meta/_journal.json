@@ -99,6 +99,13 @@
       "when": 1776706307443,
       "tag": "0013_nebulous_talisman",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1776723538874,
+      "tag": "0014_tearful_supreme_intelligence",
+      "breakpoints": true
     }
   ]
 }

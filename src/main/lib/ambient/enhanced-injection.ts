@@ -14,6 +14,7 @@ import { eq, and } from "drizzle-orm"
 import { getDatabase } from "../db"
 import { projectMemories } from "../db/schema"
 import { getMemoriesForInjection, type InjectionResult } from "../memory/injection"
+import { checkReactivation } from "./memory-cycling"
 
 /**
  * Enhanced injection that uses ambient knowledge for predictive context loading.
@@ -37,6 +38,13 @@ export async function getEnhancedMemoryInjection(
 
   // If brain is rich (10+ memories), increase token budget
   const tokenBudget = allMemories.length >= 10 ? Math.min(baseTokenBudget + 1000, 4000) : baseTokenBudget
+
+  // Step 0: Check if any cold memories should be re-activated based on the user's prompt
+  const promptKeywords = userPrompt.split(/\s+/).filter(w => w.length > 3)
+  try {
+    const mentionedForReactivation = extractFilePaths(userPrompt)
+    checkReactivation(projectId, mentionedForReactivation, promptKeywords)
+  } catch { /* non-critical */ }
 
   // Step 1: Extract file paths mentioned in the user's prompt
   const mentionedFiles = extractFilePaths(userPrompt)

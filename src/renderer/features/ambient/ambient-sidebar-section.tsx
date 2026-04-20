@@ -126,6 +126,9 @@ export function AmbientSidebarSection({ projectId }: { projectId: string | null 
               </p>
             </div>
           )}
+
+          {/* Injection weight indicator */}
+          <InjectionWeightBar projectId={projectId} />
         </div>
       )}
     </div>
@@ -163,6 +166,78 @@ function SuggestionRow({
         </TooltipTrigger>
         <TooltipContent side="right">
           Dismiss — system will learn
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  )
+}
+
+/**
+ * Injection weight indicator — shows how heavy the memory injection is for new sessions.
+ * Green = light, amber = moderate, red = heavy (shows Trim button).
+ */
+function InjectionWeightBar({ projectId }: { projectId: string | null }) {
+  const { data: brainStatus, refetch: refetchBrain } = trpc.ambient.getBrainStatus.useQuery(
+    { projectId: projectId! },
+    { enabled: !!projectId, refetchInterval: 60_000 },
+  )
+
+  const trimMutation = trpc.ambient.trimMemories.useMutation({
+    onSuccess: (result) => {
+      refetchBrain()
+      if (result.trimmed > 0) {
+        // Toast would be nice but keeping it quiet — the bar update is enough
+      }
+    },
+  })
+
+  if (!brainStatus || brainStatus.memoryCount === 0) return null
+
+  // Estimate injection tokens: ~80 tokens per memory on average (title + content)
+  const estimatedTokens = brainStatus.memoryCount * 80
+  // Budget caps at 3000 tokens, so effective injection is min of estimate and cap
+  const effectiveTokens = Math.min(estimatedTokens, 3000)
+  const percent = Math.round((effectiveTokens / 3000) * 100)
+
+  // Color coding
+  const isHeavy = effectiveTokens > 2500
+  const barColor = isHeavy ? "bg-red-500/70"
+    : effectiveTokens > 1500 ? "bg-amber-500/60"
+    : "bg-green-500/60"
+
+  const label = isHeavy
+    ? `~${effectiveTokens} tokens injected — Trim will archive low-value memories (they auto-reactivate when relevant again)`
+    : `~${effectiveTokens} tokens injected per session`
+
+  return (
+    <div className="px-2 pt-1">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div>
+            <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className={`h-full rounded-full ${barColor} transition-all`}
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between mt-0.5">
+              <p className={`text-[9px] ${isHeavy ? "text-red-400/70" : "text-muted-foreground/50"}`}>
+                {isHeavy ? "injection heavy" : `~${effectiveTokens}t injected`}
+              </p>
+              {isHeavy && (
+                <button
+                  onClick={() => trimMutation.mutate({ projectId: projectId! })}
+                  disabled={trimMutation.isPending}
+                  className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+                >
+                  {trimMutation.isPending ? "..." : "Trim"}
+                </button>
+              )}
+            </div>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="max-w-[200px]">
+          {label}
         </TooltipContent>
       </Tooltip>
     </div>

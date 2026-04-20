@@ -155,6 +155,15 @@ export const projectMemories = sqliteTable("project_memories", {
   isStale: integer("is_stale", { mode: "boolean" }).$default(() => false),
   linkedFiles: text("linked_files"), // JSON array of file paths
   isArchived: integer("is_archived", { mode: "boolean" }).$default(() => false),
+  // Memory cycling fields
+  state: text("state").notNull().default("active"), // "active" | "cold" | "dead"
+  injectionCount: integer("injection_count").notNull().default(0),
+  utilityCount: integer("utility_count").notNull().default(0),
+  lastUtilityAt: integer("last_utility_at", { mode: "timestamp" }),
+  archivedAt: integer("archived_at", { mode: "timestamp" }),
+  reactivatedAt: integer("reactivated_at", { mode: "timestamp" }),
+  trimCooldownUntil: integer("trim_cooldown_until", { mode: "timestamp" }),
+  isProbationary: integer("is_probationary", { mode: "boolean" }).$default(() => false),
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
     () => new Date(),
   ),
@@ -165,6 +174,7 @@ export const projectMemories = sqliteTable("project_memories", {
   index("project_memories_project_id_idx").on(table.projectId),
   index("project_memories_category_idx").on(table.category),
   index("project_memories_relevance_idx").on(table.relevanceScore),
+  index("project_memories_state_idx").on(table.state),
 ])
 
 export const projectMemoriesRelations = relations(projectMemories, ({ one }) => ({

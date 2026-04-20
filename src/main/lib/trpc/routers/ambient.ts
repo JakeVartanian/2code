@@ -13,6 +13,7 @@ import { EventEmitter } from "events"
 import { ambientAgentRegistry } from "../../ambient"
 import { createAmbientProvider } from "../../ambient/provider"
 import { buildBrain, refreshBrain, getBrainStatus } from "../../ambient/backfill"
+import { trimMemories } from "../../ambient/memory-cycling"
 import { createId } from "../../db/utils"
 
 // Event emitter for real-time suggestion notifications
@@ -367,6 +368,19 @@ export const ambientRouter = router({
         ))
         .run()
       return { success: true }
+    }),
+
+  // ============ MEMORY CYCLING ============
+
+  /**
+   * Trim low-value memories to reduce injection weight.
+   * Archives lowest-scored memories until injection budget is healthy.
+   */
+  trimMemories: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .mutation(({ input }) => {
+      const result = trimMemories(input.projectId)
+      return result
     }),
 
   // ============ ORCHESTRATION BRIDGE ============

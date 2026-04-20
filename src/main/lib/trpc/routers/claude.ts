@@ -34,6 +34,9 @@ import {
 import { anthropicAccounts, anthropicSettings, chats, claudeCodeCredentials, getDatabase, projects as projectsTable, subChats, projectMemories } from "../../db"
 import { getMemoriesForInjection } from "../../memory/injection"
 import { extractMemoriesAsync } from "../../memory/extraction"
+
+// Track injected memory IDs per session for post-session feedback
+const sessionInjectedMemories = new Map<string, string[]>()
 import { scheduleDebouncedWrite, flushPendingWrite, flushAllPendingWrites } from "../../db/debounced-writer"
 import { createRollbackStash } from "../../git/stash"
 import {
@@ -619,6 +622,51 @@ const MAX_MESSAGES_PER_CHAT = 500
  * Prune message history to prevent unbounded growth
  * Keeps only the latest MAX_MESSAGES_PER_CHAT messages
  */
+/**
+ * Extract file paths and keywords from session messages for memory feedback loop.
+ * Looks at tool calls (file reads/writes) and conversation content.
+ */
+function extractFilesFromMessages(messages: any[]): { read: string[]; modified: string[]; keywords: string[] } {
+  const read = new Set<string>()
+  const modified = new Set<string>()
+  const keywords = new Set<string>()
+
+  for (const msg of messages) {
+    // Extract from tool calls
+    if (msg.content && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === "tool_use") {
+          const input = block.input as any
+          if (input?.file_path || input?.path) {
+            const filePath = input.file_path ?? input.path
+            if (block.name?.includes("write") || block.name?.includes("edit")) {
+              modified.add(filePath)
+            } else {
+              read.add(filePath)
+            }
+          }
+        }
+        // Extract keywords from text content
+        if (block.type === "text" && typeof block.text === "string") {
+          const words = block.text.match(/\b[a-zA-Z_][a-zA-Z0-9_]{4,25}\b/g) ?? []
+          for (const w of words.slice(0, 50)) keywords.add(w)
+        }
+      }
+    }
+    // Simple string messages
+    if (typeof msg.content === "string") {
+      const words = msg.content.match(/\b[a-zA-Z_][a-zA-Z0-9_]{4,25}\b/g) ?? []
+      for (const w of words.slice(0, 50)) keywords.add(w)
+    }
+  }
+
+  return {
+    read: [...read],
+    modified: [...modified],
+    keywords: [...keywords].slice(0, 100),
+  }
+}
+
 function pruneMessageHistory(messages: any[], subChatId: string): any[] {
   if (messages.length <= MAX_MESSAGES_PER_CHAT) {
     return messages
@@ -2395,6 +2443,10 @@ ${prompt}
                 )
                 if (memoryResult.markdown) {
                   systemAppend += `\n\n${memoryResult.markdown}`
+                  // Track injected memory IDs for post-session feedback
+                  if (memoryResult.memoryIds?.length > 0) {
+                    sessionInjectedMemories.set(input.subChatId, memoryResult.memoryIds)
+                  }
                   console.log(
                     `[SD] Injected ${memoryResult.memoriesUsed} project memories (~${memoryResult.tokensUsed} tokens, enhanced)`,
                   )
@@ -3615,6 +3667,24 @@ ${prompt}
                   ).catch(err => {
                     console.error("[SD] Memory extraction failed:", err)
                   })
+
+                  // Post-session memory feedback — track which injected memories were useful
+                  try {
+                    const injectedIds = sessionInjectedMemories.get(input.subChatId)
+                    if (injectedIds && injectedIds.length > 0) {
+                      const { recordSessionFeedback } = require("../../ambient/memory-cycling")
+                      // Extract files touched from the session messages
+                      const filesInSession = extractFilesFromMessages(messagesToSave ?? [])
+                      recordSessionFeedback({
+                        projectId: chatForMemory.projectId,
+                        injectedMemoryIds: injectedIds,
+                        filesRead: filesInSession.read,
+                        filesModified: filesInSession.modified,
+                        conversationKeywords: filesInSession.keywords,
+                      })
+                      sessionInjectedMemories.delete(input.subChatId)
+                    }
+                  } catch { /* non-critical */ }
                 }
               } catch (err) {
                 console.error("[SD] Failed to start memory extraction:", err)
