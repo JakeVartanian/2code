@@ -254,6 +254,118 @@ export const orchestrationTasksRelations = relations(orchestrationTasks, ({ one 
   }),
 }))
 
+// ============ AMBIENT SUGGESTIONS ============
+// Suggestions surfaced by the ambient background agent
+export const ambientSuggestions = sqliteTable("ambient_suggestions", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  category: text("category").notNull(), // "bug" | "security" | "performance" | "test-gap" | "dead-code" | "dependency"
+  severity: text("severity").notNull(), // "info" | "warning" | "error"
+  title: text("title").notNull(),
+  description: text("description").notNull(), // Markdown
+  triggerEvent: text("trigger_event").notNull(), // "file-change" | "commit" | "branch-switch" | "ci-failure"
+  triggerFiles: text("trigger_files"), // JSON array of file paths
+  analysisModel: text("analysis_model"), // "heuristic" | "haiku" | "sonnet"
+  status: text("status").notNull().default("pending"), // "pending" | "dismissed" | "approved" | "snoozed" | "expired"
+  snoozedUntil: integer("snoozed_until", { mode: "timestamp" }),
+  confidence: integer("confidence").notNull().default(50), // 0-100
+  suggestedPrompt: text("suggested_prompt"), // Pre-filled prompt for agent tab
+  draftOrchestrationPlan: text("draft_orchestration_plan"), // JSON orchestration plan
+  resolvedSubChatId: text("resolved_sub_chat_id")
+    .references(() => subChats.id),
+  dismissReason: text("dismiss_reason"), // "not-relevant" | "already-handled" | "wrong" | "suppress-type"
+  firstViewedAt: integer("first_viewed_at", { mode: "timestamp" }),
+  tokensUsed: integer("tokens_used").default(0),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  dismissedAt: integer("dismissed_at", { mode: "timestamp" }),
+  approvedAt: integer("approved_at", { mode: "timestamp" }),
+}, (table) => [
+  index("ambient_suggestions_project_status_idx").on(table.projectId, table.status),
+  index("ambient_suggestions_created_at_idx").on(table.createdAt),
+])
+
+export const ambientSuggestionsRelations = relations(ambientSuggestions, ({ one }) => ({
+  project: one(projects, {
+    fields: [ambientSuggestions.projectId],
+    references: [projects.id],
+  }),
+  resolvedSubChat: one(subChats, {
+    fields: [ambientSuggestions.resolvedSubChatId],
+    references: [subChats.id],
+  }),
+}))
+
+// ============ AMBIENT BUDGET ============
+// Daily token budget tracking for the ambient agent (resets per day)
+export const ambientBudget = sqliteTable("ambient_budget", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  date: text("date").notNull(), // "YYYY-MM-DD" for daily reset
+  haikuInputTokens: integer("haiku_input_tokens").notNull().default(0),
+  haikuOutputTokens: integer("haiku_output_tokens").notNull().default(0),
+  haikuCalls: integer("haiku_calls").notNull().default(0),
+  sonnetInputTokens: integer("sonnet_input_tokens").notNull().default(0),
+  sonnetOutputTokens: integer("sonnet_output_tokens").notNull().default(0),
+  sonnetCalls: integer("sonnet_calls").notNull().default(0),
+  totalCostCents: integer("total_cost_cents").notNull().default(0), // Quick budget check
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+}, (table) => [
+  index("ambient_budget_project_date_idx").on(table.projectId, table.date),
+])
+
+export const ambientBudgetRelations = relations(ambientBudget, ({ one }) => ({
+  project: one(projects, {
+    fields: [ambientBudget.projectId],
+    references: [projects.id],
+  }),
+}))
+
+// ============ AMBIENT FEEDBACK ============
+// Per-category feedback weights — learned from user dismissals/approvals
+export const ambientFeedback = sqliteTable("ambient_feedback", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  category: text("category").notNull(), // Same categories as ambientSuggestions
+  weight: integer("weight").notNull().default(100), // Current weight × 100 (100 = 1.0, 75 = 0.75)
+  isSuppressed: integer("is_suppressed", { mode: "boolean" }).$default(() => false),
+  totalDismissals: integer("total_dismissals").notNull().default(0),
+  totalApprovals: integer("total_approvals").notNull().default(0),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+}, (table) => [
+  index("ambient_feedback_project_category_idx").on(table.projectId, table.category),
+])
+
+export const ambientFeedbackRelations = relations(ambientFeedback, ({ one }) => ({
+  project: one(projects, {
+    fields: [ambientFeedback.projectId],
+    references: [projects.id],
+  }),
+}))
+
 // ============ TYPE EXPORTS ============
 export type Project = typeof projects.$inferSelect
 export type NewProject = typeof projects.$inferInsert
@@ -272,3 +384,9 @@ export type OrchestrationRun = typeof orchestrationRuns.$inferSelect
 export type NewOrchestrationRun = typeof orchestrationRuns.$inferInsert
 export type OrchestrationTask = typeof orchestrationTasks.$inferSelect
 export type NewOrchestrationTask = typeof orchestrationTasks.$inferInsert
+export type AmbientSuggestion = typeof ambientSuggestions.$inferSelect
+export type NewAmbientSuggestion = typeof ambientSuggestions.$inferInsert
+export type AmbientBudgetRecord = typeof ambientBudget.$inferSelect
+export type NewAmbientBudgetRecord = typeof ambientBudget.$inferInsert
+export type AmbientFeedbackRecord = typeof ambientFeedback.$inferSelect
+export type NewAmbientFeedbackRecord = typeof ambientFeedback.$inferInsert

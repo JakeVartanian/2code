@@ -48,6 +48,7 @@ const AuthDialog = () => null
 import { AgentsRenameSubChatDialog } from "../agents/components/agents-rename-subchat-dialog"
 import { OpenLocallyDialog } from "../agents/components/open-locally-dialog"
 import { useAutoImport } from "../agents/hooks/use-auto-import"
+import { AmbientSidebarSection } from "../ambient/ambient-sidebar-section"
 import { ConfirmArchiveDialog } from "../../components/confirm-archive-dialog"
 import { clearChatRuntimeCaches, pruneOrphanedLocalStorageKeys } from "../agents/stores/sub-chat-runtime-cleanup"
 import { trpc } from "../../lib/trpc"
@@ -3490,6 +3491,9 @@ export function AgentsSidebar({
           className="absolute bottom-0 left-0 right-0 h-12 pointer-events-none bg-gradient-to-t from-tl-background via-tl-background/50 to-transparent transition-opacity duration-200 opacity-0"
         />
       </div>
+
+      {/* Ambient Agent Section */}
+      <AmbientSidebarSection projectId={selectedProject?.id ?? null} />
 
       {/* Footer - Multi-select toolbar or normal footer */}
       <AnimatePresence mode="wait">

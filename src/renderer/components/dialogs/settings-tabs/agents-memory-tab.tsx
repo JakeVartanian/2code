@@ -13,6 +13,8 @@ import {
   CheckCircle2,
   Clock,
   Eye,
+  Zap,
+  Brain,
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "../../../lib/utils"
@@ -493,6 +495,36 @@ export function AgentsMemoryTab() {
     [memories, selectedId],
   )
 
+  // Brain status (hooks must be before early returns)
+  const { data: brainStatus } = trpc.ambient.getBrainStatus.useQuery(
+    { projectId: selectedProject?.id || "" },
+    { enabled: !!selectedProject?.id },
+  )
+
+  const buildBrainMutation = trpc.ambient.buildBrain.useMutation({
+    onSuccess: (result) => {
+      if (result.success) {
+        toast.success(`Brain built: ${result.memoriesCreated} memories created`)
+        refetch()
+      } else {
+        toast.error(result.error ?? "Failed to build brain")
+      }
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
+  // Ambient agent status
+  const { data: ambientStatus } = trpc.ambient.getStatus.useQuery(
+    { projectId: selectedProject?.id || "" },
+    { enabled: !!selectedProject?.id },
+  )
+
+  const toggleAmbient = trpc.ambient.toggle.useMutation({
+    onSuccess: (result) => {
+      toast.success(`Ambient agent ${result.enabled ? "enabled" : "disabled"}`)
+    },
+  })
+
   if (!selectedProject) {
     return (
       <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
@@ -505,6 +537,82 @@ export function AgentsMemoryTab() {
     <div className="h-full flex">
       {/* Left panel: list */}
       <div className="w-[320px] border-r border-border flex flex-col">
+        {/* Brain & Ambient Section */}
+        <div className="px-3 py-3 border-b border-border/50 space-y-3">
+          {/* Brain status card */}
+          <div className="rounded-lg border border-border/50 p-2.5 space-y-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium">
+              <Brain className="h-3.5 w-3.5 text-teal-500" />
+              <span>Project Brain</span>
+              <span className="ml-auto text-muted-foreground">
+                {brainStatus?.memoryCount ?? 0} memories
+              </span>
+            </div>
+
+            {brainStatus && brainStatus.memoryCount > 0 ? (
+              <div className="flex items-center gap-2">
+                <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-teal-500/60"
+                    style={{ width: `${Math.min(100, (brainStatus.memoryCount / 20) * 100)}%` }}
+                  />
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => buildBrainMutation.mutate({ projectId: selectedProject!.id, projectPath: selectedProject!.path })}
+                  disabled={buildBrainMutation.isPending}
+                >
+                  <RefreshCw className={cn("h-3 w-3 mr-1", buildBrainMutation.isPending && "animate-spin")} />
+                  Refresh
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full h-7 text-xs"
+                onClick={() => buildBrainMutation.mutate({ projectId: selectedProject!.id, projectPath: selectedProject!.path })}
+                disabled={buildBrainMutation.isPending}
+              >
+                <Zap className={cn("h-3 w-3 mr-1.5", buildBrainMutation.isPending && "animate-spin")} />
+                {buildBrainMutation.isPending ? "Building..." : "Build Brain"}
+              </Button>
+            )}
+          </div>
+
+          {/* Ambient agent toggle */}
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1.5">
+              <Zap className="h-3 w-3 text-muted-foreground" />
+              <span>Ambient Agent</span>
+              <span className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                ambientStatus?.agentStatus === "running" ? "bg-green-500"
+                : ambientStatus?.agentStatus === "paused" ? "bg-amber-500"
+                : "bg-zinc-500"
+              )} />
+            </div>
+            <button
+              onClick={() => toggleAmbient.mutate({
+                projectId: selectedProject!.id,
+                projectPath: selectedProject!.path,
+                enabled: ambientStatus?.agentStatus !== "running",
+              })}
+              className={cn(
+                "relative h-5 w-9 rounded-full transition-colors",
+                ambientStatus?.agentStatus === "running" ? "bg-teal-500" : "bg-muted",
+              )}
+            >
+              <span className={cn(
+                "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
+                ambientStatus?.agentStatus === "running" ? "translate-x-4" : "translate-x-0.5",
+              )} />
+            </button>
+          </div>
+        </div>
+
         {/* Stats bar */}
         <div className="px-3 py-2 border-b border-border/50 flex items-center gap-3 text-xs text-muted-foreground">
           <span>{stats?.total ?? 0} memories</span>

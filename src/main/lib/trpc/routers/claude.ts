@@ -2383,25 +2383,36 @@ ${prompt}
               // Non-Anthropic, non-Ollama (e.g. OpenRouter): skip AGENTS.md — no caching benefit
             }
 
-            // Inject project memories into system prompt (if project has memories)
+            // Inject project memories into system prompt (enhanced with ambient intelligence)
             try {
               const chatRecord = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
               if (chatRecord?.projectId) {
-                const memoryResult = await getMemoriesForInjection(
+                const { getEnhancedMemoryInjection } = require("../../ambient/enhanced-injection")
+                const memoryResult = await getEnhancedMemoryInjection(
                   chatRecord.projectId,
-                  input.prompt, // Use first message as context hint
-                  2000, // Default token budget
+                  input.prompt, // User's first message for file path extraction + context hint
+                  2000, // Base token budget (enhanced injection may increase to 3000 if brain is rich)
                 )
                 if (memoryResult.markdown) {
                   systemAppend += `\n\n${memoryResult.markdown}`
                   console.log(
-                    `[SD] Injected ${memoryResult.memoriesUsed} project memories (~${memoryResult.tokensUsed} tokens)`,
+                    `[SD] Injected ${memoryResult.memoriesUsed} project memories (~${memoryResult.tokensUsed} tokens, enhanced)`,
                   )
                 }
               }
             } catch (err) {
-              console.error("[SD] Failed to inject project memories:", err)
-              // Non-critical — continue without memories
+              console.error("[SD] Enhanced memory injection failed, trying standard:", err)
+              // Fallback to standard injection if enhanced fails
+              try {
+                const chatRecord2 = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+                if (chatRecord2?.projectId) {
+                  const fallback = await getMemoriesForInjection(chatRecord2.projectId, input.prompt, 2000)
+                  if (fallback.markdown) {
+                    systemAppend += `\n\n${fallback.markdown}`
+                    console.log(`[SD] Fallback: injected ${fallback.memoriesUsed} memories`)
+                  }
+                }
+              } catch { /* truly non-critical — continue without memories */ }
             }
 
             if (disabledSections.length > 0) {
