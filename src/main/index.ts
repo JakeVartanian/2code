@@ -1079,6 +1079,12 @@ if (gotTheLock) {
         stopCrashRecoveryTracking(crashRecoveryInterval)
       }
 
+      // Stop ambient agents
+      try {
+        const { ambientAgentRegistry } = require("./lib/ambient")
+        await ambientAgentRegistry.stopAll()
+      } catch { /* non-critical */ }
+
       // Abort all sessions and wait for their cleanup (flushPendingWrite) to complete
       await abortAllClaudeSessions()
       cancelAllPendingOAuth()

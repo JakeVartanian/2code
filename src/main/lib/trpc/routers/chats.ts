@@ -19,7 +19,29 @@ import { execWithShellEnv } from "../../git/shell-env"
 import { applyRollbackStash } from "../../git/stash"
 import { checkOllamaStatus } from "../../ollama"
 import { terminalManager } from "../../terminal/manager"
+import { ambientAgentRegistry } from "../../ambient"
 import { publicProcedure, router } from "../index"
+
+/**
+ * Stop the ambient agent for a project if no non-archived chats remain.
+ */
+function stopAmbientIfNoActiveChats(projectId: string): void {
+  try {
+    const db = getDatabase()
+    const activeCount = db.select({ id: chats.id })
+      .from(chats)
+      .where(and(
+        eq(chats.projectId, projectId),
+        isNull(chats.archivedAt),
+      ))
+      .all().length
+
+    if (activeCount === 0) {
+      ambientAgentRegistry.stop(projectId)
+      console.log(`[Ambient] Stopped agent for project ${projectId} (no active workspaces)`)
+    }
+  } catch { /* non-critical */ }
+}
 
 type WorktreeSetupFailurePayload = {
   kind: "create-failed" | "setup-failed"
@@ -564,6 +586,11 @@ export const chatsRouter = router({
         gitCache.invalidateParsedDiff(chat.worktreePath)
       }
 
+      // Stop ambient agent if no active chats remain for this project
+      if (chat?.projectId) {
+        stopAmbientIfNoActiveChats(chat.projectId)
+      }
+
       return result
     }),
 
@@ -625,6 +652,12 @@ export const chatsRouter = router({
         })
       }
 
+      // Stop ambient agents for any projects that no longer have active chats
+      const affectedProjectIds = [...new Set(result.map(c => c.projectId))]
+      for (const projectId of affectedProjectIds) {
+        stopAmbientIfNoActiveChats(projectId)
+      }
+
       return result
     }),
 
@@ -672,6 +705,11 @@ export const chatsRouter = router({
 
       // Clean up orphaned session credential dirs in background
       cleanupOrphanedSessionDirs()
+
+      // Stop ambient agent if no active chats remain for this project
+      if (chat?.projectId) {
+        stopAmbientIfNoActiveChats(chat.projectId)
+      }
 
       return deleted
     }),

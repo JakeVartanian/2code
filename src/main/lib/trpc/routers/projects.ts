@@ -179,6 +179,13 @@ export const projectsRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(({ input }) => {
       const db = getDatabase()
+
+      // Stop ambient agent before deleting (DB cascade will clean data, but in-memory agent needs explicit stop)
+      try {
+        const { ambientAgentRegistry } = require("../../ambient")
+        ambientAgentRegistry.stop(input.id)
+      } catch { /* non-critical */ }
+
       return db
         .delete(projects)
         .where(eq(projects.id, input.id))
