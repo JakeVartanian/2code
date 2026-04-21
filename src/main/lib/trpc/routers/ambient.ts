@@ -477,6 +477,7 @@ export const ambientRouter = router({
         memoriesCreated: result.memoriesCreated,
         memoriesUpdated: result.memoriesUpdated,
         sources: result.sources,
+        failedPasses: result.failedPasses ?? [],
         durationMs: result.durationMs,
       }
     }),
@@ -507,6 +508,7 @@ export const ambientRouter = router({
         memoriesCreated: result.memoriesCreated,
         memoriesUpdated: result.memoriesUpdated,
         sources: result.sources,
+        failedPasses: result.failedPasses ?? [],
         durationMs: result.durationMs,
       }
     }),

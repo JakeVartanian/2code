@@ -32,6 +32,7 @@ export interface BackfillResult {
   memoriesCreated: number
   memoriesUpdated: number
   sources: string[]
+  failedPasses: string[]
   durationMs: number
 }
 
@@ -210,9 +211,9 @@ export async function buildBrain(
   let updated = 0
 
   const writeMemory = (memory: { category: string; title: string; content: string; linkedFiles: string[] }) => {
-    const wasCreated = writeMemoryDeduped(projectId, memory)
-    if (wasCreated) created++
-    else updated++
+    const result = writeMemoryDeduped(projectId, memory)
+    if (result === "created") created++
+    else if (result === "updated") updated++
   }
 
   // Phase 0: Import CLAUDE.md sections directly (free, local)
@@ -231,91 +232,54 @@ export async function buildBrain(
 
   // Gather all signals once (reused across passes)
   const signals = gatherDeepSignals(projectPath)
+  const failedPasses: string[] = []
 
-  // Pass 1: Architecture & Components
-  try {
-    const archContext = buildArchitectureContext(signals)
-    const archMemories = await callForMemories(provider, PASS_PROMPTS.architecture, archContext)
-    archMemories.forEach(writeMemory)
-    sources.push("architecture-scan")
-  } catch (err) {
-    console.error("[Brain] Architecture pass failed:", err)
+  // Helper to run a pass with error tracking
+  async function runPass(name: string, contextBuilder: () => string, prompt: string) {
+    try {
+      const context = contextBuilder()
+      const memories = await callForMemories(provider, prompt, context)
+      memories.forEach(writeMemory)
+      sources.push(name)
+      console.log(`[Brain] ${name}: ${memories.length} memories generated`)
+    } catch (err) {
+      console.error(`[Brain] ${name} FAILED:`, err)
+      failedPasses.push(name)
+    }
   }
 
-  // Pass 2: Git Evolution & History
-  try {
-    const evoContext = buildEvolutionContext(signals)
-    const evoMemories = await callForMemories(provider, PASS_PROMPTS.evolution, evoContext)
-    evoMemories.forEach(writeMemory)
-    sources.push("git-evolution")
-  } catch (err) {
-    console.error("[Brain] Evolution pass failed:", err)
-  }
+  // Run passes in parallel pairs to cut wall time (~2-3 min instead of ~8 min)
+  // Pair 1: Architecture + Evolution
+  await Promise.all([
+    runPass("architecture", () => buildArchitectureContext(signals), PASS_PROMPTS.architecture),
+    runPass("evolution", () => buildEvolutionContext(signals), PASS_PROMPTS.evolution),
+  ])
 
-  // Pass 3: Code Patterns & Conventions
-  try {
-    const convContext = buildConventionsContext(signals)
-    const convMemories = await callForMemories(provider, PASS_PROMPTS.conventions, convContext)
-    convMemories.forEach(writeMemory)
-    sources.push("code-conventions")
-  } catch (err) {
-    console.error("[Brain] Conventions pass failed:", err)
-  }
+  // Pair 2: Conventions + Integrations
+  await Promise.all([
+    runPass("conventions", () => buildConventionsContext(signals), PASS_PROMPTS.conventions),
+    runPass("integrations", () => buildIntegrationsContext(signals), PASS_PROMPTS.integrations),
+  ])
 
-  // Pass 4: Integrations & APIs
-  try {
-    const intContext = buildIntegrationsContext(signals)
-    const intMemories = await callForMemories(provider, PASS_PROMPTS.integrations, intContext)
-    intMemories.forEach(writeMemory)
-    sources.push("integrations")
-  } catch (err) {
-    console.error("[Brain] Integrations pass failed:", err)
-  }
+  // Pair 3: Debugging + Philosophy
+  await Promise.all([
+    runPass("debugging", () => buildDebuggingContext(signals), PASS_PROMPTS.debugging),
+    runPass("philosophy", () => buildPhilosophyContext(signals), PASS_PROMPTS.philosophy),
+  ])
 
-  // Pass 5: Bugs, Gotchas & Active Work
-  try {
-    const debugContext = buildDebuggingContext(signals)
-    const debugMemories = await callForMemories(provider, PASS_PROMPTS.debugging, debugContext)
-    debugMemories.forEach(writeMemory)
-    sources.push("debugging-gotchas")
-  } catch (err) {
-    console.error("[Brain] Debugging pass failed:", err)
-  }
+  // Pair 4: Quality + Opportunities
+  await Promise.all([
+    runPass("quality", () => buildQualityContext(signals), PASS_PROMPTS.quality),
+    runPass("opportunities", () => buildOpportunitiesContext(signals), PASS_PROMPTS.opportunities),
+  ])
 
-  // Pass 6: Philosophy & Principles
-  try {
-    const philContext = buildPhilosophyContext(signals)
-    const philMemories = await callForMemories(provider, PASS_PROMPTS.philosophy, philContext)
-    philMemories.forEach(writeMemory)
-    sources.push("philosophy")
-  } catch (err) {
-    console.error("[Brain] Philosophy pass failed:", err)
-  }
-
-  // Pass 7: Quality & Technical Debt
-  try {
-    const qualContext = buildQualityContext(signals)
-    const qualMemories = await callForMemories(provider, PASS_PROMPTS.quality, qualContext)
-    qualMemories.forEach(writeMemory)
-    sources.push("quality-debt")
-  } catch (err) {
-    console.error("[Brain] Quality pass failed:", err)
-  }
-
-  // Pass 8: Opportunities & Forward Direction
-  try {
-    const oppContext = buildOpportunitiesContext(signals)
-    const oppMemories = await callForMemories(provider, PASS_PROMPTS.opportunities, oppContext)
-    oppMemories.forEach(writeMemory)
-    sources.push("opportunities")
-  } catch (err) {
-    console.error("[Brain] Opportunities pass failed:", err)
-  }
+  console.log(`[Brain] Complete: ${created} created, ${updated} existing, ${failedPasses.length} passes failed${failedPasses.length > 0 ? ` (${failedPasses.join(", ")})` : ""}`)
 
   return {
     memoriesCreated: created,
     memoriesUpdated: updated,
     sources: [...new Set(sources)],
+    failedPasses,
     durationMs: Date.now() - start,
   }
 }
@@ -922,14 +886,14 @@ function importClaudeMd(projectId: string, projectPath: string): number {
 
     const category = detectCategory(title, body)
 
-    const wasCreated = writeMemoryDeduped(projectId, {
+    const result = writeMemoryDeduped(projectId, {
       category,
       title: `[CLAUDE.md] ${title}`.slice(0, 100),
       content: body.slice(0, 1000),
       linkedFiles: ["CLAUDE.md"],
     })
 
-    if (wasCreated) created++
+    if (result === "created") created++
   }
 
   return created
@@ -971,13 +935,13 @@ function analyzeGitCoupling(projectId: string, projectPath: string): number {
   let created = 0
   for (const [pair, count] of strongPairs) {
     const [fileA, fileB] = pair.split(" <-> ")
-    const wasCreated = writeMemoryDeduped(projectId, {
+    const result = writeMemoryDeduped(projectId, {
       category: "architecture",
       title: `Coupled files: ${shortName(fileA)} + ${shortName(fileB)}`,
       content: `ALWAYS: When modifying ${fileA}, check if ${fileB} also needs changes.\nThese files changed together in ${count} of the last 150 commits, indicating tight coupling.\nApplies to: ${fileA}, ${fileB}`,
       linkedFiles: [fileA, fileB],
     })
-    if (wasCreated) created++
+    if (result === "created") created++
   }
 
   return created
@@ -1001,13 +965,17 @@ function detectCategory(title: string, body: string): string {
 
 // ============ MEMORY WRITE ============
 
+/**
+ * Write a memory, deduplicating by title.
+ * Returns "created" if new, "updated" if existing was refreshed, "skipped" if identical.
+ */
 function writeMemoryDeduped(
   projectId: string,
   memory: { category: string; title: string; content: string; linkedFiles: string[] },
-): boolean {
+): "created" | "updated" | "skipped" {
   const db = getDatabase()
 
-  const existing = db.select({ id: projectMemories.id })
+  const existing = db.select({ id: projectMemories.id, content: projectMemories.content })
     .from(projectMemories)
     .where(and(
       eq(projectMemories.projectId, projectId),
@@ -1015,7 +983,21 @@ function writeMemoryDeduped(
     ))
     .get()
 
-  if (existing) return false
+  if (existing) {
+    // Update if content has changed
+    if (existing.content !== memory.content) {
+      db.update(projectMemories)
+        .set({
+          content: memory.content,
+          category: memory.category,
+          linkedFiles: JSON.stringify(memory.linkedFiles),
+        })
+        .where(eq(projectMemories.id, existing.id))
+        .run()
+      return "updated"
+    }
+    return "skipped"
+  }
 
   db.insert(projectMemories)
     .values({
@@ -1030,5 +1012,5 @@ function writeMemoryDeduped(
     })
     .run()
 
-  return true
+  return "created"
 }

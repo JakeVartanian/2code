@@ -504,7 +504,11 @@ export function AgentsMemoryTab() {
   const buildBrainMutation = trpc.ambient.buildBrain.useMutation({
     onSuccess: (result) => {
       if (result.success) {
-        toast.success(`Brain built: ${result.memoriesCreated} memories created`)
+        const parts = [`${result.memoriesCreated} created`]
+        if ((result.memoriesUpdated ?? 0) > 0) parts.push(`${result.memoriesUpdated} updated`)
+        if ((result.failedPasses?.length ?? 0) > 0) parts.push(`${result.failedPasses!.length} passes failed`)
+        const duration = result.durationMs ? ` (${Math.round(result.durationMs / 1000)}s)` : ""
+        toast.success(`Brain built: ${parts.join(", ")}${duration}`)
         refetch()
       } else {
         toast.error(result.error ?? "Failed to build brain")

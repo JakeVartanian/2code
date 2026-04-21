@@ -51,7 +51,7 @@ class AnthropicProvider implements AmbientProvider {
     maxTokens: number,
   ): Promise<AmbientProviderCallResult> {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 60_000)
+    const timeout = setTimeout(() => controller.abort(), 120_000)
 
     try {
       const response = await fetch(ANTHROPIC_API_URL, {
@@ -127,7 +127,7 @@ class OpenRouterProvider implements AmbientProvider {
     maxTokens: number,
   ): Promise<AmbientProviderCallResult> {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 60_000)
+    const timeout = setTimeout(() => controller.abort(), 120_000)
 
     try {
       const response = await fetch(OPENROUTER_API_URL, {
