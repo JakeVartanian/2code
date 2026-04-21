@@ -21,9 +21,12 @@ import { BudgetTracker } from "./budget"
 import { checkStaleness } from "./staleness"
 import { getMemoriesForInjection } from "../memory/injection"
 import type { AmbientProvider } from "./provider"
+import { runChatHeuristics, clearSessionTrackers } from "./chat-heuristics"
+import { buildSessionSummary, drainSessionEvents } from "./chat-bridge"
 import type {
   AmbientConfig,
   AmbientEvent,
+  ChatActivityEvent,
   FileBatch,
   HeuristicResult,
   SuggestionCategory,
@@ -78,7 +81,9 @@ export class AnalysisPipeline {
 
   dispose(): void {
     if (this.sweepTimer) clearInterval(this.sweepTimer)
+    if (this.chatBatchTimer) clearTimeout(this.chatBatchTimer)
     this.recentSuggestions.clear()
+    this.chatEventBatch = []
   }
 
   /**
@@ -124,6 +129,8 @@ export class AnalysisPipeline {
       }
     } else if (event.kind === "git") {
       await this.processGitEvent(event.event)
+    } else if (event.kind === "chat") {
+      await this.processChatEvent(event.event)
     }
   }
 
@@ -324,6 +331,186 @@ export class AnalysisPipeline {
     }
   }
 
+  // ─── Chat event processing ─────────────────────────────────────────
+
+  /** Batched non-urgent chat events waiting for Tier 1 triage */
+  private chatEventBatch: ChatActivityEvent[] = []
+  private chatBatchTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly CHAT_BATCH_WINDOW = 30_000 // 30s
+
+  /**
+   * Process a chat activity event from the chat bridge.
+   * Runs chat-specific heuristics (free, instant) and batches
+   * non-urgent events for Tier 1 triage.
+   */
+  private async processChatEvent(event: ChatActivityEvent): Promise<void> {
+    // Session complete → post-session synthesis + cleanup
+    if (event.activityType === "session-complete" || event.activityType === "session-error") {
+      clearSessionTrackers(event.subChatId)
+
+      // Post-session synthesis: use accumulated session data + memories
+      if (event.activityType === "session-complete" && this.provider) {
+        await this.runPostSessionSynthesis(event).catch(err => {
+          console.warn("[Ambient] Post-session synthesis failed:", err.message)
+        })
+      }
+      return
+    }
+
+    // Run chat-specific heuristics (Tier 0 — free, instant)
+    const chatResults = runChatHeuristics(event)
+    for (const result of chatResults) {
+      // Deduplicate and persist
+      if (!this.isRecentDuplicate(result)) {
+        this.persistSuggestion(result)
+      }
+    }
+
+    // Batch non-error events for periodic Tier 1 triage
+    if (event.activityType !== "tool-error") {
+      this.chatEventBatch.push(event)
+
+      // Start batch timer if not already running
+      if (!this.chatBatchTimer) {
+        this.chatBatchTimer = setTimeout(() => {
+          this.flushChatBatch().catch(err => {
+            console.warn("[Ambient] Chat batch triage failed:", err.message)
+          })
+        }, this.CHAT_BATCH_WINDOW)
+      }
+    }
+  }
+
+  /**
+   * Flush accumulated chat events through Tier 1 Haiku triage.
+   */
+  private async flushChatBatch(): Promise<void> {
+    this.chatBatchTimer = null
+    const batch = this.chatEventBatch
+    this.chatEventBatch = []
+
+    if (batch.length === 0 || !this.provider) return
+    if (this.budget.getDegradationTier() !== "normal") return
+
+    // Build a summary of the batch for triage
+    const files = new Set<string>()
+    const tools = new Set<string>()
+    for (const e of batch) {
+      if (e.filePaths) for (const f of e.filePaths) files.add(f)
+      if (e.toolName) tools.add(e.toolName)
+    }
+
+    if (files.size === 0) return // Nothing concrete to analyze
+
+    // Create a synthetic candidate for triage
+    const candidate: HeuristicResult = {
+      category: "bug",
+      severity: "info",
+      title: `Active work review: ${files.size} files, ${tools.size} tools`,
+      description: `Recent activity involved ${[...files].slice(0, 5).join(", ")}${files.size > 5 ? ` (+${files.size - 5} more)` : ""} using ${[...tools].join(", ")}.`,
+      confidence: 40,
+      triggerFiles: [...files].slice(0, 10),
+      triggerEvent: "chat-batch" as any,
+    }
+
+    // Triage with memory context
+    let projectContext = ""
+    try {
+      const memoryResult = await getMemoriesForInjection(this.projectId, null, 1200)
+      projectContext = memoryResult.markdown
+    } catch { /* non-critical */ }
+
+    const triageResult = await triageWithHaiku(
+      [candidate],
+      this.provider,
+      this.budget,
+      projectContext,
+      this.config.triageThreshold,
+    )
+
+    for (const item of triageResult.items) {
+      if (item.relevance >= 0.5) {
+        this.persistSuggestion({
+          ...candidate,
+          category: item.category,
+          confidence: Math.round(item.relevance * 100),
+        }, undefined, "haiku")
+      }
+    }
+  }
+
+  /**
+   * Post-session synthesis: after a session completes, review what happened
+   * in light of project memories and suggest follow-up actions.
+   */
+  private async runPostSessionSynthesis(event: ChatActivityEvent): Promise<void> {
+    if (!this.provider) return
+    if (this.budget.getDegradationTier() !== "normal") return
+
+    const sessionSummary = buildSessionSummary(event.subChatId)
+    if (!sessionSummary || sessionSummary.length < 50) return // Too short
+
+    // Drain the session buffer
+    drainSessionEvents(event.subChatId)
+
+    // Get project memories for context
+    let memoryContext = ""
+    try {
+      const memoryResult = await getMemoriesForInjection(this.projectId, null, 1500)
+      memoryContext = memoryResult.markdown
+    } catch { /* non-critical */ }
+
+    const system = `You are a project-aware development assistant. Review the completed session activity and project knowledge below. Identify any follow-up tasks, risks, or patterns worth flagging.
+
+Respond with a JSON array of suggestions (0-3 items max). Each item:
+{"title": "short title", "description": "1-2 sentence explanation", "category": "bug"|"security"|"performance"|"test-gap"|"dead-code", "confidence": 50-90, "files": ["path1", "path2"]}
+
+If nothing notable, respond with an empty array: []`
+
+    const user = `## Session Activity
+${sessionSummary}
+
+## Project Knowledge
+${memoryContext || "(no project memories yet)"}`
+
+    try {
+      const { text } = await this.provider.callHaiku(system, user)
+      if (!text) return
+
+      // Parse suggestions
+      const jsonMatch = text.match(/\[[\s\S]*\]/)
+      if (!jsonMatch) return
+
+      const suggestions = JSON.parse(jsonMatch[0]) as Array<{
+        title: string
+        description: string
+        category: string
+        confidence: number
+        files?: string[]
+      }>
+
+      if (!Array.isArray(suggestions)) return
+
+      for (const s of suggestions.slice(0, 3)) {
+        if (!s.title || !s.description) continue
+        const result: HeuristicResult = {
+          category: (s.category as any) ?? "bug",
+          severity: s.confidence >= 70 ? "warning" : "info",
+          title: s.title,
+          description: s.description,
+          confidence: Math.min(90, Math.max(30, s.confidence ?? 50)),
+          triggerFiles: s.files ?? [],
+          triggerEvent: "session-synthesis" as any,
+        }
+        if (!this.isRecentDuplicate(result)) {
+          this.persistSuggestion(result, undefined, "haiku")
+        }
+      }
+    } catch (err) {
+      console.warn("[Ambient] Synthesis parse error:", err)
+    }
+  }
+
   private persistSuggestion(
     result: HeuristicResult,
     suggestedPrompt?: string,
@@ -346,9 +533,14 @@ export class AnalysisPipeline {
 
     if (pendingCount >= 10) return // Don't flood
 
+    // Generate ID upfront so we can include it in the event
+    const { createId } = require("../db/utils")
+    const suggestionId = createId()
+
     // Insert suggestion
     db.insert(ambientSuggestions)
       .values({
+        id: suggestionId,
         projectId: this.projectId,
         category: result.category,
         severity: result.severity,
@@ -368,7 +560,9 @@ export class AnalysisPipeline {
       if (events) {
         events.emit(`project:${this.projectId}`, {
           type: "new-suggestion",
+          suggestionId,
           suggestion: {
+            id: suggestionId,
             category: result.category,
             severity: result.severity,
             title: result.title,

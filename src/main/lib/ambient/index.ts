@@ -18,6 +18,7 @@ import type {
   AmbientEvent,
   AmbientAgentStatus,
   AmbientStatus,
+  ChatActivityEvent,
   FileBatch,
   GitEvent,
 } from "./types"
@@ -196,6 +197,18 @@ export class AmbientAgent {
    */
   getPipeline(): AnalysisPipeline {
     return this.pipeline
+  }
+
+  /**
+   * Ingest a chat activity event from the chat bridge.
+   * Called non-blocking via queueMicrotask from the streaming path.
+   */
+  ingestChatEvent(event: ChatActivityEvent): void {
+    if (this.status !== "running") return
+    if (isQuietHours(this.config)) return
+
+    this.lastEventAt = Date.now()
+    this.handleEvent({ kind: "chat", event })
   }
 
   private handleEvent(event: AmbientEvent): void {

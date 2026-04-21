@@ -1653,6 +1653,13 @@ export const claudeRouter = router({
           try {
             const db = getDatabase()
 
+            // Resolve projectId once for ambient chat bridge hooks
+            let resolvedProjectId: string | null = null
+            try {
+              const chatForProject = db.select({ projectId: chats.projectId }).from(chats).where(eq(chats.id, input.chatId)).get()
+              resolvedProjectId = chatForProject?.projectId ?? null
+            } catch { /* non-critical */ }
+
             // 1. Get existing messages from DB
             const existing = db
               .select()
@@ -1741,6 +1748,20 @@ export const claudeRouter = router({
                 streamId,
                 updatedAt: new Date(),
               })
+
+              // Ambient chat bridge: notify of user prompt
+              if (resolvedProjectId) {
+                void import("../../ambient/chat-bridge").then(({ emitChatEvent }) => {
+                  emitChatEvent({
+                    subChatId: input.subChatId,
+                    chatId: input.chatId,
+                    projectId: resolvedProjectId!,
+                    activityType: "user-prompt",
+                    summary: input.prompt.slice(0, 500),
+                    timestamp: Date.now(),
+                  })
+                }).catch(() => {})
+              }
             }
 
             // 2.5. AUTO-FALLBACK: Check internet and switch to Ollama if offline
@@ -3370,6 +3391,26 @@ ${prompt}
                           state: "call",
                           startedAt: Date.now(),
                         })
+
+                        // Ambient chat bridge: notify of tool call
+                        if (resolvedProjectId) {
+                          const toolInput = chunk.input as any
+                          const toolFiles: string[] = []
+                          if (toolInput?.file_path) toolFiles.push(toolInput.file_path)
+                          if (toolInput?.path) toolFiles.push(toolInput.path)
+                          void import("../../ambient/chat-bridge").then(({ emitChatEvent }) => {
+                            emitChatEvent({
+                              subChatId: input.subChatId,
+                              chatId: input.chatId,
+                              projectId: resolvedProjectId!,
+                              activityType: "tool-call",
+                              summary: `${chunk.toolName}(${toolFiles[0] ?? ""})`.slice(0, 500),
+                              toolName: chunk.toolName,
+                              filePaths: toolFiles.length > 0 ? toolFiles : undefined,
+                              timestamp: Date.now(),
+                            })
+                          }).catch(() => {})
+                        }
                         break
                       case "tool-output-available":
                         const toolPart = parts.find(
@@ -3408,6 +3449,27 @@ ${prompt}
                           abortController.abort()
                         }
                         break
+                      case "tool-output-error": {
+                        // Ambient chat bridge: notify of tool error
+                        if (resolvedProjectId) {
+                          const failedPart = parts.find(p => p.toolCallId === (chunk as any).toolCallId)
+                          const errorFiles: string[] = []
+                          if (failedPart?.input?.file_path) errorFiles.push(failedPart.input.file_path)
+                          void import("../../ambient/chat-bridge").then(({ emitChatEvent }) => {
+                            emitChatEvent({
+                              subChatId: input.subChatId,
+                              chatId: input.chatId,
+                              projectId: resolvedProjectId!,
+                              activityType: "tool-error",
+                              summary: ((chunk as any).errorText ?? "Unknown error").slice(0, 500),
+                              toolName: failedPart?.toolName,
+                              filePaths: errorFiles.length > 0 ? errorFiles : undefined,
+                              timestamp: Date.now(),
+                            })
+                          }).catch(() => {})
+                        }
+                        break
+                      }
                       case "message-metadata":
                         metadata = { ...metadata, ...chunk.messageMetadata }
                         break
@@ -3751,6 +3813,18 @@ ${prompt}
                   ).catch(err => {
                     console.error("[SD] Memory extraction failed:", err)
                   })
+
+                  // Ambient chat bridge: notify session complete
+                  void import("../../ambient/chat-bridge").then(({ emitChatEvent }) => {
+                    emitChatEvent({
+                      subChatId: input.subChatId,
+                      chatId: input.chatId,
+                      projectId: chatForMemory.projectId,
+                      activityType: "session-complete",
+                      summary: `Session completed: ${messageCount} messages`,
+                      timestamp: Date.now(),
+                    })
+                  }).catch(() => {})
 
                   // Post-session memory feedback — track which injected memories were useful
                   try {

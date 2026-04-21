@@ -58,9 +58,22 @@ export interface GitEvent {
   timestamp: number
 }
 
+export interface ChatActivityEvent {
+  subChatId: string
+  chatId: string
+  projectId: string
+  activityType: "user-prompt" | "tool-call" | "tool-error" | "session-complete" | "session-error"
+  /** Lightweight summary — truncated to ~500 chars to avoid memory pressure */
+  summary: string
+  toolName?: string
+  filePaths?: string[]
+  timestamp: number
+}
+
 export type AmbientEvent =
   | { kind: "file-batch"; batch: FileBatch }
   | { kind: "git"; event: GitEvent }
+  | { kind: "chat"; event: ChatActivityEvent }
 
 // ============ HEURISTIC RESULTS ============
 

@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `ambient_enabled` integer DEFAULT 1 NOT NULL;

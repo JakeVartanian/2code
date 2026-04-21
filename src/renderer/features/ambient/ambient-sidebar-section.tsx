@@ -99,7 +99,7 @@ export function AmbientSidebarSection({
   projectPath: string | null
   chatId: string | null
 }) {
-  useAmbientData(projectId)
+  useAmbientData(projectId, projectPath)
 
   const [expanded, setExpanded] = useAtom(ambientPanelExpandedAtom)
   const { suggestions, agentStatus, budgetStatus } = useAmbientStore()

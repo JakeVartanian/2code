@@ -1,12 +1,17 @@
 /**
- * Hook for loading ambient data and subscribing to real-time updates.
+ * Hook for loading ambient data, auto-starting the agent,
+ * and subscribing to real-time updates with toast notifications.
  */
 
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
+import { toast } from "sonner"
 import { trpc } from "../../../lib/trpc"
 import { useAmbientStore } from "../store"
 
-export function useAmbientData(projectId: string | null) {
+export function useAmbientData(
+  projectId: string | null,
+  projectPath?: string | null,
+) {
   const {
     setSuggestions,
     removeSuggestion,
@@ -15,6 +20,19 @@ export function useAmbientData(projectId: string | null) {
   } = useAmbientStore()
 
   const utils = trpc.useUtils()
+
+  // ─── Auto-start ambient agent on project load ───────────────────────
+  const ensureRunning = trpc.ambient.ensureRunning.useMutation()
+  const hasAutoStarted = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (projectId && projectPath && hasAutoStarted.current !== projectId) {
+      hasAutoStarted.current = projectId
+      ensureRunning.mutate({ projectId, projectPath })
+    }
+  }, [projectId, projectPath])
+
+  // ─── Queries ────────────────────────────────────────────────────────
 
   // Fetch suggestions
   const { data: suggestions } = trpc.ambient.listSuggestions.useQuery(
@@ -34,7 +52,8 @@ export function useAmbientData(projectId: string | null) {
     { enabled: !!projectId, refetchInterval: 10_000 },
   )
 
-  // Sync to store
+  // ─── Sync to store ─────────────────────────────────────────────────
+
   useEffect(() => {
     if (suggestions) {
       setSuggestions(suggestions.map((s) => ({
@@ -63,7 +82,8 @@ export function useAmbientData(projectId: string | null) {
     if (status) setAgentStatus(status.agentStatus)
   }, [status])
 
-  // Subscribe to real-time updates
+  // ─── Real-time subscription with toast notifications ────────────────
+
   trpc.ambient.onUpdate.useSubscription(
     { projectId: projectId! },
     {
@@ -72,6 +92,18 @@ export function useAmbientData(projectId: string | null) {
         if (event.type === "new-suggestion") {
           // Invalidate the query cache to trigger immediate refetch
           utils.ambient.listSuggestions.invalidate({ projectId: projectId! })
+
+          // Show toast notification for warning/error severity
+          const suggestion = (event as any).suggestion
+          if (suggestion) {
+            const sev = suggestion.severity as string
+            if (sev === "error" || sev === "warning") {
+              toast(suggestion.title, {
+                description: `${suggestion.category} · ${suggestion.confidence}% confidence`,
+                duration: sev === "error" ? 12000 : 8000,
+              })
+            }
+          }
         }
         if (event.type === "suggestion-dismissed" && event.suggestionId) {
           removeSuggestion(event.suggestionId)

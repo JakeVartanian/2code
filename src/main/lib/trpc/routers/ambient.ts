@@ -203,7 +203,55 @@ export const ambientRouter = router({
           console.error("[Ambient] Failed to stop agent:", err)
         }
       }
+      // Persist enabled state to DB so it survives restarts
+      const db = getDatabase()
+      db.update(projects)
+        .set({ ambientEnabled: input.enabled })
+        .where(eq(projects.id, input.projectId))
+        .run()
+
       return { enabled: input.enabled }
+    }),
+
+  /**
+   * Ensure the ambient agent is running for a project (auto-start on load).
+   * Called by the renderer on mount — only starts if ambientEnabled is true in DB.
+   */
+  ensureRunning: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      projectPath: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      const db = getDatabase()
+      const project = db.select({ ambientEnabled: projects.ambientEnabled })
+        .from(projects)
+        .where(eq(projects.id, input.projectId))
+        .get()
+
+      // Default to enabled for projects that existed before the column was added
+      if (project && project.ambientEnabled === false) {
+        return { status: "disabled" as const }
+      }
+
+      // Check if already running
+      const existing = ambientAgentRegistry.get(input.projectId)
+      if (existing) return { status: "running" as const }
+
+      try {
+        const agent = await ambientAgentRegistry.getOrCreate(input.projectId, input.projectPath)
+        // Init provider in background (same as toggle)
+        import("./claude").then(({ getClaudeCodeTokenFresh }) => {
+          agent.initProvider(
+            () => getClaudeCodeTokenFresh(),
+            null,
+          ).catch(err => console.warn("[Ambient] Provider init:", err.message))
+        }).catch(() => {})
+        return { status: "running" as const }
+      } catch (err) {
+        console.error("[Ambient] Auto-start failed:", err)
+        return { status: "error" as const }
+      }
     }),
 
   /**
