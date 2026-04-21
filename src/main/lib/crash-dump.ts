@@ -108,6 +108,12 @@ export function initCrashDump(): void {
 
   // Handle uncaught exceptions
   process.on("uncaughtException", (error) => {
+    // EMFILE: out of file descriptors — suppress silently, no I/O at all.
+    // Any disk/console I/O here risks cascading failures that crash the renderer.
+    if (error && (error as NodeJS.ErrnoException).code === "EMFILE") {
+      return
+    }
+
     // EPIPE means stdout/stderr pipe is broken (e.g. parent process died).
     // Trying to console.log/error would throw another EPIPE → infinite loop.
     // Just write to file and suppress.
@@ -132,7 +138,7 @@ export function initCrashDump(): void {
 
     // Also sync electron-log to disk
     try {
-      log.transports.file.getFile()?.sync?.()
+      ;(log.transports.file.getFile() as any)?.sync?.()
     } catch {}
 
     isHandlingCrash = false
@@ -141,13 +147,9 @@ export function initCrashDump(): void {
   // Handle unhandled promise rejections
   process.on("unhandledRejection", (reason, promise) => {
     // Suppress EMFILE watcher errors — they're non-fatal and will self-heal
-    // when file descriptors free up
+    // when file descriptors free up. Don't write crash dump or log (we're out of FDs,
+    // any I/O attempt here risks cascading failures that crash the renderer).
     if (reason && (reason as NodeJS.ErrnoException).code === "EMFILE") {
-      if (!isHandlingCrash) {
-        isHandlingCrash = true
-        writeCrashDump("rejection", reason, "promise (EMFILE)")
-        isHandlingCrash = false
-      }
       return
     }
 
@@ -163,7 +165,7 @@ export function initCrashDump(): void {
 
     // Also sync electron-log to disk
     try {
-      log.transports.file.getFile()?.sync?.()
+      ;(log.transports.file.getFile() as any)?.sync?.()
     } catch {}
 
     isHandlingCrash = false

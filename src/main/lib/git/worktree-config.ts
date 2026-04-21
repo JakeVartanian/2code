@@ -91,7 +91,7 @@ export async function getAvailableConfigPaths(
   onecode: { exists: boolean; path: string }
 }> {
   const cursorPath = join(projectPath, CURSOR_CONFIG_PATH)
-  const onecodePath = join(projectPath, TWOCODE_CONFIG_PATH)
+  const onecodePath = join(projectPath, ONECODE_CONFIG_PATH)
 
   return {
     cursor: {

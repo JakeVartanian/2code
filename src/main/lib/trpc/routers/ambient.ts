@@ -653,8 +653,7 @@ export const ambientRouter = router({
   // ============ SYSTEM MAP AUDIT ============
 
   /**
-   * Audit all system map zones — reads linked files, runs Sonnet analysis,
-   * creates ambientSuggestions so zone cards update with confidence scores.
+   * Audit all system map zones — uses the zone audit engine with project-level lock.
    */
   auditSystemMap: publicProcedure
     .input(z.object({
@@ -663,7 +662,7 @@ export const ambientRouter = router({
     }))
     .mutation(async ({ input }) => {
       const { getClaudeCodeTokenFresh } = await import("./claude")
-      const { auditSystemMap } = await import("../../ambient/system-map-audit")
+      const { auditAllZonesWithLock } = await import("../../ambient/zone-audit-engine")
 
       const provider = await createAmbientProvider(
         () => getClaudeCodeTokenFresh(),
@@ -671,23 +670,427 @@ export const ambientRouter = router({
       )
 
       if (!provider) {
-        return { success: false, error: "No AI provider available", zonesAudited: 0, totalFindings: 0, suggestionsCreated: 0, durationMs: 0 }
+        return { success: false, error: "No AI provider available", runId: "", zonesAudited: 0, totalFindings: 0, suggestionsCreated: 0, overallScore: 0, durationMs: 0 }
       }
 
-      const result = await auditSystemMap(
-        input.projectId,
-        input.projectPath,
-        provider,
-        (progress) => {
-          // Emit progress events for real-time UI updates
-          ambientEvents.emit(`project:${input.projectId}`, {
-            type: "audit-progress",
-            progress,
-          })
-        },
+      try {
+        const result = await auditAllZonesWithLock(
+          input.projectId,
+          input.projectPath,
+          provider,
+          (progress) => {
+            ambientEvents.emit(`project:${input.projectId}`, {
+              type: "audit-progress",
+              progress,
+            })
+          },
+        )
+        return { success: true, ...result }
+      } catch (err: any) {
+        return { success: false, error: err.message, runId: "", zonesAudited: 0, totalFindings: 0, suggestionsCreated: 0, overallScore: 0, durationMs: 0 }
+      }
+    }),
+
+  /**
+   * Audit a single zone — two-phase: auto-generate profile if needed, then execute.
+   */
+  auditZone: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      projectPath: z.string(),
+      zoneId: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      const { getClaudeCodeTokenFresh } = await import("./claude")
+      const { auditZone } = await import("../../ambient/zone-audit-engine")
+
+      const provider = await createAmbientProvider(
+        () => getClaudeCodeTokenFresh(),
+        null,
       )
 
-      return { success: true, ...result }
+      if (!provider) {
+        return { success: false, error: "No AI provider available" }
+      }
+
+      try {
+        const result = await auditZone(input.projectId, input.projectPath, input.zoneId, provider)
+        return { success: true, ...result }
+      } catch (err: any) {
+        return { success: false, error: err.message }
+      }
+    }),
+
+  /**
+   * Cancel an in-progress audit run.
+   */
+  cancelAuditRun: publicProcedure
+    .input(z.object({ runId: z.string() }))
+    .mutation(({ input }) => {
+      const { cancelAuditRun } = require("../../ambient/zone-audit-engine")
+      return { cancelled: cancelAuditRun(input.runId) }
+    }),
+
+  /**
+   * List audit runs for a project with optional zone filter. Cursor-based pagination.
+   */
+  listAuditRuns: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      zoneId: z.string().optional(),
+      limit: z.number().optional().default(20),
+      cursor: z.string().optional(), // runId for cursor-based pagination
+    }))
+    .query(({ input }) => {
+      const db = getDatabase()
+      const { auditRuns: ar, auditRunZones: arz, auditFindings: af } = require("../../db/schema")
+
+      let runs = db.select()
+        .from(ar)
+        .where(eq(ar.projectId, input.projectId))
+        .orderBy(desc(ar.createdAt))
+        .limit(input.limit + 1)
+        .all()
+
+      // Cursor-based pagination
+      if (input.cursor) {
+        const cursorIdx = runs.findIndex((r: any) => r.id === input.cursor)
+        if (cursorIdx >= 0) runs = runs.slice(cursorIdx + 1)
+      }
+
+      const hasMore = runs.length > input.limit
+      if (hasMore) runs = runs.slice(0, input.limit)
+
+      // Enrich with zone data
+      const enriched = runs.map((run: any) => {
+        const zones = db.select().from(arz).where(eq(arz.runId, run.id)).all()
+
+        // Filter by zoneId if specified
+        if (input.zoneId && !zones.some((z: any) => z.zoneId === input.zoneId)) return null
+
+        return {
+          ...run,
+          partialErrors: run.partialErrors ? JSON.parse(run.partialErrors) : [],
+          zones: zones.map((z: any) => ({ zoneId: z.zoneId, zoneName: z.zoneName, zoneScore: z.zoneScore })),
+        }
+      }).filter(Boolean)
+
+      return { runs: enriched, hasMore, nextCursor: hasMore ? runs[runs.length - 1]?.id : undefined }
+    }),
+
+  /**
+   * Get a single audit run with all its findings.
+   */
+  getAuditRun: publicProcedure
+    .input(z.object({ runId: z.string() }))
+    .query(({ input }) => {
+      const db = getDatabase()
+      const { auditRuns: ar, auditRunZones: arz, auditFindings: af } = require("../../db/schema")
+
+      const run = db.select().from(ar).where(eq(ar.id, input.runId)).get()
+      if (!run) return null
+
+      const zones = db.select().from(arz).where(eq(arz.runId, input.runId)).all()
+      const findings = db.select().from(af).where(eq(af.runId, input.runId)).orderBy(desc(af.createdAt)).all()
+
+      return {
+        ...run,
+        partialErrors: run.partialErrors ? JSON.parse(run.partialErrors) : [],
+        zones: zones.map((z: any) => ({ zoneId: z.zoneId, zoneName: z.zoneName, zoneScore: z.zoneScore })),
+        findings: findings.map((f: any) => ({
+          ...f,
+          affectedFiles: f.affectedFiles ? JSON.parse(f.affectedFiles) : [],
+        })),
+      }
+    }),
+
+  /**
+   * List audit findings with server-side filtering and pagination.
+   */
+  listAuditFindings: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      zoneId: z.string().optional(),
+      category: z.string().optional(),
+      severity: z.string().optional(),
+      status: z.string().optional().default("open"),
+      limit: z.number().optional().default(50),
+      cursor: z.string().optional(),
+    }))
+    .query(({ input }) => {
+      const db = getDatabase()
+      const { auditFindings: af } = require("../../db/schema")
+
+      const conditions = [eq(af.projectId, input.projectId)]
+      if (input.status) conditions.push(eq(af.status, input.status))
+      if (input.zoneId) conditions.push(eq(af.zoneId, input.zoneId))
+      if (input.category) conditions.push(eq(af.category, input.category))
+      if (input.severity) conditions.push(eq(af.severity, input.severity))
+
+      let results = db.select()
+        .from(af)
+        .where(and(...conditions))
+        .orderBy(desc(af.createdAt))
+        .limit(input.limit + 1)
+        .all()
+
+      if (input.cursor) {
+        const idx = results.findIndex((r: any) => r.id === input.cursor)
+        if (idx >= 0) results = results.slice(idx + 1)
+      }
+
+      const hasMore = results.length > input.limit
+      if (hasMore) results = results.slice(0, input.limit)
+
+      return {
+        findings: results.map((f: any) => ({
+          ...f,
+          affectedFiles: f.affectedFiles ? JSON.parse(f.affectedFiles) : [],
+        })),
+        hasMore,
+        nextCursor: hasMore ? results[results.length - 1]?.id : undefined,
+      }
+    }),
+
+  /**
+   * Resolve an audit finding — creates sub-chat with fix prompt, marks resolved.
+   */
+  resolveAuditFinding: publicProcedure
+    .input(z.object({
+      findingId: z.string(),
+      chatId: z.string(),
+    }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      const { auditFindings: af } = require("../../db/schema")
+
+      const finding = db.select().from(af).where(eq(af.id, input.findingId)).get()
+      if (!finding) return { success: false, subChatId: null }
+
+      // Create sub-chat with suggestedPrompt pre-filled
+      const subChatId = createId()
+      db.insert(subChats).values({
+        id: subChatId,
+        name: finding.title,
+        chatId: input.chatId,
+        mode: "agent",
+        messages: JSON.stringify([{ role: "user", content: finding.suggestedPrompt || `Fix: ${finding.title}\n\n${finding.description}` }]),
+      }).run()
+
+      // Mark finding resolved
+      db.update(af).set({
+        status: "resolved",
+        resolvedSubChatId: subChatId,
+        resolvedAt: new Date(),
+      }).where(eq(af.id, input.findingId)).run()
+
+      // Also mark the linked ambientSuggestion as approved
+      if (finding.suggestionId) {
+        db.update(ambientSuggestions).set({
+          status: "approved",
+          approvedAt: new Date(),
+          resolvedSubChatId: subChatId,
+        }).where(eq(ambientSuggestions.id, finding.suggestionId)).run()
+      }
+
+      // Emit event
+      ambientEvents.emit(`project:${finding.projectId}`, {
+        type: "finding-resolved",
+        findingId: input.findingId,
+        subChatId,
+      })
+
+      return { success: true, subChatId }
+    }),
+
+  /**
+   * Dismiss an audit finding with reason.
+   */
+  dismissAuditFinding: publicProcedure
+    .input(z.object({
+      findingId: z.string(),
+      reason: z.enum(["not-relevant", "already-handled", "wrong"]),
+    }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      const { auditFindings: af } = require("../../db/schema")
+
+      const finding = db.select().from(af).where(eq(af.id, input.findingId)).get()
+      if (!finding) return { success: false }
+
+      db.update(af).set({
+        status: "dismissed",
+        dismissReason: input.reason,
+      }).where(eq(af.id, input.findingId)).run()
+
+      // Also dismiss linked suggestion
+      if (finding.suggestionId) {
+        db.update(ambientSuggestions).set({
+          status: "dismissed",
+          dismissReason: input.reason,
+          dismissedAt: new Date(),
+        }).where(eq(ambientSuggestions.id, finding.suggestionId)).run()
+      }
+
+      return { success: true }
+    }),
+
+  // ============ AUDIT PROFILES ============
+
+  listAuditProfiles: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(({ input }) => {
+      const db = getDatabase()
+      const { auditProfiles: ap } = require("../../db/schema")
+
+      return db.select().from(ap)
+        .where(eq(ap.projectId, input.projectId))
+        .orderBy(desc(ap.updatedAt))
+        .all()
+        .map((p: any) => ({
+          ...p,
+          zoneIds: p.zoneIds ? JSON.parse(p.zoneIds) : null,
+          zoneNames: p.zoneNames ? JSON.parse(p.zoneNames) : null,
+          categories: p.categories ? JSON.parse(p.categories) : [],
+          isAutoGenerated: !!p.isAutoGenerated,
+        }))
+    }),
+
+  createAuditProfile: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      name: z.string(),
+      description: z.string().optional().default(""),
+      zoneIds: z.array(z.string()).nullable().optional(),
+      zoneNames: z.array(z.string()).nullable().optional(),
+      categories: z.array(z.string()),
+      severityThreshold: z.enum(["info", "warning", "error"]).optional().default("info"),
+      customPromptAppend: z.string().optional().default(""),
+      schedule: z.enum(["manual", "on-commit", "daily"]).optional().default("manual"),
+    }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      const { auditProfiles: ap } = require("../../db/schema")
+      const id = createId()
+
+      db.insert(ap).values({
+        id,
+        projectId: input.projectId,
+        name: input.name,
+        description: input.description,
+        zoneIds: input.zoneIds ? JSON.stringify(input.zoneIds) : null,
+        zoneNames: input.zoneNames ? JSON.stringify(input.zoneNames) : null,
+        categories: JSON.stringify(input.categories),
+        severityThreshold: input.severityThreshold,
+        customPromptAppend: input.customPromptAppend,
+        schedule: input.schedule,
+      }).run()
+
+      return { id }
+    }),
+
+  updateAuditProfile: publicProcedure
+    .input(z.object({
+      profileId: z.string(),
+      name: z.string().optional(),
+      description: z.string().optional(),
+      zoneIds: z.array(z.string()).nullable().optional(),
+      zoneNames: z.array(z.string()).nullable().optional(),
+      categories: z.array(z.string()).optional(),
+      severityThreshold: z.enum(["info", "warning", "error"]).optional(),
+      customPromptAppend: z.string().optional(),
+      schedule: z.enum(["manual", "on-commit", "daily"]).optional(),
+    }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      const { auditProfiles: ap } = require("../../db/schema")
+      const { profileId, ...updates } = input
+
+      const setValues: Record<string, any> = { updatedAt: new Date() }
+      if (updates.name !== undefined) setValues.name = updates.name
+      if (updates.description !== undefined) setValues.description = updates.description
+      if (updates.zoneIds !== undefined) setValues.zoneIds = updates.zoneIds ? JSON.stringify(updates.zoneIds) : null
+      if (updates.zoneNames !== undefined) setValues.zoneNames = updates.zoneNames ? JSON.stringify(updates.zoneNames) : null
+      if (updates.categories !== undefined) setValues.categories = JSON.stringify(updates.categories)
+      if (updates.severityThreshold !== undefined) setValues.severityThreshold = updates.severityThreshold
+      if (updates.customPromptAppend !== undefined) setValues.customPromptAppend = updates.customPromptAppend
+      if (updates.schedule !== undefined) setValues.schedule = updates.schedule
+
+      db.update(ap).set(setValues).where(eq(ap.id, profileId)).run()
+      return { success: true }
+    }),
+
+  deleteAuditProfile: publicProcedure
+    .input(z.object({ profileId: z.string() }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      const { auditProfiles: ap } = require("../../db/schema")
+      db.delete(ap).where(eq(ap.id, input.profileId)).run()
+      return { success: true }
+    }),
+
+  // ============ AUDIT TRENDS ============
+
+  getAuditTrends: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      zoneId: z.string().optional(),
+      limit: z.number().optional().default(10),
+    }))
+    .query(({ input }) => {
+      const db = getDatabase()
+      const { auditRunZones: arz, auditRuns: ar } = require("../../db/schema")
+
+      // Get all zones that have been audited
+      let zoneRows: any[]
+      if (input.zoneId) {
+        zoneRows = db.select()
+          .from(arz)
+          .innerJoin(ar, eq(arz.runId, ar.id))
+          .where(and(eq(ar.projectId, input.projectId), eq(arz.zoneId, input.zoneId)))
+          .orderBy(desc(ar.createdAt))
+          .limit(input.limit)
+          .all()
+      } else {
+        zoneRows = db.select()
+          .from(arz)
+          .innerJoin(ar, eq(arz.runId, ar.id))
+          .where(eq(ar.projectId, input.projectId))
+          .orderBy(desc(ar.createdAt))
+          .all()
+      }
+
+      // Group by zoneId, take last N scores
+      const zoneMap = new Map<string, { zoneName: string; scores: number[] }>()
+      for (const row of zoneRows) {
+        const z = row.audit_run_zones
+        if (!zoneMap.has(z.zoneId)) {
+          zoneMap.set(z.zoneId, { zoneName: z.zoneName, scores: [] })
+        }
+        const entry = zoneMap.get(z.zoneId)!
+        if (entry.scores.length < input.limit) {
+          entry.scores.push(z.zoneScore)
+        }
+      }
+
+      // Build trends
+      const trends = Array.from(zoneMap.entries()).map(([zoneId, data]) => {
+        const scores = data.scores.reverse() // oldest first
+        const currentScore = scores.length > 0 ? scores[scores.length - 1] : 0
+        const prevScore = scores.length > 1 ? scores[scores.length - 2] : currentScore
+        const trend = currentScore > prevScore + 5 ? "up" as const
+          : currentScore < prevScore - 5 ? "down" as const
+          : "stable" as const
+
+        return { zoneId, zoneName: data.zoneName, currentScore, scores, trend }
+      })
+
+      // Overall project score
+      const overallScore = trends.length > 0
+        ? Math.round(trends.reduce((sum, t) => sum + t.currentScore, 0) / trends.length)
+        : 0
+
+      return { trends, overallScore }
     }),
 
   // ============ SUBSCRIPTIONS ============

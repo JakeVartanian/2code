@@ -131,7 +131,7 @@ export const AgentWebSearchTool = memo(function AgentWebSearchTool({
         <div className="border-t border-border max-h-[200px] overflow-y-auto">
           {results.map((result, idx) => (
             <a
-              key={idx}
+              key={result.url || `result-${idx}`}
               href={result.url}
               target="_blank"
               rel="noopener noreferrer"

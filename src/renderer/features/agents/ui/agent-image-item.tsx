@@ -283,7 +283,7 @@ export function AgentImageItem({
               <div className="flex gap-2">
                 {images.map((_, idx) => (
                   <button
-                    key={idx}
+                    key={`dot-${idx}`}
                     onClick={(e) => {
                       e.stopPropagation()
                       setCurrentIndex(idx)

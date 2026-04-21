@@ -120,6 +120,13 @@
       "when": 1776749397941,
       "tag": "0016_wakeful_master_mold",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1776792299544,
+      "tag": "0018_living_zodiak",
+      "breakpoints": true
     }
   ]
 }

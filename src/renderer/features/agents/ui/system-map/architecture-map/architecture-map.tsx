@@ -5,7 +5,7 @@
 
 import { memo, useMemo, useCallback, useRef, useState, useEffect } from "react"
 import { motion } from "motion/react"
-import { Network, RefreshCw, Sparkles } from "lucide-react"
+import { Network, RefreshCw, Sparkles, ShieldCheck } from "lucide-react"
 import { cn } from "../../../../../lib/utils"
 import { trpc } from "../../../../../lib/trpc"
 import { useArchitectureData } from "./use-architecture-data"
@@ -108,9 +108,13 @@ export const ArchitectureMap = memo(function ArchitectureMap({
   // Brain build mutation
   const buildBrainMutation = trpc.ambient.buildBrain.useMutation()
   const regenerateMutation = trpc.ambient.regenerateSystemMap.useMutation()
+  const auditMutation = trpc.ambient.auditSystemMap.useMutation()
+  const auditZoneMutation = trpc.ambient.auditZone.useMutation()
   const utils = trpc.useUtils()
 
   const [isBuilding, setIsBuilding] = useState(false)
+  // Track which zones are currently being audited
+  const [auditingZones, setAuditingZones] = useState<Set<string>>(new Set())
 
   const handleBuildBrain = useCallback(async () => {
     if (!projectId || !projectPath) return
@@ -133,6 +137,33 @@ export const ArchitectureMap = memo(function ArchitectureMap({
       console.error("[ArchitectureMap] Regeneration failed:", err)
     }
   }, [projectId, projectPath, regenerateMutation, utils])
+
+  const handleAudit = useCallback(async () => {
+    if (!projectId || !projectPath) return
+    try {
+      await auditMutation.mutateAsync({ projectId, projectPath })
+      utils.ambient.listSuggestions.invalidate({ projectId })
+    } catch (err) {
+      console.error("[ArchitectureMap] Audit failed:", err)
+    }
+  }, [projectId, projectPath, auditMutation, utils])
+
+  const handleZoneAudit = useCallback(async (zoneId: string) => {
+    if (!projectId || !projectPath) return
+    setAuditingZones(prev => new Set(prev).add(zoneId))
+    try {
+      await auditZoneMutation.mutateAsync({ projectId, projectPath, zoneId })
+      utils.ambient.listSuggestions.invalidate({ projectId })
+    } catch (err) {
+      console.error(`[ArchitectureMap] Zone audit failed for ${zoneId}:`, err)
+    } finally {
+      setAuditingZones(prev => {
+        const next = new Set(prev)
+        next.delete(zoneId)
+        return next
+      })
+    }
+  }, [projectId, projectPath, auditZoneMutation, utils])
 
   // No project selected
   if (!projectId || !projectPath) {
@@ -161,15 +192,30 @@ export const ArchitectureMap = memo(function ArchitectureMap({
             )}
           </div>
           {hasSystemMap && (
-            <button
-              onClick={handleRegenerate}
-              disabled={regenerateMutation.isPending}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-medium
-                text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-all duration-150"
-            >
-              <RefreshCw className={cn("w-3 h-3", regenerateMutation.isPending && "animate-spin")} />
-              Regenerate
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={handleAudit}
+                disabled={auditMutation.isPending}
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-medium transition-all duration-150",
+                  auditMutation.isPending
+                    ? "bg-cyan-500/10 text-cyan-400 cursor-wait"
+                    : "text-zinc-500 hover:text-cyan-400 hover:bg-cyan-500/10",
+                )}
+              >
+                <ShieldCheck className={cn("w-3 h-3", auditMutation.isPending && "animate-pulse")} />
+                {auditMutation.isPending ? "Auditing..." : "Audit All"}
+              </button>
+              <button
+                onClick={handleRegenerate}
+                disabled={regenerateMutation.isPending}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-medium
+                  text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-all duration-150"
+              >
+                <RefreshCw className={cn("w-3 h-3", regenerateMutation.isPending && "animate-spin")} />
+                Regenerate
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -263,6 +309,8 @@ export const ArchitectureMap = memo(function ArchitectureMap({
                   x={pos.x}
                   y={pos.y}
                   index={i}
+                  isAuditing={auditingZones.has(zone.id) || auditMutation.isPending}
+                  onAudit={handleZoneAudit}
                 />
               )
             })}

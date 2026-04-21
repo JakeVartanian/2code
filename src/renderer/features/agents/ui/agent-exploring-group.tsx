@@ -125,7 +125,7 @@ export const AgentExploringGroup = memo(function AgentExploringGroup({
               if (!meta) {
                 return (
                   <div
-                    key={idx}
+                    key={part.toolCallId || `explore-${idx}`}
                     className="text-xs text-muted-foreground py-0.5 px-2"
                   >
                     {part.type?.replace("tool-", "")}
@@ -138,7 +138,7 @@ export const AgentExploringGroup = memo(function AgentExploringGroup({
                 : undefined
               return (
                 <AgentToolCall
-                  key={idx}
+                  key={part.toolCallId || `explore-${idx}`}
                   icon={meta.icon}
                   title={meta.title(part)}
                   subtitle={meta.subtitle?.(part)}

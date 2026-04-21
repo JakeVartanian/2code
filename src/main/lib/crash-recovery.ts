@@ -8,7 +8,7 @@
 import { app } from "electron"
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs"
 import { join } from "path"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { getDatabase, subChats } from "./db"
 
 const CRASH_STATE_FILE = "crash-state.json"
@@ -80,7 +80,7 @@ export function getActiveStreamingSubChats(): string[] {
     const activeSubChats = db
       .select({ id: subChats.id })
       .from(subChats)
-      .where(eq(subChats.streamId, null).not())
+      .where(sql`${subChats.streamId} IS NOT NULL`)
       .all()
 
     return activeSubChats.map((sc) => sc.id)

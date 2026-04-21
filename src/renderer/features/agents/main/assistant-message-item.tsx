@@ -531,13 +531,15 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     if (part.toolCallId && nestedToolIds.has(part.toolCallId)) return null
     if (part.type === "exploring-group") return null
 
+    const partKey = part.toolCallId || `${message.id}-${idx}`
+
     if (part.type === "text") {
       if (!part.text?.trim()) return null
       const isFinalText = isFinal && idx === collapseBeforeIndex
       const isTextStreaming = isLastMessage && isStreaming
       return (
         <MemoizedTextPart
-          key={idx}
+          key={partKey}
           text={part.text}
           messageId={message.id}
           partIndex={idx}
@@ -550,14 +552,14 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
 
     if (part.type === "tool-Task") {
       const nestedTools = nestedToolsMap.get(part.toolCallId) || []
-      return <AgentTaskTool key={idx} part={part} nestedTools={nestedTools} chatStatus={status} />
+      return <AgentTaskTool key={partKey} part={part} nestedTools={nestedTools} chatStatus={status} />
     }
 
-    if (part.type === "tool-Bash") return <AgentBashTool key={idx} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
+    if (part.type === "tool-Bash") return <AgentBashTool key={partKey} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
     if (part.type === "reasoning" || part.type === "tool-Thinking") {
       return (
         <AgentThinkingTool
-          key={idx}
+          key={partKey}
           part={toThinkingToolPart(part, message?.id, idx)}
           chatStatus={status}
         />
@@ -595,7 +597,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
           const isOpStreaming = isPending || (part.state === "input-streaming" && isStreaming && isLastMessage)
 
           return (
-            <div key={idx} className="flex items-center gap-1.5 px-2 py-0.5">
+            <div key={partKey} className="flex items-center gap-1.5 px-2 py-0.5">
               <span className="text-xs text-muted-foreground">
                 {isOpStreaming ? (
                   <TextShimmer as="span" duration={2.5}>
@@ -612,7 +614,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
         // Last operation in final parts: show full card
         return (
           <AgentPlanFileTool
-            key={idx}
+            key={partKey}
             part={part}
             chatStatus={status}
             subChatId={subChatId}
@@ -622,11 +624,11 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
       }
     }
 
-    if (part.type === "tool-Edit") return <AgentEditTool key={idx} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
-    if (part.type === "tool-Write") return <AgentEditTool key={idx} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
-    if (part.type === "tool-WebSearch") return <AgentWebSearchCollapsible key={idx} part={part} chatStatus={status} />
-    if (part.type === "tool-WebFetch") return <AgentWebFetchTool key={idx} part={part} chatStatus={status} />
-    if (part.type === "tool-PlanWrite") return <AgentPlanTool key={idx} part={part} chatStatus={status} />
+    if (part.type === "tool-Edit") return <AgentEditTool key={partKey} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
+    if (part.type === "tool-Write") return <AgentEditTool key={partKey} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
+    if (part.type === "tool-WebSearch") return <AgentWebSearchCollapsible key={partKey} part={part} chatStatus={status} />
+    if (part.type === "tool-WebFetch") return <AgentWebFetchTool key={partKey} part={part} chatStatus={status} />
+    if (part.type === "tool-PlanWrite") return <AgentPlanTool key={partKey} part={part} chatStatus={status} />
 
     // ExitPlanMode tool is hidden - plan is shown in sidebar instead
     if (part.type === "tool-ExitPlanMode") {
@@ -634,14 +636,14 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     }
 
     if (part.type === "tool-TodoWrite") {
-      return <AgentTodoTool key={idx} part={part} chatStatus={status} subChatId={subChatId} />
+      return <AgentTodoTool key={partKey} part={part} chatStatus={status} subChatId={subChatId} />
     }
 
     if (part.type === "tool-AskUserQuestion") {
       const { isPending, isError } = getToolStatus(part, status)
       return (
         <AgentAskUserQuestionTool
-          key={idx}
+          key={partKey}
           input={part.input}
           result={part.result}
           errorText={(part as any).errorText || (part as any).error}
@@ -662,7 +664,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
         : undefined
       return (
         <AgentToolCall
-          key={idx}
+          key={partKey}
           icon={meta.icon}
           title={meta.title(part)}
           subtitle={meta.subtitle?.(part)}
@@ -679,7 +681,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     if (mcpInfo) {
       return (
         <AgentMcpToolCall
-          key={idx}
+          key={partKey}
           part={part}
           mcpInfo={mcpInfo}
           chatStatus={status}
@@ -689,7 +691,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
 
     if (part.type?.startsWith("tool-")) {
       return (
-        <div key={idx} className="text-xs text-muted-foreground py-0.5 px-2">
+        <div key={partKey} className="text-xs text-muted-foreground py-0.5 px-2">
           {part.type.replace("tool-", "")}
         </div>
       )
@@ -713,12 +715,13 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
               const taskGrouped = groupTaskTools(stepParts, nestedToolIds)
               const grouped = groupExploringTools(taskGrouped, nestedToolIds)
               return grouped.map((part: any, idx: number) => {
+                const groupKey = part.parts?.[0]?.toolCallId || part.toolCallId || `step-${idx}`
                 if (part.type === "exploring-group") {
                   const isLast = idx === grouped.length - 1
                   const isGroupStreaming = isStreaming && isLastMessage && isLast
                   return (
                     <AgentExploringGroup
-                      key={idx}
+                      key={`eg-${groupKey}`}
                       parts={part.parts}
                       chatStatus={status}
                       isStreaming={isGroupStreaming}
@@ -730,7 +733,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
                   const isGroupStreaming = isStreaming && isLastMessage && isLast
                   return (
                     <AgentTaskToolsGroup
-                      key={idx}
+                      key={`tg-${groupKey}`}
                       parts={part.parts}
                       chatStatus={status}
                       isStreaming={isGroupStreaming}
@@ -749,12 +752,13 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
           const taskGrouped = groupTaskTools(finalParts, nestedToolIds)
           const grouped = groupExploringTools(taskGrouped, nestedToolIds)
           return grouped.map((part: any, idx: number) => {
+            const groupKey = part.parts?.[0]?.toolCallId || part.toolCallId || `final-${idx}`
             if (part.type === "exploring-group") {
               const isLast = idx === grouped.length - 1
               const isGroupStreaming = isStreaming && isLastMessage && isLast
               return (
                 <AgentExploringGroup
-                  key={idx}
+                  key={`eg-${groupKey}`}
                   parts={part.parts}
                   chatStatus={status}
                   isStreaming={isGroupStreaming}
@@ -766,7 +770,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
               const isGroupStreaming = isStreaming && isLastMessage && isLast
               return (
                 <AgentTaskToolsGroup
-                  key={idx}
+                  key={`tg-${groupKey}`}
                   parts={part.parts}
                   chatStatus={status}
                   isStreaming={isGroupStreaming}

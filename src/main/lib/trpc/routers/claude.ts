@@ -1482,7 +1482,7 @@ export const claudeRouter = router({
       }),
     )
     .subscription(({ input }) => {
-      return observable<UIMessageChunk>((emit) => {
+      return observable<BatchedUIMessageChunk>((emit) => {
         // Enforce concurrent agent cap (don't count re-sends for the same subChat)
         if (
           !activeSessions.has(input.subChatId) &&
@@ -2891,10 +2891,13 @@ ${prompt}
             const MAX_OPENROUTER_RATE_LIMIT_RETRIES = 3
             let openRouterRateLimitRetryCount = 0
             let openRouterRateLimitRetryNeeded = false
+            // Auto-retry on overloaded errors (Anthropic servers at capacity — transient)
+            const MAX_OVERLOADED_RETRIES = 3
+            let overloadedRetryCount = 0
+            let overloadedRetryNeeded = false
             // Auto-retry on empty response (stream closed with no messages received)
             const MAX_EMPTY_RESPONSE_RETRIES = 2
             let emptyResponseRetryCount = 0
-            let emptyResponseRetryNeeded = false
             let messageCount = 0
             let pendingFinishChunk: UIMessageChunk | null = null
 
@@ -2903,9 +2906,13 @@ ${prompt}
               policyRetryNeeded = false
               authRetryNeeded = false
               openRouterRateLimitRetryNeeded = false
-              emptyResponseRetryNeeded = false
+              overloadedRetryNeeded = false
               messageCount = 0
               pendingFinishChunk = null
+              // Reset accumulated state on retry to prevent duplicate/corrupted messages
+              parts.length = 0
+              currentText = ""
+              stderrLines.length = 0
 
               // Guard: if aborted during async setup (env build, symlinks, etc.) bail silently
               if (abortController.signal.aborted) {
@@ -2920,7 +2927,7 @@ ${prompt}
               let stream
               try {
                 console.log(`[SD] M:SPAWN_SUBPROCESS sub=${subId}`)
-                stream = claudeQuery(queryOptions)
+                stream = claudeQuery(queryOptions as any)
                 console.log(`[SD] M:SUBPROCESS_STARTED sub=${subId}`)
               } catch (queryError) {
                 // If the signal was aborted, this is expected — bail silently
@@ -3221,6 +3228,27 @@ ${prompt}
                       console.log(
                         `[claude] OpenRouter rate limit - backing off ${backoffMs}ms then retrying (attempt ${openRouterRateLimitRetryCount}/${MAX_OPENROUTER_RATE_LIMIT_RETRIES})`,
                       )
+                      await new Promise((resolve) => setTimeout(resolve, backoffMs))
+                      break // break for-await loop to retry
+                    }
+
+                    // Auto-retry on overloaded errors with exponential backoff
+                    // Anthropic servers temporarily at capacity — usually resolves within seconds
+                    if (
+                      errorCategory === "OVERLOADED_SDK" &&
+                      overloadedRetryCount < MAX_OVERLOADED_RETRIES &&
+                      !abortController.signal.aborted
+                    ) {
+                      overloadedRetryCount++
+                      overloadedRetryNeeded = true
+                      const backoffMs = overloadedRetryCount * 5000 // 5s, 10s, 15s
+                      console.log(
+                        `[claude] Overloaded - backing off ${backoffMs / 1000}s then retrying (attempt ${overloadedRetryCount}/${MAX_OVERLOADED_RETRIES})`,
+                      )
+                      safeEmit({
+                        type: "retry-notification",
+                        message: `Claude is busy — retrying automatically in ${backoffMs / 1000}s (attempt ${overloadedRetryCount}/${MAX_OVERLOADED_RETRIES})...`,
+                      } as UIMessageChunk)
                       await new Promise((resolve) => setTimeout(resolve, backoffMs))
                       break // break for-await loop to retry
                     }
@@ -3609,6 +3637,26 @@ ${prompt}
                   errorContext = "Invalid API key"
                   errorCategory = "INVALID_API_KEY"
                 } else if (
+                  err.message?.includes("overloaded") ||
+                  stderrOutput?.includes("overloaded")
+                ) {
+                  errorContext = "Claude is overloaded, try again later"
+                  errorCategory = "OVERLOADED"
+                  // Auto-retry with backoff
+                  if (overloadedRetryCount < MAX_OVERLOADED_RETRIES && !abortController.signal.aborted) {
+                    overloadedRetryCount++
+                    overloadedRetryNeeded = true
+                    const backoffMs = overloadedRetryCount * 5000
+                    console.log(
+                      `[claude] Overloaded (catch) - backing off ${backoffMs / 1000}s then retrying (attempt ${overloadedRetryCount}/${MAX_OVERLOADED_RETRIES})`,
+                    )
+                    safeEmit({
+                      type: "retry-notification",
+                      message: `Claude is busy — retrying automatically in ${backoffMs / 1000}s (attempt ${overloadedRetryCount}/${MAX_OVERLOADED_RETRIES})...`,
+                    } as UIMessageChunk)
+                    await new Promise((resolve) => setTimeout(resolve, backoffMs))
+                  }
+                } else if (
                   err.message?.includes("rate_limit") ||
                   err.message?.includes("429") ||
                   stderrOutput?.includes("rate_limit") ||
@@ -3619,7 +3667,8 @@ ${prompt}
                   errorCategory = "RATE_LIMIT"
 
                   // Mark account as rate-limited if using native Anthropic auth
-                  if (!isOpenRouter && !hasExistingApiConfig) {
+                  const catchIsOpenRouter = finalCustomConfig?.baseUrl?.includes("openrouter.ai")
+                  if (!catchIsOpenRouter && !hasExistingApiConfig) {
                     const accountId = getCurrentActiveAccountId()
                     if (accountId) {
                       markAccountRateLimited(accountId)
@@ -3636,64 +3685,70 @@ ${prompt}
                 }
 
 
-                // Send error with stderr output to frontend (only if not aborted by user)
-                if (!abortController.signal.aborted) {
-                  safeEmit({
-                    type: "error",
-                    errorText: stderrOutput
-                      ? `${errorContext}: ${err.message}\n\nProcess output:\n${stderrOutput}`
-                      : `${errorContext}: ${err.message}`,
-                    debugInfo: {
-                      context: errorContext,
-                      category: errorCategory,
-                      cwd: input.cwd,
-                      mode: input.mode,
-                      stderr: stderrOutput || "(no stderr captured)",
-                    },
-                  } as UIMessageChunk)
-                }
-
-                // ALWAYS save accumulated parts before returning (even on abort/error)
-                console.log(
-                  `[SD] M:CATCH_SAVE sub=${subId} aborted=${abortController.signal.aborted} parts=${parts.length}`,
-                )
-                if (currentText.trim()) {
-                  parts.push({ type: "text", text: currentText })
-                }
-                if (parts.length > 0) {
-                  const assistantMessage = {
-                    id: crypto.randomUUID(),
-                    role: "assistant",
-                    parts,
-                    metadata,
+                // If retrying overloaded from catch, skip error emit and don't return
+                if (overloadedRetryNeeded) {
+                  console.log(`[claude] Overloaded retry from catch - skipping error emit`)
+                  // Don't emit error, don't save, don't return — let the while loop continue
+                } else {
+                  // Send error with stderr output to frontend (only if not aborted by user)
+                  if (!abortController.signal.aborted) {
+                    safeEmit({
+                      type: "error",
+                      errorText: stderrOutput
+                        ? `${errorContext}: ${err.message}\n\nProcess output:\n${stderrOutput}`
+                        : `${errorContext}: ${err.message}`,
+                      debugInfo: {
+                        context: errorContext,
+                        category: errorCategory,
+                        cwd: input.cwd,
+                        mode: input.mode,
+                        stderr: stderrOutput || "(no stderr captured)",
+                      },
+                    } as UIMessageChunk)
                   }
-                  const finalMessages = pruneMessageHistory(
-                    [...messagesToSave, assistantMessage],
-                    input.subChatId,
+
+                  // ALWAYS save accumulated parts before returning (even on abort/error)
+                  console.log(
+                    `[SD] M:CATCH_SAVE sub=${subId} aborted=${abortController.signal.aborted} parts=${parts.length}`,
                   )
-                  // Flush immediately: session is ending, data must be persisted now
-                  flushPendingWrite(input.subChatId, {
-                    messages: JSON.stringify(finalMessages),
-                    sessionId: metadata.sessionId,
-                    streamId: null,
-                    updatedAt: new Date(),
-                  }, input.chatId)
-
-                  // Create snapshot stash for rollback support (on error)
-                  if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
-                    await createRollbackStash(
-                      input.cwd,
-                      metadata.sdkMessageUuid,
-                    )
+                  if (currentText.trim()) {
+                    parts.push({ type: "text", text: currentText })
                   }
-                }
+                  if (parts.length > 0) {
+                    const assistantMessage = {
+                      id: crypto.randomUUID(),
+                      role: "assistant",
+                      parts,
+                      metadata,
+                    }
+                    const finalMessages = pruneMessageHistory(
+                      [...messagesToSave, assistantMessage],
+                      input.subChatId,
+                    )
+                    // Flush immediately: session is ending, data must be persisted now
+                    flushPendingWrite(input.subChatId, {
+                      messages: JSON.stringify(finalMessages),
+                      sessionId: metadata.sessionId,
+                      streamId: null,
+                      updatedAt: new Date(),
+                    }, input.chatId)
 
-                console.log(
-                  `[SD] M:END sub=${subId} reason=stream_error cat=${errorCategory} n=${chunkCount} last=${lastChunkType}`,
-                )
-                safeEmit({ type: "finish" } as UIMessageChunk)
-                safeComplete()
-                return
+                    // Create snapshot stash for rollback support (on error)
+                    if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
+                      await createRollbackStash(
+                        input.cwd,
+                        metadata.sdkMessageUuid,
+                      )
+                    }
+                  }
+
+                  console.log(
+                    `[SD] M:END sub=${subId} reason=stream_error cat=${errorCategory} n=${chunkCount} last=${lastChunkType}`,
+                  )
+                  safeEmit({ type: "finish" } as UIMessageChunk)
+                  safeComplete()
+                  return
+                }
               }
 
               // Retry if auth failed and token was refreshed
@@ -3722,40 +3777,39 @@ ${prompt}
                 continue
               }
 
-              // Retry if empty response received (transient stream closure)
-              if (emptyResponseRetryNeeded) {
+              // Retry if overloaded (backoff already applied in error handler)
+              if (overloadedRetryNeeded) {
                 console.log(
-                  `[claude] Empty response retry ${emptyResponseRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES} - restarting stream`,
+                  `[claude] Overloaded retry ${overloadedRetryCount}/${MAX_OVERLOADED_RETRIES} - restarting stream`,
                 )
                 continue
               }
 
+              // Check for empty response before breaking — retry if no messages received
+              if (messageCount === 0 && !abortController.signal.aborted) {
+                if (emptyResponseRetryCount < MAX_EMPTY_RESPONSE_RETRIES) {
+                  emptyResponseRetryCount++
+                  console.log(
+                    `[claude] Empty response retry ${emptyResponseRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES} - restarting stream`,
+                  )
+                  continue // retry inside the while loop
+                } else {
+                  // Max retries reached, emit error
+                  emitError(
+                    new Error("No response received from Claude"),
+                    "Empty response",
+                  )
+                  console.log(
+                    `[SD] M:END sub=${subId} reason=no_response n=${chunkCount}`,
+                  )
+                  safeEmit({ type: "finish" } as UIMessageChunk)
+                  safeComplete()
+                  return
+                }
+              }
+
               break
             } // end policyRetryLoop
-
-            // 6. Check if we got any response
-            if (messageCount === 0 && !abortController.signal.aborted) {
-              // Retry on empty response - stream may have closed prematurely due to transient issues
-              if (emptyResponseRetryCount < MAX_EMPTY_RESPONSE_RETRIES) {
-                emptyResponseRetryCount++
-                console.log(
-                  `[claude] Empty response retry ${emptyResponseRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES} - restarting stream`,
-                )
-                emptyResponseRetryNeeded = true
-              } else {
-                // Max retries reached, emit error
-                emitError(
-                  new Error("No response received from Claude"),
-                  "Empty response",
-                )
-                console.log(
-                  `[SD] M:END sub=${subId} reason=no_response n=${chunkCount}`,
-                )
-                safeEmit({ type: "finish" } as UIMessageChunk)
-                safeComplete()
-                return
-              }
-            }
 
             // 7. Save final messages to DB
             // ALWAYS save accumulated parts, even on abort (so user sees partial responses after reload)
@@ -4119,7 +4173,7 @@ ${prompt}
         transport: z.enum(["stdio", "http"]),
         command: z.string().optional(),
         args: z.array(z.string()).optional(),
-        env: z.record(z.string()).optional(),
+        env: z.record(z.string(), z.string()).optional(),
         url: z.string().url().optional(),
         authType: z.enum(["none", "oauth", "bearer"]).optional(),
         bearerToken: z.string().optional(),
@@ -4197,7 +4251,7 @@ ${prompt}
           .optional(),
         command: z.string().optional(),
         args: z.array(z.string()).optional(),
-        env: z.record(z.string()).optional(),
+        env: z.record(z.string(), z.string()).optional(),
         url: z.string().url().optional(),
         authType: z.enum(["none", "oauth", "bearer"]).optional(),
         bearerToken: z.string().optional(),

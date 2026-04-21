@@ -98,8 +98,9 @@ let pendingAuthNonce: string | null = null
 
 export function generateAuthNonce(): string {
   const { randomBytes } = require("node:crypto")
-  pendingAuthNonce = randomBytes(32).toString("hex")
-  return pendingAuthNonce
+  const nonce = randomBytes(32).toString("hex")
+  pendingAuthNonce = nonce
+  return nonce
 }
 
 export function consumeAuthNonce(state: string): boolean {
@@ -924,7 +925,7 @@ if (gotTheLock) {
           },
         },
       ])
-      app.dock.setMenu(dockMenu)
+      app.dock?.setMenu(dockMenu)
     }
 
     // Set update state and rebuild menu

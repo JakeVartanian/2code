@@ -598,7 +598,7 @@ export const AgentTodoTool = memo(function AgentTodoTool({
             <div className="flex items-center gap-1 text-muted-foreground/60 font-normal truncate min-w-0">
               {visibleItems.map((c, idx) => (
                 <TodoChangeItem
-                  key={idx}
+                  key={`${c.todo.content || ''}-${idx}`}
                   change={c}
                   showSeparator={idx < visibleItems.length - 1}
                 />
@@ -742,7 +742,7 @@ export const AgentTodoTool = memo(function AgentTodoTool({
           >
             {displayTodos.map((todo, idx) => (
               <TodoListItem
-                key={idx}
+                key={`${todo.content || ''}-${idx}`}
                 todo={todo}
                 isPending={isPending}
                 isLast={idx === displayTodos.length - 1}

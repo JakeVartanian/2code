@@ -81,7 +81,7 @@ const ERROR_TOAST_CONFIG: Record<
   OVERLOADED_SDK: {
     title: "Claude is busy",
     description:
-      "The service is overloaded. Please try again in a few moments.",
+      "Claude is overloaded after multiple retry attempts. Please try again in a few minutes.",
   },
   CPU_INCOMPATIBLE: {
     title: "CPU not supported",
@@ -113,14 +113,27 @@ const ERROR_TOAST_CONFIG: Record<
     description: "Your session may have expired. Try logging in again.",
   },
   USAGE_POLICY_VIOLATION: {
-    title: "Anthropic API hiccup",
-    description: "The request was rejected by Anthropic's servers. Please try again shortly.",
+    title: "Request declined",
+    description: "Claude couldn't respond to this request. Try rephrasing or taking a different approach.",
   },
   OPENROUTER_MODEL_ERROR: {
     title: "OpenRouter model unavailable",
     description: "This model is currently unavailable or rate-limited. Try a different model in Settings → Models.",
   },
   // SDK_ERROR and other unknown errors use chunk.errorText for description
+}
+
+// Inline error messages shown directly in the chat thread (not just toasts).
+// Only categories where the user benefits from seeing context in the conversation.
+const INLINE_ERROR_MESSAGES: Partial<Record<string, string>> = {
+  USAGE_POLICY_VIOLATION:
+    "This request couldn't be processed. Try rephrasing or taking a different approach.",
+  SESSION_EXPIRED:
+    "The session expired. Send your message again to continue.",
+  NETWORK_ERROR:
+    "Connection was lost during the response. Send a follow-up to continue.",
+  PROCESS_CRASH:
+    "Claude crashed unexpectedly. Try sending your message again.",
 }
 
 type UIMessageChunk = any // Inferred from subscription
@@ -514,6 +527,20 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                     },
                   },
                 })
+
+                // Inject inline error text into the chat thread so the user sees
+                // the error in context, not just as a fleeting toast.
+                const inlineMsg = INLINE_ERROR_MESSAGES[category]
+                if (inlineMsg) {
+                  try {
+                    controller.enqueue({
+                      type: "text",
+                      text: `\n\n> ⚠️ ${inlineMsg}\n`,
+                    })
+                  } catch {
+                    // Stream may already be closed
+                  }
+                }
               }
 
               // Try to enqueue, but don't crash if stream is already closed

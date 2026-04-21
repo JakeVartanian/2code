@@ -475,7 +475,7 @@ async function saveTokensToClaudeJson(
         clientId,
         expiresAt: tokens.expiresAt,
         resource: resolvedResource,
-      },
+      } as any,
     });
   });
 }

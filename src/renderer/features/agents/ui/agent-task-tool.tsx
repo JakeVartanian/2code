@@ -200,7 +200,7 @@ export const AgentTaskTool = memo(function AgentTaskTool({
               if (!nestedMeta) {
                 return (
                   <div
-                    key={idx}
+                    key={nestedPart.toolCallId || `nested-${idx}`}
                     className="text-xs text-muted-foreground py-0.5 px-2"
                   >
                     {nestedPart.type?.replace("tool-", "")}
@@ -214,7 +214,7 @@ export const AgentTaskTool = memo(function AgentTaskTool({
                 : undefined
               return (
                 <AgentToolCall
-                  key={idx}
+                  key={nestedPart.toolCallId || `nested-${idx}`}
                   icon={nestedMeta.icon}
                   title={nestedMeta.title(nestedPart)}
                   subtitle={nestedMeta.subtitle?.(nestedPart)}

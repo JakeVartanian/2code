@@ -132,7 +132,7 @@ export const AgentAskUserQuestionTool = memo(function AgentAskUserQuestionTool({
         {/* Content */}
         <div className="flex flex-col gap-2 p-2.5 text-xs">
           {entries.map(([question, answer], idx) => (
-            <div key={idx} className="flex flex-col gap-0.5">
+            <div key={`qa-${idx}`} className="flex flex-col gap-0.5">
               <span className="font-medium text-foreground">{question}</span>
               <span className="text-muted-foreground">{answer}</span>
             </div>

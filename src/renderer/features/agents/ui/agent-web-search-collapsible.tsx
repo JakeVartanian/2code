@@ -118,7 +118,7 @@ export const AgentWebSearchCollapsible = memo(
             <div className="space-y-1">
               {results.map((result, idx) => (
                 <a
-                  key={idx}
+                  key={result.url || `result-${idx}`}
                   href={result.url}
                   target="_blank"
                   rel="noopener noreferrer"

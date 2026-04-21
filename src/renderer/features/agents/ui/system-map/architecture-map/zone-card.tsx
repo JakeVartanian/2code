@@ -1,15 +1,16 @@
 /**
  * ZoneCard — renders a single system zone in the architecture map.
- * Matches the Pencil mockup: ambient glow, colored border, confidence bar,
- * tech stack description, and "audited X ago" timestamp.
+ * Ambient glow, colored border, confidence bar, tech stack description,
+ * "audited X ago" timestamp, per-zone audit button, and audit badge.
  */
 
-import { memo } from "react"
+import { memo, useCallback } from "react"
 import { motion, useReducedMotion } from "motion/react"
 import {
   Monitor, Server, Database, Shield, Brain, Package,
   Globe, Key, Cpu, HardDrive, Cloud, Code, GitBranch,
   Layout, Terminal, FileCode, Workflow, Zap, Settings, Layers,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react"
 import { cn } from "../../../../../lib/utils"
@@ -102,6 +103,25 @@ function getColorTier(confidence: number, severity: Severity): ColorTier {
   }
 }
 
+// ─── Audit badge logic ──────────────────────────────────────────────────────
+
+function getAuditBadge(zone: EnrichedZone): { color: string; bg: string } | null {
+  if (!zone.lastAuditedAt) return null // Never audited → no badge
+
+  const hoursSinceAudit = (Date.now() - new Date(zone.lastAuditedAt).getTime()) / (1000 * 60 * 60)
+
+  if (zone.severity === "error") {
+    return { color: "text-red-400", bg: "bg-red-500/20" }
+  }
+  if (hoursSinceAudit > 168) { // > 7 days stale
+    return { color: "text-red-400", bg: "bg-red-500/20" }
+  }
+  if (zone.severity === "warning") {
+    return { color: "text-amber-400", bg: "bg-amber-500/20" }
+  }
+  return { color: "text-green-400", bg: "bg-green-500/20" }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function relativeTime(iso: string): string {
@@ -122,12 +142,20 @@ interface ZoneCardProps {
   x: number
   y: number
   index: number
+  isAuditing?: boolean
+  onAudit?: (zoneId: string) => void
 }
 
-export const ZoneCard = memo(function ZoneCard({ zone, x, y, index }: ZoneCardProps) {
+export const ZoneCard = memo(function ZoneCard({ zone, x, y, index, isAuditing, onAudit }: ZoneCardProps) {
   const prefersReducedMotion = useReducedMotion()
   const tier = getColorTier(zone.confidence, zone.severity)
   const Icon = ICON_MAP[zone.icon] || Code
+  const badge = getAuditBadge(zone)
+
+  const handleAudit = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    onAudit?.(zone.id)
+  }, [onAudit, zone.id])
 
   return (
     <motion.div
@@ -155,6 +183,16 @@ export const ZoneCard = memo(function ZoneCard({ zone, x, y, index }: ZoneCardPr
         )}
         style={{ minHeight: ZONE_HEIGHT }}
       >
+        {/* Audit badge overlay (top-right) */}
+        {badge && (
+          <div className={cn(
+            "absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center",
+            badge.bg, "border border-zinc-800",
+          )}>
+            <ShieldCheck className={cn("w-3 h-3", badge.color)} />
+          </div>
+        )}
+
         <div className="p-4 space-y-3">
           {/* Header: icon + name + confidence badge */}
           <div className="flex items-center justify-between gap-2">
@@ -195,11 +233,31 @@ export const ZoneCard = memo(function ZoneCard({ zone, x, y, index }: ZoneCardPr
 
           {/* Footer */}
           <div className="flex items-center justify-between">
-            <span className={cn("text-[9px] font-mono", tier.textColor)} style={{ opacity: 0.7 }}>
-              {zone.lastAuditedAt
-                ? `Audited ${relativeTime(zone.lastAuditedAt)}`
-                : "Never audited"}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className={cn("text-[9px] font-mono", tier.textColor)} style={{ opacity: 0.7 }}>
+                {isAuditing
+                  ? "Auditing..."
+                  : zone.lastAuditedAt
+                    ? `Audited ${relativeTime(zone.lastAuditedAt)}`
+                    : "Never audited"}
+              </span>
+              {/* Per-zone audit button */}
+              {onAudit && (
+                <button
+                  onClick={handleAudit}
+                  disabled={isAuditing}
+                  className={cn(
+                    "flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono transition-all duration-150",
+                    isAuditing
+                      ? "text-cyan-400/50 cursor-wait"
+                      : "text-zinc-600 hover:text-cyan-400 hover:bg-cyan-500/10",
+                  )}
+                  title={isAuditing ? "Audit in progress..." : "Audit this zone"}
+                >
+                  <ShieldCheck className={cn("w-2.5 h-2.5", isAuditing && "animate-pulse")} />
+                </button>
+              )}
+            </div>
             {zone.issueCount > 0 && (
               <span className="text-[9px] font-mono text-amber-400/70">
                 {zone.issueCount} issue{zone.issueCount !== 1 ? "s" : ""}

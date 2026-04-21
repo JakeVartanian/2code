@@ -90,8 +90,7 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
         toolCallId: currentToolCallId,
         toolName: currentToolName || "unknown",
         input: parsedInput,
-        providerMetadata: { custom: { startedAt: Date.now() } },
-      }
+      } as UIMessageChunk
       currentToolCallId = null
       currentToolName = null
       accumulatedToolInput = ""
@@ -178,7 +177,7 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
         yield {
           type: "tool-input-start",
           toolCallId: currentToolCallId,
-          toolName: currentToolName,
+          toolName: currentToolName || "unknown",
         }
       }
 
@@ -327,8 +326,7 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
             toolCallId: compositeId,
             toolName: block.name,
             input: block.input,
-            providerMetadata: { custom: { startedAt: Date.now() } },
-          }
+          } as UIMessageChunk
         }
       }
     }

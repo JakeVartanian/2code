@@ -316,6 +316,9 @@ function parseMention(id: string): ParsedMention | null {
  * Component to render a single file/folder/skill/agent/tool/quote/diff mention chip (matching canvas style)
  */
 function MentionChip({ mention }: { mention: ParsedMention }) {
+  // Hook must be called before any early returns (Rules of Hooks)
+  const onOpenFile = useContext(FileOpenContext)
+
   // Quote and diff mentions render as block cards
   if (mention.type === "quote") {
     // Get a short title from the label
@@ -363,7 +366,6 @@ function MentionChip({ mention }: { mention: ParsedMention }) {
     )
   }
 
-  const onOpenFile = useContext(FileOpenContext)
   const isClickable = (mention.type === "file" || mention.type === "folder") && !!onOpenFile
 
   const Icon = mention.type === "skill"
@@ -622,7 +624,7 @@ export function TextMentionBlocks({ mentions }: { mentions: ParsedMention[] }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {textMentions.map((mention, idx) => (
-        <TextMentionBlock key={idx} mention={mention} />
+        <TextMentionBlock key={`mention-${mention.type}-${idx}`} mention={mention} />
       ))}
     </div>
   )

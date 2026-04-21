@@ -11,8 +11,9 @@ import { promisify } from "util"
 const execAsync = promisify(exec)
 import { eq, and, sql } from "drizzle-orm"
 import { getDatabase } from "../db"
-import { ambientSuggestions, projectMemories } from "../db/schema"
+import { ambientSuggestions, projectMemories, auditFindings, projects } from "../db/schema"
 import { createId } from "../db/utils"
+import type { SystemZone } from "../../../shared/system-map-types"
 import { runHeuristics } from "./heuristics"
 import { getHeuristicThreshold } from "./config"
 import { triageWithHaiku } from "./triage"
@@ -700,6 +701,10 @@ ${memoryContext || "(no project memories yet)"}`
       })
       .run()
 
+    // Bridge into audit system: match trigger files to system map zones
+    // and create auditFindings so the audit dashboard shows GAAD's work
+    this.bridgeToAuditSystem(db, suggestionId, result, suggestedPrompt)
+
     // Emit via tRPC subscription for real-time UI updates
     try {
       const events = getAmbientEvents()
@@ -729,6 +734,134 @@ ${memoryContext || "(no project memories yet)"}`
         triggerFiles: result.triggerFiles,
       })
     }
+  }
+
+  /**
+   * Bridge a GAAD suggestion into the audit system.
+   * Matches the suggestion's triggerFiles against system map zones
+   * and creates auditFindings so the audit dashboard reflects GAAD's work.
+   */
+  private bridgeToAuditSystem(
+    db: ReturnType<typeof getDatabase>,
+    suggestionId: string,
+    result: HeuristicResult,
+    suggestedPrompt?: string,
+  ): void {
+    try {
+      // Load system map zones (cached per pipeline instance)
+      const zones = this.getSystemMapZones(db)
+      if (zones.length === 0) return
+
+      // Find which zones this suggestion's files overlap with
+      const triggerFiles = result.triggerFiles
+      if (triggerFiles.length === 0) return
+
+      for (const zone of zones) {
+        const matches = triggerFiles.some(tf =>
+          zone.linkedFiles.some(zf => {
+            const ntf = tf.replace(/^\.\//, "").replace(/^\//, "")
+            const nzf = zf.replace(/^\.\//, "").replace(/^\//, "")
+            return ntf === nzf || ntf.startsWith(nzf + "/") || nzf.startsWith(ntf + "/")
+          }),
+        )
+
+        if (matches) {
+          db.insert(auditFindings).values({
+            id: createId(),
+            runId: this.getOrCreateGaadAuditRun(db),
+            projectId: this.projectId,
+            suggestionId,
+            zoneId: zone.id,
+            zoneName: zone.name,
+            category: result.category,
+            severity: result.severity,
+            title: result.title,
+            description: result.description,
+            confidence: result.confidence,
+            affectedFiles: JSON.stringify(triggerFiles),
+            suggestedPrompt: suggestedPrompt ?? this.buildSuggestedPrompt(result),
+          }).run()
+        }
+      }
+    } catch { /* non-critical — don't break suggestion pipeline */ }
+  }
+
+  // Cache for system map zones (refreshed every 5 minutes)
+  private _cachedZones: SystemZone[] | null = null
+  private _zonesCacheTime = 0
+
+  private getSystemMapZones(db: ReturnType<typeof getDatabase>): SystemZone[] {
+    const now = Date.now()
+    if (this._cachedZones && now - this._zonesCacheTime < 5 * 60 * 1000) {
+      return this._cachedZones
+    }
+
+    try {
+      const project = db.select({ systemMap: projects.systemMap })
+        .from(projects)
+        .where(eq(projects.id, this.projectId))
+        .get()
+
+      if (project?.systemMap) {
+        this._cachedZones = JSON.parse(project.systemMap)
+        this._zonesCacheTime = now
+        return this._cachedZones!
+      }
+    } catch { /* skip */ }
+
+    this._cachedZones = []
+    this._zonesCacheTime = now
+    return []
+  }
+
+  // GAAD gets one "ambient" audit run per day to group its findings
+  private _gaadRunId: string | null = null
+  private _gaadRunDate: string | null = null
+
+  private getOrCreateGaadAuditRun(db: ReturnType<typeof getDatabase>): string {
+    const today = new Date().toISOString().slice(0, 10)
+
+    if (this._gaadRunId && this._gaadRunDate === today) {
+      return this._gaadRunId
+    }
+
+    // Import here to avoid circular dependency at module init
+    const { auditRuns: ar } = require("../db/schema")
+
+    // Check if there's already a GAAD run for today
+    const existing = db.select({ id: ar.id })
+      .from(ar)
+      .where(and(
+        eq(ar.projectId, this.projectId),
+        eq(ar.trigger, "ambient"),
+        eq(ar.initiatedBy, "ambient"),
+      ))
+      .all()
+      .find((r: any) => {
+        const d = r.startedAt ?? r.createdAt
+        return d && new Date(typeof d === "number" ? d : d).toISOString().slice(0, 10) === today
+      })
+
+    if (existing) {
+      this._gaadRunId = existing.id
+      this._gaadRunDate = today
+      return existing.id
+    }
+
+    // Create a new daily GAAD run
+    const runId = createId()
+    db.insert(ar).values({
+      id: runId,
+      projectId: this.projectId,
+      trigger: "ambient",
+      status: "running", // perpetually running — gets finalized at midnight or app close
+      initiatedBy: "ambient",
+      startedAt: new Date(),
+    }).run()
+
+    this._gaadRunId = runId
+    this._gaadRunDate = today
+    return runId
   }
 
   private isRecentDuplicate(result: HeuristicResult): boolean {

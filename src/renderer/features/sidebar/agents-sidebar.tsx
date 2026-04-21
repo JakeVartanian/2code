@@ -49,6 +49,7 @@ import { AgentsRenameSubChatDialog } from "../agents/components/agents-rename-su
 import { OpenLocallyDialog } from "../agents/components/open-locally-dialog"
 import { useAutoImport } from "../agents/hooks/use-auto-import"
 import { AmbientSidebarSection } from "../ambient/ambient-sidebar-section"
+import { BackgroundTasksIndicator } from "./background-tasks-indicator"
 import { ConfirmArchiveDialog } from "../../components/confirm-archive-dialog"
 import { clearChatRuntimeCaches, pruneOrphanedLocalStorageKeys } from "../agents/stores/sub-chat-runtime-cleanup"
 import { trpc } from "../../lib/trpc"
@@ -3611,6 +3612,9 @@ export function AgentsSidebar({
 
       {/* Ambient Agent Section */}
       <AmbientSidebarSection projectId={selectedProject?.id ?? null} projectPath={selectedProject?.path ?? null} chatId={selectedChatId ?? null} />
+
+      {/* Background tasks from other workspaces */}
+      <BackgroundTasksIndicator />
 
       {/* Footer - Multi-select toolbar or normal footer */}
       <AnimatePresence mode="wait">

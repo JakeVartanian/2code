@@ -277,7 +277,37 @@ function AppContent() {
   )
 }
 
+/**
+ * Suppress "Blocked aria-hidden on a focused element" warnings from Radix UI.
+ * Radix portals (tooltips, popovers, dialogs) set aria-hidden on body children,
+ * which conflicts with focused elements inside those subtrees.
+ */
+function useAriaHiddenFix() {
+  useEffect(() => {
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (
+          mutation.type === "attributes" &&
+          mutation.attributeName === "aria-hidden" &&
+          mutation.target instanceof HTMLElement &&
+          mutation.target.getAttribute("aria-hidden") === "true" &&
+          mutation.target.contains(document.activeElement)
+        ) {
+          mutation.target.removeAttribute("aria-hidden")
+        }
+      }
+    })
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["aria-hidden"],
+      subtree: true,
+    })
+    return () => observer.disconnect()
+  }, [])
+}
+
 export function App() {
+  useAriaHiddenFix()
   return (
     <AppErrorBoundary>
       <WindowProvider>

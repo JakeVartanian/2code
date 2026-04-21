@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useRef } from "react"
+import { toast } from "sonner"
 import { trpc } from "../../../lib/trpc"
 import { useAmbientStore } from "../store"
 
@@ -89,15 +90,41 @@ export function useAmbientData(
       enabled: !!projectId,
       onData: (event) => {
         if (event.type === "new-suggestion") {
-          // Invalidate the query cache to trigger immediate refetch
-          // GAAD chip component handles inline notification — no toast needed
+          // Refetch suggestions immediately
           utils.ambient.listSuggestions.invalidate({ projectId: projectId! })
+
+          // Show toast so the user knows GAAD found something
+          const s = event.suggestion
+          if (s) {
+            const severityIcon = s.severity === "error" ? "🔴"
+              : s.severity === "warning" ? "🟡" : "🔵"
+
+            toast(s.title, {
+              description: `${severityIcon} ${s.category} — ${s.confidence}% confidence`,
+              duration: 6000,
+              action: {
+                label: "View",
+                onClick: () => {
+                  // Expand GAAD sidebar section
+                  // Store is updated via refetch, just need to draw attention
+                },
+              },
+            })
+          }
         }
         if (event.type === "suggestion-dismissed" && event.suggestionId) {
           removeSuggestion(event.suggestionId)
         }
         if (event.type === "suggestion-approved" && event.suggestionId) {
           removeSuggestion(event.suggestionId)
+        }
+        if (event.type === "finding-resolved") {
+          // Refetch audit findings when a finding is resolved
+          utils.ambient.listAuditFindings.invalidate({ projectId: projectId! })
+        }
+        if (event.type === "audit-progress") {
+          // Refetch audit runs for live progress in the dashboard
+          utils.ambient.listAuditRuns.invalidate({ projectId: projectId! })
         }
       },
     },
