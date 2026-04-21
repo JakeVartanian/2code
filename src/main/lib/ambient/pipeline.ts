@@ -89,6 +89,7 @@ export class AnalysisPipeline {
     if (this.chatBatchTimer) clearTimeout(this.chatBatchTimer)
     this.recentSuggestions.clear()
     this.chatEventBatch = []
+    this.promptCounter.clear()
   }
 
   /**
@@ -343,23 +344,49 @@ export class AnalysisPipeline {
   private chatBatchTimer: ReturnType<typeof setTimeout> | null = null
   private readonly CHAT_BATCH_WINDOW = 30_000 // 30s
 
+  /** Rolling prompt counter per sub-chat for continuous synthesis */
+  private promptCounter = new Map<string, number>() // subChatId → count since last synthesis
+  private readonly SYNTHESIS_PROMPT_INTERVAL = 3 // Synthesize every N user prompts
+  private lastSynthesisAt = 0
+  private readonly SYNTHESIS_COOLDOWN = 60_000 // Min 60s between syntheses
+
   /**
    * Process a chat activity event from the chat bridge.
-   * Runs chat-specific heuristics (free, instant) and batches
-   * non-urgent events for Tier 1 triage.
+   * Runs chat-specific heuristics (free, instant), batches events
+   * for Tier 1 triage, and triggers rolling synthesis every few prompts.
    */
   private async processChatEvent(event: ChatActivityEvent): Promise<void> {
-    // Session complete → post-session synthesis + cleanup
+    // Session complete → cleanup trackers (synthesis happens continuously, not just here)
     if (event.activityType === "session-complete" || event.activityType === "session-error") {
       clearSessionTrackers(event.subChatId)
+      this.promptCounter.delete(event.subChatId)
 
-      // Post-session synthesis: use accumulated session data + memories
+      // Still run synthesis on session-complete for any remaining accumulated context
       if (event.activityType === "session-complete" && this.provider) {
         await this.runPostSessionSynthesis(event).catch(err => {
-          console.warn("[GAAD] Post-session synthesis failed:", err.message)
+          console.warn("[GAAD] Synthesis failed:", err.message)
         })
       }
       return
+    }
+
+    // Track user prompts for rolling synthesis trigger
+    if (event.activityType === "user-prompt") {
+      const count = (this.promptCounter.get(event.subChatId) ?? 0) + 1
+      this.promptCounter.set(event.subChatId, count)
+
+      // Trigger synthesis every N prompts (with cooldown to prevent spam)
+      if (count >= this.SYNTHESIS_PROMPT_INTERVAL && this.provider) {
+        const now = Date.now()
+        if (now - this.lastSynthesisAt >= this.SYNTHESIS_COOLDOWN) {
+          this.promptCounter.set(event.subChatId, 0) // Reset counter
+          this.lastSynthesisAt = now
+          // Fire-and-forget — don't block the chat event processing
+          this.runPostSessionSynthesis(event).catch(err => {
+            console.warn("[GAAD] Rolling synthesis failed:", err.message)
+          })
+        }
+      }
     }
 
     // Run chat-specific heuristics (Tier 0 — free, instant)
