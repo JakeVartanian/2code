@@ -98,7 +98,14 @@ export function AmbientSidebarSection({
   const { suggestions, agentStatus, budgetStatus } = useAmbientStore()
   const [showHistory, setShowHistory] = useAtom(suggestionHistoryExpandedAtom)
 
-  const toggleMutation = trpc.ambient.toggle.useMutation()
+  const toggleMutation = trpc.ambient.toggle.useMutation({
+    onSuccess: (_data, variables) => {
+      useAmbientStore.getState().setAgentStatus(variables.enabled ? "running" : "stopped")
+    },
+    onError: () => {
+      toast.error("Failed to toggle ambient agent")
+    },
+  })
 
   const pendingSuggestions = suggestions.filter(s => s.status === "pending")
   const visibleSuggestions = pendingSuggestions.slice(0, MAX_VISIBLE)

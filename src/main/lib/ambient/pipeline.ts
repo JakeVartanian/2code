@@ -5,7 +5,10 @@
  * Tier 2: Sonnet analysis (expensive, gated)
  */
 
-import { execSync } from "child_process"
+import { exec } from "child_process"
+import { promisify } from "util"
+
+const execAsync = promisify(exec)
 import { eq, and, sql } from "drizzle-orm"
 import { getDatabase } from "../db"
 import { ambientSuggestions } from "../db/schema"
@@ -155,10 +158,10 @@ export class AnalysisPipeline {
 
     if (unsuppressed.length === 0) return
 
-    // Apply feedback weights to confidence (gradient between suppressed and boosted)
+    // Apply feedback weights to confidence (gradient between suppressed and boosted, clamped to 0-100)
     const weighted = unsuppressed.map(c => ({
       ...c,
-      confidence: Math.round(c.confidence * this.feedback.getCategoryWeight(c.category)),
+      confidence: Math.min(100, Math.round(c.confidence * this.feedback.getCategoryWeight(c.category))),
     }))
 
     // Deduplicate against recent suggestions
@@ -260,7 +263,7 @@ export class AnalysisPipeline {
         description: `A merge conflict was detected. Resolve conflicts before continuing work.`,
         confidence: 90,
         triggerFiles: [],
-        triggerEvent: "git",
+        triggerEvent: "branch-switch",
       })
       return
     }
@@ -270,14 +273,14 @@ export class AnalysisPipeline {
     // Only triage commits if we have a provider and budget allows
     if (!this.provider || this.budget.getDegradationTier() !== "normal") return
 
-    // Get last commit info
+    // Get last commit info (async to avoid blocking main process)
     let commitInfo: string
     try {
-      commitInfo = execSync("git log -1 --stat --format=%B", {
+      const { stdout } = await execAsync("git log -1 --stat --format=%B", {
         cwd: this.projectPath,
         timeout: 5000,
-        encoding: "utf-8",
-      }).trim()
+      })
+      commitInfo = stdout.trim()
     } catch { return }
 
     // Skip trivial commits (< 3 files changed)
@@ -292,7 +295,7 @@ export class AnalysisPipeline {
       description: commitInfo.slice(0, 500),
       confidence: 50,
       triggerFiles: statLines.map(l => l.split("|")[0]?.trim()).filter(Boolean),
-      triggerEvent: "git",
+      triggerEvent: "commit",
     }
 
     // Load memory context for better triage

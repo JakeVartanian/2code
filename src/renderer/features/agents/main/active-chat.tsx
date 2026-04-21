@@ -2205,12 +2205,13 @@ const ChatViewInner = memo(function ChatViewInner({
 
   // Double-Enter on empty input sends "Continue." to resume Claude's work
   const handleContinue = useCallback(async () => {
-    if (isStreamingRef.current || isArchived) return
+    if (isStreamingRef.current || isArchived || compactRanThisStreamRef.current) return
+    if (messageIds.length === 0) return // Nothing to continue
     sendMessageRef.current({
       role: "user",
       parts: [{ type: "text", text: "Continue." }],
     })
-  }, [isArchived])
+  }, [isArchived, messageIds.length])
 
   const handleSend = useCallback(async () => {
     // Block sending while sandbox is still being set up

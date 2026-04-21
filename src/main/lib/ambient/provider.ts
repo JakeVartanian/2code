@@ -33,7 +33,7 @@ class AnthropicProvider implements AmbientProvider {
     supportsSonnet: true,
   }
 
-  constructor(private token: string) {}
+  constructor(private getToken: () => Promise<string | null>) {}
 
   async callHaiku(system: string, user: string): Promise<AmbientProviderCallResult> {
     return this.call(HAIKU_MODEL, system, user, 1024)
@@ -49,8 +49,10 @@ class AnthropicProvider implements AmbientProvider {
     user: string,
     maxTokens: number,
   ): Promise<AmbientProviderCallResult> {
+    const token = await this.getToken()
+    if (!token) throw new Error("No OAuth token available for ambient API call")
     return callAnthropic({
-      token: this.token,
+      token,
       model,
       system,
       userMessage: user,
@@ -150,10 +152,10 @@ export async function createAmbientProvider(
   openRouterKey: string | null,
   openRouterFreeOnly: boolean = false,
 ): Promise<AmbientProvider | null> {
-  // Try Anthropic first
+  // Try Anthropic first (pass getter so token refreshes automatically)
   const anthropicToken = await getAnthropicToken()
   if (anthropicToken) {
-    return new AnthropicProvider(anthropicToken)
+    return new AnthropicProvider(getAnthropicToken)
   }
 
   // Try OpenRouter

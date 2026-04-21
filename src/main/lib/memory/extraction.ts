@@ -141,6 +141,7 @@ export async function extractMemoriesAsync(
       maxTokens: 1024,
       system: EXTRACTION_SYSTEM_PROMPT,
       userMessage: `Extract project memories from this conversation:\n\n${conversationText}`,
+      timeoutMs: 30_000,
     })
 
     if (!text) return

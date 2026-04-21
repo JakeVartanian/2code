@@ -27,6 +27,9 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
  * Score a memory based on relevance, recency, frequency, and context hint matching.
  */
 function scoreMemory(memory: ProjectMemory, contextHint: string | null): number {
+  // Exclude stale memories entirely (check first to avoid wasted computation)
+  if (memory.isStale) return -Infinity
+
   let score = memory.relevanceScore ?? 50
 
   // Boost: +10 if accessed in last 7 days
@@ -39,11 +42,6 @@ function scoreMemory(memory: ProjectMemory, contextHint: string | null): number 
 
   // Boost: +5 per access count (capped at +25)
   score += Math.min((memory.accessCount ?? 0) * 5, 25)
-
-  // Exclude stale memories entirely
-  if (memory.isStale) {
-    return -Infinity
-  }
 
   // Context hint matching (if provided)
   if (contextHint) {
