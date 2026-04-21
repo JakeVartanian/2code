@@ -56,6 +56,7 @@ import {
   soundNotificationsEnabledAtom,
   autoCompactEnabledAtom,
   autoCompactThresholdAtom,
+  openRouterApiKeyAtom,
 } from "../../../lib/atoms"
 import { useFileChangeListener, useGitWatcher } from "../../../lib/hooks/use-file-change-listener"
 import { useRemoteChat } from "../../../lib/hooks/use-remote-chats"
@@ -3219,6 +3220,7 @@ export function ChatView({
   const sidebarOpen = useAtomValue(agentsSidebarOpenAtom)
   const customClaudeConfig = useAtomValue(customClaudeConfigAtom)
   const selectedOllamaModel = useAtomValue(selectedOllamaModelAtom)
+  const openRouterApiKey = useAtomValue(openRouterApiKeyAtom)
   const normalizedCustomClaudeConfig =
     normalizeCustomClaudeConfig(customClaudeConfig)
   const hasCustomClaudeConfig = Boolean(normalizedCustomClaudeConfig)
@@ -5592,7 +5594,7 @@ Make sure to preserve all functionality from both branches when resolving confli
         userMessage,
         isFirstSubChat: isFirst,
         generateName: async (msg) => {
-          return generateSubChatNameMutation.mutateAsync({ userMessage: msg, ollamaModel: selectedOllamaModel })
+          return generateSubChatNameMutation.mutateAsync({ userMessage: msg, ollamaModel: selectedOllamaModel, openRouterApiKey: openRouterApiKey || undefined })
         },
         renameSubChat: async (input) => {
           await renameSubChatMutation.mutateAsync(input)
@@ -5668,6 +5670,7 @@ Make sure to preserve all functionality from both branches when resolving confli
       renameSubChatMutation,
       renameChatMutation,
       selectedOllamaModel,
+      openRouterApiKey,
       utils.chats.list,
       utils.chats.get,
     ],
@@ -5941,7 +5944,18 @@ Make sure to preserve all functionality from both branches when resolving confli
                     const belongsToWorkspace = agentSubChats.some(sc => sc.id === paneId) ||
                                               allSubChats.some(sc => sc.id === paneId)
 
-                    if (!chat || !belongsToWorkspace) return []
+                    if (!belongsToWorkspace) return []
+
+                    if (!chat) {
+                      return [{
+                        id: paneId,
+                        content: (
+                          <div className="h-full flex items-center justify-center">
+                            <IconSpinner className="h-6 w-6 animate-spin text-muted-foreground" />
+                          </div>
+                        ),
+                      }]
+                    }
 
                     return [{
                       id: paneId,
@@ -6029,7 +6043,18 @@ Make sure to preserve all functionality from both branches when resolving confli
                 const belongsToWorkspace = agentSubChats.some(sc => sc.id === subChatId) ||
                                           allSubChats.some(sc => sc.id === subChatId)
 
-                if (!chat || !belongsToWorkspace) return null
+                if (!belongsToWorkspace) return null
+
+                // Chat not ready yet (e.g., forked tab before query invalidation propagates)
+                // Show spinner for the active tab so the screen isn't blank
+                if (!chat) {
+                  if (!isActive) return null
+                  return (
+                    <div key={subChatId} className="absolute inset-0 flex items-center justify-center">
+                      <IconSpinner className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  )
+                }
 
                 if (!isActive) {
                   // INACTIVE TAB: Mount only ChatDataSync for status tracking.
