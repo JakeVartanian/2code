@@ -114,7 +114,7 @@ export class AmbientFileWatcher extends EventEmitter {
       },
       usePolling: false,
       followSymlinks: false,
-      depth: 6, // Limit depth to reduce file descriptor usage
+      depth: 4, // Limit depth to reduce file descriptor and CPU usage
     })
 
     this.watcher.on("add", (filePath) => this.handleEvent(filePath, "add", path))
@@ -130,10 +130,13 @@ export class AmbientFileWatcher extends EventEmitter {
       console.error("[AmbientFileWatcher] Watcher error:", error)
     })
 
-    // Wait for initial scan to complete
-    await new Promise<void>((resolve) => {
-      this.watcher!.on("ready", resolve)
-    })
+    // Wait for initial scan to complete (with 30s timeout to avoid hanging on huge projects)
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        this.watcher!.on("ready", resolve)
+      }),
+      new Promise<void>((resolve) => setTimeout(resolve, 30_000)),
+    ])
   }
 
   private handleEvent(filePath: string, type: "add" | "change" | "unlink", path: typeof import("path")): void {

@@ -37,7 +37,7 @@ import {
 } from "../../lib/hooks/use-remote-chats"
 import { usePrefetchLocalChat } from "../../lib/hooks/use-prefetch-local-chat"
 import { ArchivePopover } from "../agents/ui/archive-popover"
-import { ChevronDown, MoreHorizontal, BarChart2, RefreshCw, Boxes, CheckCircle2, Circle } from "lucide-react"
+import { ChevronDown, ChevronRight, MoreHorizontal, BarChart2, RefreshCw, Boxes, CheckCircle2, Circle, AlertCircle, ExternalLink, Copy, Terminal } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 // import { useRouter } from "next/navigation" // Desktop doesn't use next/navigation
 // import { useCombinedAuth } from "@/lib/hooks/use-combined-auth"
@@ -576,17 +576,28 @@ const AgentChatItem = React.memo(function AgentChatItem({
             )}
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
               <div className="flex items-center gap-1">
+                {/* Cloud icon for remote chats */}
+                {isRemote && (
+                  <CloudIcon className="h-3 w-3 flex-shrink-0 text-muted-foreground/60" />
+                )}
                 <span
                   ref={(el) => nameRefCallback(chatId, el)}
                   className="truncate block text-sm leading-tight flex-1"
                 >
-                  <TypewriterText
-                    text={chatName || ""}
-                    placeholder="New workspace"
-                    id={chatId}
-                    isJustCreated={isJustCreated}
-                    showPlaceholder={true}
-                  />
+                  {displayText || (
+                    <TypewriterText
+                      text={chatName || ""}
+                      placeholder="New workspace"
+                      id={chatId}
+                      isJustCreated={isJustCreated}
+                      showPlaceholder={true}
+                    />
+                  )}
+                </span>
+                <span className="flex-shrink-0 text-[11px] text-muted-foreground/60">
+                  {formatTime(
+                    chatUpdatedAt?.toISOString() ?? new Date().toISOString(),
+                  )}
                 </span>
                 {/* Archive button or inline loader/status when icon is hidden */}
                 {!isMultiSelectMode && !isMobileFullscreen && (
@@ -652,30 +663,6 @@ const AgentChatItem = React.memo(function AgentChatItem({
                     </button>
                   </div>
                 )}
-              </div>
-              <div className="flex items-center gap-1 text-[11px] text-muted-foreground/60 min-w-0">
-                {/* Cloud icon for remote chats */}
-                {isRemote && (
-                  <CloudIcon className="h-2.5 w-2.5 flex-shrink-0" />
-                )}
-                <span className="truncate flex-1 min-w-0">{displayText}</span>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {stats && (stats.additions > 0 || stats.deletions > 0) && (
-                    <>
-                      <span className="text-green-600 dark:text-green-400">
-                        +{stats.additions}
-                      </span>
-                      <span className="text-red-600 dark:text-red-400">
-                        -{stats.deletions}
-                      </span>
-                    </>
-                  )}
-                  <span>
-                    {formatTime(
-                      chatUpdatedAt?.toISOString() ?? new Date().toISOString(),
-                    )}
-                  </span>
-                </div>
               </div>
             </div>
           </div>
@@ -832,6 +819,7 @@ interface ChatListSectionProps {
     id: string
     name: string | null
     branch: string | null
+    baseBranch?: string | null
     updatedAt: Date | null
     projectId: string | null
     isRemote: boolean
@@ -952,10 +940,12 @@ const ChatListSection = React.memo(function ChatListSection({
     const repoName = chat.isRemote
       ? chat.meta?.repository
       : (project?.gitRepo || project?.name)
-    const displayText = chat.branch
+    // Show the base branch (e.g. "develop"), not the worktree branch name
+    const branchLabel = chat.baseBranch || chat.branch
+    const displayText = branchLabel
       ? repoName
-        ? `${repoName} • ${chat.branch}`
-        : chat.branch
+        ? `${repoName} • ${branchLabel}`
+        : branchLabel
       : repoName || (chat.isRemote ? "Remote project" : "Local project")
 
     const isChecked = selectedChatIds.has(chat.id)
@@ -1110,6 +1100,9 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
   const [open, setOpen] = useState(false)
   const [blockTooltip, setBlockTooltip] = useState(false)
   const [tooltipOpen, setTooltipOpen] = useState(false)
+  const [expandedItem, setExpandedItem] = useState<string | null>(null)
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [availableOpen, setAvailableOpen] = useState(false)
   const prevOpen = useRef(false)
 
   const { data, isFetching, isError, refetch } = trpc.envTools.check.useQuery(
@@ -1120,6 +1113,8 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
   useEffect(() => {
     if (prevOpen.current && !open) {
       setBlockTooltip(true)
+      setExpandedItem(null)
+      setAvailableOpen(false)
       const timer = setTimeout(() => setBlockTooltip(false), 300)
       prevOpen.current = false
       return () => clearTimeout(timer)
@@ -1127,14 +1122,26 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
     prevOpen.current = open
   }, [open])
 
-  // Separate workspace-level (shell) keys from project-level keys
-  const shellApiKeys = data?.apiKeys.filter((k) => k.source === "shell") ?? []
-  // "Connected" = has env var in .env OR detected in project (deps, config, CLAUDE.md)
-  const connectedProjectKeys = data?.apiKeys.filter((k) => k.source === "project-env" || (k.detected && k.source !== "shell")) ?? []
-  const absentApiKeys = data?.apiKeys.filter((k) => !k.present && !k.detected) ?? []
+  // Split CLI tools
+  const installedCli = data?.cliTools.filter((t) => t.present) ?? []
+  const notInstalledCli = data?.cliTools.filter((t) => !t.present) ?? []
 
-  // Project folder name for display
-  const projectFolderName = projectPath ? projectPath.split("/").filter(Boolean).pop() : null
+  // Split API keys into 3 buckets
+  const connectedKeys = data?.apiKeys.filter((k) => k.present) ?? []
+  const detectedMissing = data?.apiKeys.filter((k) => !k.present && k.detected) ?? []
+  const unconfiguredKeys = data?.apiKeys.filter((k) => !k.present && !k.detected) ?? []
+
+  const availableCount = notInstalledCli.length + unconfiguredKeys.length
+
+  const handleCopy = useCallback((text: string, key: string) => {
+    navigator.clipboard.writeText(text)
+    setCopiedKey(key)
+    setTimeout(() => setCopiedKey(null), 1500)
+  }, [])
+
+  const handleOpenExternal = useCallback((url: string) => {
+    window.desktopApi?.openExternal?.(url)
+  }, [])
 
   return (
     <Tooltip open={open || blockTooltip ? false : tooltipOpen} onOpenChange={setTooltipOpen}>
@@ -1150,7 +1157,7 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
               </button>
             </DropdownMenuTrigger>
 
-            <DropdownMenuContent side="top" align="start" className="w-72 p-3" onCloseAutoFocus={(e) => e.preventDefault()}>
+            <DropdownMenuContent side="top" align="start" className="w-80 p-3 max-h-[420px] overflow-y-auto" onCloseAutoFocus={(e) => e.preventDefault()}>
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs font-medium text-foreground">Environment</span>
                 <button
@@ -1183,83 +1190,181 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
               )}
 
               {data && (
-                <div className="flex flex-col gap-4">
-                  {/* ── Workspace section ── */}
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50 mb-2">Workspace</p>
-
-                    {/* CLI Tools */}
-                    <p className="text-[10px] text-muted-foreground/40 mb-1">CLI Tools</p>
-                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 mb-2.5">
-                      {data.cliTools.map((tool) => (
-                        <div key={tool.key} className="flex items-center gap-1.5 py-0.5">
-                          {tool.present ? (
-                            <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
-                          ) : (
-                            <Circle className="h-3 w-3 shrink-0 text-muted-foreground/20" />
-                          )}
-                          <span className={cn("text-xs truncate", tool.present ? "text-foreground" : "text-muted-foreground/40")}>
-                            {tool.name}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Shell API Keys */}
-                    <p className="text-[10px] text-muted-foreground/40 mb-1">API Keys — Shell</p>
-                    {shellApiKeys.length > 0 ? (
+                <div className="flex flex-col gap-3">
+                  {/* ── CONNECTED ── */}
+                  {(installedCli.length > 0 || connectedKeys.length > 0) && (
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50 mb-1.5">
+                        Connected
+                        <span className="ml-1 text-emerald-500/70 normal-case tracking-normal font-normal">{installedCli.length + connectedKeys.length}</span>
+                      </p>
                       <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
-                        {shellApiKeys.map((apiKey) => (
-                          <div key={apiKey.key} className="flex items-center gap-1.5 py-0.5">
+                        {installedCli.map((tool) => (
+                          <div key={`cli-${tool.key}`} className="flex items-center gap-1.5 py-0.5">
+                            <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+                            <span className="text-xs truncate text-foreground">{tool.name}</span>
+                          </div>
+                        ))}
+                        {connectedKeys.map((apiKey) => (
+                          <div key={`key-${apiKey.key}`} className="flex items-center gap-1.5 py-0.5">
                             <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
                             <span className="text-xs truncate text-foreground">{apiKey.name}</span>
                           </div>
                         ))}
                       </div>
-                    ) : (
-                      <p className="text-[11px] text-muted-foreground/40 italic">None found in shell</p>
-                    )}
-                  </div>
-
-                  {/* ── Project section ── */}
-                  {projectPath && (
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-                          Project
-                        </p>
-                        <span className="text-[10px] text-muted-foreground/40 truncate max-w-[120px]" title={projectPath}>
-                          {projectFolderName}
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-muted-foreground/40 mb-1">Connected Services</p>
-                      {connectedProjectKeys.length > 0 ? (
-                        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
-                          {connectedProjectKeys.map((apiKey) => (
-                            <div key={apiKey.key} className="flex items-center gap-1.5 py-0.5">
-                              <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
-                              <span className="text-xs truncate text-foreground">{apiKey.name}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-[11px] text-muted-foreground/40 italic">No services detected</p>
-                      )}
                     </div>
                   )}
 
-                  {/* Absent keys (collapsed into a subtle list) */}
-                  {absentApiKeys.length > 0 && (
+                  {/* ── ACTION NEEDED ── */}
+                  {detectedMissing.length > 0 && (
                     <div>
-                      <p className="text-[10px] text-muted-foreground/40 mb-1">Not configured</p>
-                      <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
-                        {absentApiKeys.map((apiKey) => (
-                          <div key={apiKey.key} className="flex items-center gap-1.5 py-0.5">
-                            <Circle className="h-3 w-3 shrink-0 text-muted-foreground/20" />
-                            <span className="text-xs truncate text-muted-foreground/40">{apiKey.name}</span>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-400/70 mb-1.5">
+                        Detected — needs key
+                        <span className="ml-1 normal-case tracking-normal font-normal">{detectedMissing.length}</span>
+                      </p>
+                      <div className="flex flex-col gap-0.5">
+                        {detectedMissing.map((apiKey) => (
+                          <div key={`missing-${apiKey.key}`}>
+                            <button
+                              type="button"
+                              onClick={() => setExpandedItem(expandedItem === apiKey.key ? null : apiKey.key)}
+                              className="flex items-center gap-1.5 py-1 px-1 w-full rounded hover:bg-muted/50 transition-colors text-left"
+                            >
+                              <AlertCircle className="h-3 w-3 shrink-0 text-amber-500" />
+                              <span className="text-xs truncate text-foreground flex-1">{apiKey.name}</span>
+                              <span className="text-[10px] text-amber-500/60">connect</span>
+                            </button>
+                            {expandedItem === apiKey.key && (
+                              <div className="ml-5 mb-1.5 p-2 rounded bg-muted/30 border border-amber-500/15">
+                                <p className="text-[10px] text-muted-foreground/60 mb-1.5">Set in <code className="text-[10px]">.env</code> or shell:</p>
+                                {apiKey.envVars.map((envVar) => (
+                                  <div key={envVar} className="flex items-center gap-1.5 mb-1">
+                                    <code className="text-[10px] bg-muted px-1 py-0.5 rounded font-mono text-foreground/80 flex-1 truncate">{envVar}</code>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopy(envVar, envVar)}
+                                      className="text-muted-foreground/50 hover:text-foreground transition-colors shrink-0"
+                                    >
+                                      {copiedKey === envVar ? <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500" /> : <Copy className="h-2.5 w-2.5" />}
+                                    </button>
+                                  </div>
+                                ))}
+                                {apiKey.setupUrl && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenExternal(apiKey.setupUrl!)}
+                                    className="mt-1.5 text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-0.5 transition-colors"
+                                  >
+                                    Get API key <ExternalLink className="h-2.5 w-2.5" />
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {/* ── AVAILABLE (collapsed) ── */}
+                  {availableCount > 0 && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setAvailableOpen(!availableOpen)}
+                        className="flex items-center gap-1 text-[10px] text-muted-foreground/50 hover:text-muted-foreground transition-colors w-full py-0.5"
+                      >
+                        {availableOpen ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
+                        <span>{availableCount} more tools & services</span>
+                      </button>
+
+                      {availableOpen && (
+                        <div className="mt-1 flex flex-col gap-0.5">
+                          {/* Not-installed CLI tools */}
+                          {notInstalledCli.length > 0 && (
+                            <>
+                              <p className="text-[10px] text-muted-foreground/30 mt-1 mb-0.5">CLI Tools</p>
+                              {notInstalledCli.map((tool) => (
+                                <div key={`avail-cli-${tool.key}`}>
+                                  <button
+                                    type="button"
+                                    onClick={() => tool.hint ? setExpandedItem(expandedItem === `cli-${tool.key}` ? null : `cli-${tool.key}`) : undefined}
+                                    className={cn(
+                                      "flex items-center gap-1.5 py-0.5 px-1 w-full rounded text-left",
+                                      tool.hint ? "hover:bg-muted/50 transition-colors cursor-pointer" : "cursor-default",
+                                    )}
+                                  >
+                                    <Circle className="h-3 w-3 shrink-0 text-muted-foreground/20" />
+                                    <span className="text-xs truncate text-muted-foreground/50 flex-1">{tool.name}</span>
+                                    {tool.hint && <span className="text-[10px] text-muted-foreground/30">install</span>}
+                                  </button>
+                                  {expandedItem === `cli-${tool.key}` && tool.hint && (
+                                    <div className="ml-5 mb-1 p-2 rounded bg-muted/30">
+                                      <div className="flex items-center gap-1.5">
+                                        <Terminal className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" />
+                                        <code className="text-[10px] bg-muted px-1 py-0.5 rounded font-mono text-foreground/70 flex-1 truncate">{tool.hint}</code>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleCopy(tool.hint!, `cli-${tool.key}`)}
+                                          className="text-muted-foreground/50 hover:text-foreground transition-colors shrink-0"
+                                        >
+                                          {copiedKey === `cli-${tool.key}` ? <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500" /> : <Copy className="h-2.5 w-2.5" />}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </>
+                          )}
+
+                          {/* Unconfigured API keys */}
+                          {unconfiguredKeys.length > 0 && (
+                            <>
+                              <p className="text-[10px] text-muted-foreground/30 mt-1 mb-0.5">Services</p>
+                              {unconfiguredKeys.map((apiKey) => (
+                                <div key={`avail-key-${apiKey.key}`}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedItem(expandedItem === `avail-${apiKey.key}` ? null : `avail-${apiKey.key}`)}
+                                    className="flex items-center gap-1.5 py-0.5 px-1 w-full rounded hover:bg-muted/50 transition-colors text-left"
+                                  >
+                                    <Circle className="h-3 w-3 shrink-0 text-muted-foreground/20" />
+                                    <span className="text-xs truncate text-muted-foreground/50 flex-1">{apiKey.name}</span>
+                                    <span className="text-[10px] text-muted-foreground/30">connect</span>
+                                  </button>
+                                  {expandedItem === `avail-${apiKey.key}` && (
+                                    <div className="ml-5 mb-1 p-2 rounded bg-muted/30">
+                                      <p className="text-[10px] text-muted-foreground/50 mb-1.5">Set in <code className="text-[10px]">.env</code> or shell:</p>
+                                      {apiKey.envVars.map((envVar) => (
+                                        <div key={envVar} className="flex items-center gap-1.5 mb-1">
+                                          <code className="text-[10px] bg-muted px-1 py-0.5 rounded font-mono text-foreground/70 flex-1 truncate">{envVar}</code>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopy(envVar, envVar)}
+                                            className="text-muted-foreground/50 hover:text-foreground transition-colors shrink-0"
+                                          >
+                                            {copiedKey === envVar ? <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500" /> : <Copy className="h-2.5 w-2.5" />}
+                                          </button>
+                                        </div>
+                                      ))}
+                                      {apiKey.setupUrl && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenExternal(apiKey.setupUrl!)}
+                                          className="mt-1.5 text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-0.5 transition-colors"
+                                        >
+                                          Get API key <ExternalLink className="h-2.5 w-2.5" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 

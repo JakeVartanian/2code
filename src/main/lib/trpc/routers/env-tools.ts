@@ -38,6 +38,8 @@ interface ApiKeyDef {
   /** Directory names whose presence indicates the service is used */
   configDirs?: string[]
   description?: string
+  /** Dashboard URL where the user can get/manage the API key */
+  setupUrl?: string
 }
 
 const CLI_TOOLS: CliToolDef[] = [
@@ -65,32 +67,32 @@ const CLI_TOOLS: CliToolDef[] = [
 ]
 
 const API_KEYS: ApiKeyDef[] = [
-  { name: "Anthropic", key: "anthropic", envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"], packages: ["@anthropic-ai/", "anthropic"] },
-  { name: "OpenAI", key: "openai", envVars: ["OPENAI_API_KEY"], packages: ["openai"] },
-  { name: "OpenRouter", key: "openrouter", envVars: ["OPENROUTER_API_KEY"] },
-  { name: "Cloudflare", key: "cloudflare", envVars: ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"], packages: ["@cloudflare/"], configFiles: ["wrangler.toml", "wrangler.json", "wrangler.jsonc"] },
-  { name: "GitHub Token", key: "github-token", envVars: ["GITHUB_TOKEN", "GH_TOKEN"], configDirs: [".github"] },
-  { name: "Sentry", key: "sentry", envVars: ["SENTRY_AUTH_TOKEN", "SENTRY_DSN"], packages: ["@sentry/"], configFiles: [".sentryclirc"] },
-  { name: "Vercel", key: "vercel-token", envVars: ["VERCEL_TOKEN"], packages: ["@vercel/"], configFiles: ["vercel.json"] },
-  { name: "Netlify", key: "netlify-token", envVars: ["NETLIFY_AUTH_TOKEN"], configFiles: ["netlify.toml"] },
-  { name: "AWS", key: "aws", envVars: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"], packages: ["aws-sdk", "@aws-sdk/"] },
-  { name: "Google Cloud", key: "gcloud", envVars: ["GOOGLE_APPLICATION_CREDENTIALS", "GCLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT"], packages: ["@google-cloud/", "firebase", "firebase-admin"] },
-  { name: "Stripe", key: "stripe", envVars: ["STRIPE_SECRET_KEY", "STRIPE_API_KEY"], packages: ["stripe", "@stripe/"] },
-  { name: "Supabase", key: "supabase", envVars: ["SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"], packages: ["@supabase/"], configDirs: ["supabase"] },
-  { name: "Railway", key: "railway-token", envVars: ["RAILWAY_TOKEN"], configFiles: ["railway.json", "railway.toml"] },
-  { name: "Fly.io", key: "fly", envVars: ["FLY_API_TOKEN"], configFiles: ["fly.toml"] },
-  { name: "Resend", key: "resend", envVars: ["RESEND_API_KEY"], packages: ["resend"] },
-  { name: "Postmark", key: "postmark", envVars: ["POSTMARK_API_TOKEN", "POSTMARK_SERVER_API_TOKEN"], packages: ["postmark"] },
-  { name: "SendGrid", key: "sendgrid", envVars: ["SENDGRID_API_KEY"], packages: ["@sendgrid/"] },
-  { name: "Twilio", key: "twilio", envVars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"], packages: ["twilio"] },
+  { name: "Anthropic", key: "anthropic", envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"], packages: ["@anthropic-ai/", "anthropic"], setupUrl: "https://console.anthropic.com/settings/keys" },
+  { name: "OpenAI", key: "openai", envVars: ["OPENAI_API_KEY"], packages: ["openai"], setupUrl: "https://platform.openai.com/api-keys" },
+  { name: "OpenRouter", key: "openrouter", envVars: ["OPENROUTER_API_KEY"], setupUrl: "https://openrouter.ai/keys" },
+  { name: "Cloudflare", key: "cloudflare", envVars: ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"], packages: ["@cloudflare/"], configFiles: ["wrangler.toml", "wrangler.json", "wrangler.jsonc"], setupUrl: "https://dash.cloudflare.com/profile/api-tokens" },
+  { name: "GitHub Token", key: "github-token", envVars: ["GITHUB_TOKEN", "GH_TOKEN"], configDirs: [".github"], setupUrl: "https://github.com/settings/tokens" },
+  { name: "Sentry", key: "sentry", envVars: ["SENTRY_AUTH_TOKEN", "SENTRY_DSN"], packages: ["@sentry/"], configFiles: [".sentryclirc"], setupUrl: "https://sentry.io/settings/auth-tokens/" },
+  { name: "Vercel", key: "vercel-token", envVars: ["VERCEL_TOKEN"], packages: ["@vercel/"], configFiles: ["vercel.json"], setupUrl: "https://vercel.com/account/tokens" },
+  { name: "Netlify", key: "netlify-token", envVars: ["NETLIFY_AUTH_TOKEN"], configFiles: ["netlify.toml"], setupUrl: "https://app.netlify.com/user/applications#personal-access-tokens" },
+  { name: "AWS", key: "aws", envVars: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"], packages: ["aws-sdk", "@aws-sdk/"], setupUrl: "https://console.aws.amazon.com/iam/home#/security_credentials" },
+  { name: "Google Cloud", key: "gcloud", envVars: ["GOOGLE_APPLICATION_CREDENTIALS", "GCLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT"], packages: ["@google-cloud/", "firebase", "firebase-admin"], setupUrl: "https://console.cloud.google.com/apis/credentials" },
+  { name: "Stripe", key: "stripe", envVars: ["STRIPE_SECRET_KEY", "STRIPE_API_KEY"], packages: ["stripe", "@stripe/"], setupUrl: "https://dashboard.stripe.com/apikeys" },
+  { name: "Supabase", key: "supabase", envVars: ["SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"], packages: ["@supabase/"], configDirs: ["supabase"], setupUrl: "https://supabase.com/dashboard" },
+  { name: "Railway", key: "railway-token", envVars: ["RAILWAY_TOKEN"], configFiles: ["railway.json", "railway.toml"], setupUrl: "https://railway.com/account/tokens" },
+  { name: "Fly.io", key: "fly", envVars: ["FLY_API_TOKEN"], configFiles: ["fly.toml"], setupUrl: "https://fly.io/user/personal_access_tokens" },
+  { name: "Resend", key: "resend", envVars: ["RESEND_API_KEY"], packages: ["resend"], setupUrl: "https://resend.com/api-keys" },
+  { name: "Postmark", key: "postmark", envVars: ["POSTMARK_API_TOKEN", "POSTMARK_SERVER_API_TOKEN"], packages: ["postmark"], setupUrl: "https://account.postmarkapp.com/api_tokens" },
+  { name: "SendGrid", key: "sendgrid", envVars: ["SENDGRID_API_KEY"], packages: ["@sendgrid/"], setupUrl: "https://app.sendgrid.com/settings/api_keys" },
+  { name: "Twilio", key: "twilio", envVars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"], packages: ["twilio"], setupUrl: "https://console.twilio.com" },
   { name: "Database URL", key: "database-url", envVars: ["DATABASE_URL"], packages: ["prisma", "@prisma/client", "drizzle-orm", "knex", "sequelize", "typeorm"], configFiles: ["prisma/schema.prisma"] },
   { name: "Redis", key: "redis", envVars: ["REDIS_URL"], packages: ["redis", "ioredis", "bullmq"] },
-  { name: "Algolia", key: "algolia", envVars: ["ALGOLIA_ADMIN_API_KEY", "ALGOLIA_API_KEY"], packages: ["algoliasearch", "@algolia/"] },
+  { name: "Algolia", key: "algolia", envVars: ["ALGOLIA_ADMIN_API_KEY", "ALGOLIA_API_KEY"], packages: ["algoliasearch", "@algolia/"], setupUrl: "https://dashboard.algolia.com/account/api-keys/" },
   { name: "Hardhat", key: "hardhat", envVars: ["HARDHAT_NETWORK"], packages: ["hardhat", "@nomicfoundation/hardhat-toolbox"], configFiles: ["hardhat.config.ts", "hardhat.config.js"] },
   { name: "Foundry", key: "foundry", envVars: ["FOUNDRY_PROFILE"], configFiles: ["foundry.toml"], configDirs: ["lib/forge-std"] },
-  { name: "Alchemy", key: "alchemy", envVars: ["ALCHEMY_API_KEY", "ALCHEMY_URL"], packages: ["alchemy-sdk", "@alch/alchemy-sdk"] },
-  { name: "Infura", key: "infura", envVars: ["INFURA_API_KEY", "INFURA_PROJECT_ID"], packages: ["@infura/sdk"] },
-  { name: "Etherscan", key: "etherscan", envVars: ["ETHERSCAN_API_KEY"], packages: ["@nomicfoundation/hardhat-verify"] },
+  { name: "Alchemy", key: "alchemy", envVars: ["ALCHEMY_API_KEY", "ALCHEMY_URL"], packages: ["alchemy-sdk", "@alch/alchemy-sdk"], setupUrl: "https://dashboard.alchemy.com/" },
+  { name: "Infura", key: "infura", envVars: ["INFURA_API_KEY", "INFURA_PROJECT_ID"], packages: ["@infura/sdk"], setupUrl: "https://app.infura.io/dashboard" },
+  { name: "Etherscan", key: "etherscan", envVars: ["ETHERSCAN_API_KEY"], packages: ["@nomicfoundation/hardhat-verify"], setupUrl: "https://etherscan.io/myapikey" },
 ]
 
 // ---------------------------------------------------------------------------
@@ -278,22 +280,29 @@ export const envToolsRouter = router({
       // Check API keys (synchronous env var lookups)
       const apiKeys = API_KEYS.map((apiKey) => {
         const detected = projectDetected.has(apiKey.key)
+        const base = {
+          name: apiKey.name,
+          key: apiKey.key,
+          detected,
+          envVars: apiKey.envVars,
+          setupUrl: apiKey.setupUrl ?? null,
+        }
 
         // Check shell env first
         const shellMatch = apiKey.envVars.find(
           (v) => shellEnv[v] && shellEnv[v].trim().length > 0
         )
         if (shellMatch) {
-          return { name: apiKey.name, key: apiKey.key, present: true, source: "shell" as const, detected }
+          return { ...base, present: true, source: "shell" as const }
         }
 
         // Check project .env files
         const projectMatch = apiKey.envVars.find((v) => projectEnvKeys.has(v))
         if (projectMatch) {
-          return { name: apiKey.name, key: apiKey.key, present: true, source: "project-env" as const, detected }
+          return { ...base, present: true, source: "project-env" as const }
         }
 
-        return { name: apiKey.name, key: apiKey.key, present: false, source: null, detected }
+        return { ...base, present: false, source: null }
       })
 
       return { cliTools, apiKeys }

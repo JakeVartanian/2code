@@ -71,29 +71,57 @@ export class AmbientAgent {
       return
     }
 
-    // Initialize file watcher
-    this.fileWatcher = new AmbientFileWatcher({
-      projectPath: this.projectPath,
-      projectId: this.projectId,
-      ignorePatterns: this.config.ignorePatterns,
-    })
-
-    this.fileWatcher.on("batch", (batch: FileBatch) => {
-      this.lastEventAt = Date.now()
-      this.handleEvent({ kind: "file-batch", batch })
-    })
-
-    await this.fileWatcher.waitForReady()
-
-    // Initialize git monitor
-    this.gitMonitor = new AmbientGitMonitor(this.projectPath)
-    this.gitMonitor.on("git-event", (event: GitEvent) => {
-      this.lastEventAt = Date.now()
-      this.handleEvent({ kind: "git", event })
-    })
-    await this.gitMonitor.start()
-
+    // Mark as running immediately so the UI updates
     this.status = "running"
+
+    // Defer watcher initialization to next tick to avoid blocking the main process.
+    // Chokidar's initial file tree scan can monopolize the event loop on large projects.
+    setTimeout(() => {
+      if (this.status !== "running") return // Already stopped before init started
+
+      // Initialize file watcher
+      try {
+        this.fileWatcher = new AmbientFileWatcher({
+          projectPath: this.projectPath,
+          projectId: this.projectId,
+          ignorePatterns: this.config.ignorePatterns,
+        })
+
+        this.fileWatcher.on("batch", (batch: FileBatch) => {
+          this.lastEventAt = Date.now()
+          this.handleEvent({ kind: "file-batch", batch })
+        })
+
+        this.fileWatcher.waitForReady().then(() => {
+          console.log(`[Ambient] File watcher ready for ${this.projectId}`)
+        }).catch((err) => {
+          console.warn("[Ambient] File watcher init failed:", err.message)
+          this.fileWatcher?.dispose()
+          this.fileWatcher = null
+        })
+      } catch (err) {
+        console.warn("[Ambient] File watcher creation failed:", err)
+        this.fileWatcher = null
+      }
+
+      // Initialize git monitor
+      try {
+        this.gitMonitor = new AmbientGitMonitor(this.projectPath)
+        this.gitMonitor.on("git-event", (event: GitEvent) => {
+          this.lastEventAt = Date.now()
+          this.handleEvent({ kind: "git", event })
+        })
+
+        this.gitMonitor.start().catch((err) => {
+          console.warn("[Ambient] Git monitor init failed:", err.message)
+          this.gitMonitor?.dispose()
+          this.gitMonitor = null
+        })
+      } catch (err) {
+        console.warn("[Ambient] Git monitor creation failed:", err)
+        this.gitMonitor = null
+      }
+    }, 100) // Small delay so toggle mutation returns and UI updates first
 
     // --- Lifecycle scheduler ---
     // Run score decay immediately (catch-up for missed days), then every 24h
@@ -230,10 +258,10 @@ class AmbientAgentRegistry {
     if (pending) return pending
 
     const promise = (async () => {
-      const agent = new AmbientAgent(projectId, projectPath)
       try {
+        const agent = new AmbientAgent(projectId, projectPath)
         this.agents.set(projectId, agent)
-        await agent.start()
+        await agent.start() // Non-blocking now — sets status immediately, watchers init in background
         return agent
       } catch (error) {
         // Remove broken agent from registry so next call retries

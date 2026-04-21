@@ -1,6 +1,12 @@
 /**
  * Ambient sidebar section — suggestion list with expandable detail cards,
  * implement/snooze/dismiss actions, badge count, and history view.
+ *
+ * Design principles:
+ * - Surface actionable info only; hide internal metrics
+ * - Budget/injection shown only when degraded or heavy
+ * - Status pill replaces separate power icon + dot
+ * - Empty state explains what to expect, not just "nothing"
  */
 
 import { memo, useCallback, useMemo, useState } from "react"
@@ -22,7 +28,8 @@ import {
   Loader2,
   FileCode,
   History,
-  Power,
+  Brain,
+  AlertTriangle,
 } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -107,6 +114,11 @@ export function AmbientSidebarSection({
     },
   })
 
+  const { data: brainStatus } = trpc.ambient.getBrainStatus.useQuery(
+    { projectId: projectId! },
+    { enabled: !!projectId, refetchInterval: 60_000 },
+  )
+
   const pendingSuggestions = suggestions.filter(s => s.status === "pending")
   const visibleSuggestions = pendingSuggestions.slice(0, MAX_VISIBLE)
   const moreCount = Math.max(0, pendingSuggestions.length - MAX_VISIBLE)
@@ -114,30 +126,28 @@ export function AmbientSidebarSection({
   const displaySuggestions = showAll ? pendingSuggestions : visibleSuggestions
 
   const badgeCount = pendingSuggestions.length
-
-  const statusColor = agentStatus === "running" ? "bg-green-500"
-    : agentStatus === "paused" ? "bg-amber-500"
-    : "bg-zinc-500"
+  const hasBrain = (brainStatus?.memoryCount ?? 0) > 0
+  const isFirstRun = agentStatus !== "running" && !hasBrain
 
   return (
     <div className="px-2 pb-2">
       {/* Section header */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-1 rounded px-1 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+        className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
       >
-        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <Zap className="h-3 w-3" />
+        {expanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
+        <Zap className="h-3 w-3 flex-shrink-0" />
         <span className="flex-1 text-left">Ambient</span>
 
         {/* Badge count */}
         {badgeCount > 0 && (
-          <span className="h-[18px] min-w-[18px] px-1 rounded-full bg-amber-500/75 text-[10px] font-semibold text-white flex items-center justify-center">
+          <span className="h-[18px] min-w-[18px] px-1 rounded-full bg-teal-500/20 text-teal-300 text-[10px] font-semibold flex items-center justify-center">
             {badgeCount}
           </span>
         )}
 
-        {/* Toggle + Status dot */}
+        {/* Status pill — merged toggle + status indicator */}
         {projectId && projectPath && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -152,80 +162,235 @@ export function AmbientSidebarSection({
                   })
                 }}
                 className={cn(
-                  "inline-flex items-center justify-center h-4 w-4 rounded transition-colors",
+                  "inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full transition-colors font-medium",
                   agentStatus === "running"
-                    ? "text-teal-500 hover:text-teal-400"
-                    : "text-muted-foreground/40 hover:text-muted-foreground",
+                    ? "bg-teal-500/15 text-teal-400 hover:bg-teal-500/25"
+                    : "bg-zinc-700/40 text-muted-foreground/50 hover:bg-zinc-700/60 hover:text-muted-foreground",
                 )}
               >
-                <Power className="h-2.5 w-2.5" />
+                <span className={cn(
+                  "h-1.5 w-1.5 rounded-full flex-shrink-0",
+                  agentStatus === "running" ? "bg-teal-400"
+                    : agentStatus === "paused" ? "bg-amber-400"
+                    : "bg-zinc-500",
+                )} />
+                {agentStatus === "running" ? "Watching" : agentStatus === "paused" ? "Paused" : "Off"}
               </span>
             </TooltipTrigger>
             <TooltipContent side="right">
-              {agentStatus === "running" ? "Stop ambient agent" : "Start ambient agent"}
+              {agentStatus === "running" ? "Click to stop ambient agent" : "Click to start ambient agent"}
             </TooltipContent>
           </Tooltip>
         )}
-
-        {/* Status dot */}
-        <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
       </button>
 
       {/* Expanded content */}
       {expanded && (
         <div className="mt-1 space-y-0.5">
-          {displaySuggestions.length === 0 && !showHistory ? (
-            <p className="px-2 py-1 text-[10px] text-muted-foreground/60 italic">
-              No active suggestions
+          {/* Budget warning — only when degraded */}
+          <BudgetWarning budgetStatus={budgetStatus} />
+
+          {/* Onboarding state — no brain, agent not running */}
+          {isFirstRun && (
+            <OnboardingCTA projectId={projectId} projectPath={projectPath} />
+          )}
+
+          {/* Empty state when agent is running but no suggestions */}
+          {!isFirstRun && displaySuggestions.length === 0 && !showHistory && (
+            <p className="px-2 py-1.5 text-[11px] text-muted-foreground/50">
+              {agentStatus === "running"
+                ? "No findings yet \u2014 will notify when something comes up."
+                : "Start the agent to monitor for issues."}
             </p>
-          ) : (
-            <>
-              {displaySuggestions.map((suggestion) => (
-                <SuggestionCard
-                  key={suggestion.id}
-                  suggestion={suggestion}
-                  chatId={chatId}
-                />
-              ))}
-              {!showAll && moreCount > 0 && (
-                <button
-                  onClick={() => setShowAll(true)}
-                  className="w-full px-2 py-0.5 text-[10px] text-muted-foreground/60 hover:text-muted-foreground text-center transition-colors"
-                >
-                  +{moreCount} more
-                </button>
-              )}
-              {showAll && pendingSuggestions.length > MAX_VISIBLE && (
-                <button
-                  onClick={() => setShowAll(false)}
-                  className="w-full px-2 py-0.5 text-[10px] text-muted-foreground/60 hover:text-muted-foreground text-center transition-colors"
-                >
-                  Show less
-                </button>
-              )}
-            </>
+          )}
+
+          {/* Suggestions */}
+          {displaySuggestions.map((suggestion) => (
+            <SuggestionCard
+              key={suggestion.id}
+              suggestion={suggestion}
+              chatId={chatId}
+            />
+          ))}
+          {!showAll && moreCount > 0 && (
+            <button
+              onClick={() => setShowAll(true)}
+              className="w-full px-2 py-0.5 text-[10px] text-muted-foreground/60 hover:text-muted-foreground text-center transition-colors"
+            >
+              +{moreCount} more
+            </button>
+          )}
+          {showAll && pendingSuggestions.length > MAX_VISIBLE && (
+            <button
+              onClick={() => setShowAll(false)}
+              className="w-full px-2 py-0.5 text-[10px] text-muted-foreground/60 hover:text-muted-foreground text-center transition-colors"
+            >
+              Show less
+            </button>
           )}
 
           {/* History link */}
           <SuggestionHistory projectId={projectId} showHistory={showHistory} setShowHistory={setShowHistory} />
 
-          {/* Budget bar */}
-          {budgetStatus && (
-            <div className="px-2 pt-1">
-              <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-teal-500/60 transition-all"
-                  style={{ width: `${Math.min(100, budgetStatus.percentUsed)}%` }}
-                />
-              </div>
-              <p className="text-[9px] text-muted-foreground/50 mt-0.5">
-                {budgetStatus.percentUsed}% budget used
-              </p>
+          {/* Project index details — collapsed by default, only when brain exists */}
+          {hasBrain && (
+            <ProjectIndexDetails
+              projectId={projectId}
+              projectPath={projectPath}
+              brainStatus={brainStatus}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============ BUDGET WARNING (only when degraded) ============
+
+function BudgetWarning({ budgetStatus }: { budgetStatus: ReturnType<typeof useAmbientStore>["budgetStatus"] }) {
+  if (!budgetStatus || budgetStatus.tier === "normal") return null
+
+  return (
+    <div className={cn(
+      "mx-1 mb-1 px-2 py-1.5 rounded-md text-[11px] flex items-center gap-1.5",
+      budgetStatus.tier === "paused"
+        ? "bg-red-500/10 text-red-400 border border-red-500/20"
+        : "bg-amber-500/10 text-amber-400 border border-amber-500/20",
+    )}>
+      <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+      <span>
+        {budgetStatus.tier === "paused"
+          ? "Daily limit reached \u2014 resumes tomorrow"
+          : budgetStatus.tier === "tier0-only"
+            ? "Budget low \u2014 using fast analysis only"
+            : "Budget conserving \u2014 fewer checks today"}
+      </span>
+    </div>
+  )
+}
+
+// ============ ONBOARDING CTA ============
+
+function OnboardingCTA({
+  projectId,
+  projectPath,
+}: {
+  projectId: string | null
+  projectPath: string | null
+}) {
+  const buildBrainMutation = trpc.ambient.buildBrain.useMutation({
+    onSuccess: (result) => {
+      if (result.success) {
+        toast.success(`Project indexed: ${result.memoriesCreated} entries created`)
+      } else {
+        toast.error(result.error ?? "Failed to index project")
+      }
+    },
+    onError: () => toast.error("Failed to index project"),
+  })
+
+  if (!projectId || !projectPath) return null
+
+  return (
+    <div className="px-2 pt-1 pb-2 space-y-2">
+      <p className="text-[11px] text-muted-foreground/60 leading-relaxed">
+        Watches for bugs, security issues, and performance problems as you code.
+      </p>
+      <button
+        onClick={() => buildBrainMutation.mutate({ projectId, projectPath })}
+        disabled={buildBrainMutation.isPending}
+        className={cn(
+          "w-full text-[11px] py-1.5 px-2 rounded-md font-medium transition-colors",
+          "bg-teal-500/10 text-teal-300 hover:bg-teal-500/20 border border-teal-500/20",
+          "disabled:opacity-50 disabled:cursor-not-allowed",
+          "flex items-center justify-center gap-1.5",
+        )}
+      >
+        {buildBrainMutation.isPending ? (
+          <><Loader2 className="h-3 w-3 animate-spin" />Indexing project...</>
+        ) : (
+          <><Brain className="h-3 w-3" />Index this project</>
+        )}
+      </button>
+    </div>
+  )
+}
+
+// ============ PROJECT INDEX DETAILS (collapsed by default) ============
+
+function ProjectIndexDetails({
+  projectId,
+  projectPath,
+  brainStatus,
+}: {
+  projectId: string | null
+  projectPath: string | null
+  brainStatus: { memoryCount: number } | null | undefined
+}) {
+  const [open, setOpen] = useState(false)
+
+  const trimMutation = trpc.ambient.trimMemories.useMutation({
+    onSuccess: () => toast.success("Cleaned up low-value entries"),
+  })
+
+  const buildBrainMutation = trpc.ambient.buildBrain.useMutation({
+    onSuccess: (result) => {
+      if (result.success) {
+        toast.success(`Re-indexed: ${result.memoriesCreated} created, ${result.memoriesUpdated ?? 0} updated`)
+      } else {
+        toast.error(result.error ?? "Failed to re-index")
+      }
+    },
+    onError: () => toast.error("Failed to re-index project"),
+  })
+
+  if (!brainStatus || !projectId) return null
+
+  const memoryCount = brainStatus.memoryCount
+  const isHeavy = memoryCount * 80 > 2500
+
+  return (
+    <div className="px-2 pt-1 pb-0.5">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-1 text-[10px] text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors"
+      >
+        <ChevronRight className={cn("h-2.5 w-2.5 transition-transform flex-shrink-0", open && "rotate-90")} />
+        <Brain className="h-2.5 w-2.5 flex-shrink-0" />
+        <span>Project index</span>
+        <span className="ml-auto text-muted-foreground/30">
+          {memoryCount} {memoryCount === 1 ? "entry" : "entries"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-1.5 ml-5 space-y-1.5">
+          {isHeavy && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] text-amber-400/80">Index is large — may slow sessions</span>
+              <button
+                onClick={() => trimMutation.mutate({ projectId })}
+                disabled={trimMutation.isPending}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors disabled:opacity-50 flex-shrink-0"
+              >
+                {trimMutation.isPending ? "..." : "Clean up"}
+              </button>
             </div>
           )}
-
-          {/* Injection weight indicator + brain status */}
-          <InjectionWeightBar projectId={projectId} projectPath={projectPath} />
+          {projectPath && (
+            <button
+              onClick={() => buildBrainMutation.mutate({ projectId, projectPath })}
+              disabled={buildBrainMutation.isPending}
+              className="text-[10px] text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors flex items-center gap-1"
+            >
+              {buildBrainMutation.isPending ? (
+                <><Loader2 className="h-2.5 w-2.5 animate-spin" />Re-indexing...</>
+              ) : (
+                "Re-index project"
+              )}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -495,14 +660,17 @@ function SuggestionHistory({
     return bTime - aTime
   })
 
+  // Only show the history toggle if there's been prior activity
+  const hasHistory = showHistory || (historyItems.length > 0)
+
   return (
     <>
       <button
         onClick={() => setShowHistory(!showHistory)}
-        className="w-full px-2 py-0.5 text-[10px] text-muted-foreground/50 hover:text-muted-foreground text-left transition-colors flex items-center gap-1"
+        className="w-full px-2 py-0.5 text-[10px] text-muted-foreground/40 hover:text-muted-foreground/60 text-left transition-colors flex items-center gap-1"
       >
         <History className="h-2.5 w-2.5" />
-        <span>{showHistory ? "Hide history" : "View history"}</span>
+        <span>{showHistory ? "Hide history" : "Past findings"}</span>
       </button>
 
       {showHistory && (
@@ -524,92 +692,5 @@ function SuggestionHistory({
         </div>
       )}
     </>
-  )
-}
-
-// ============ INJECTION WEIGHT BAR ============
-
-function InjectionWeightBar({ projectId, projectPath }: { projectId: string | null; projectPath: string | null }) {
-  const { data: brainStatus, refetch: refetchBrain } = trpc.ambient.getBrainStatus.useQuery(
-    { projectId: projectId! },
-    { enabled: !!projectId, refetchInterval: 60_000 },
-  )
-
-  const trimMutation = trpc.ambient.trimMemories.useMutation({
-    onSuccess: () => { refetchBrain() },
-  })
-
-  const buildBrainMutation = trpc.ambient.buildBrain.useMutation({
-    onSuccess: () => {
-      refetchBrain()
-      toast.success("Brain built successfully")
-    },
-    onError: () => {
-      toast.error("Failed to build brain")
-    },
-  })
-
-  if (!brainStatus) return null
-
-  // No memories yet — show build brain CTA
-  if (brainStatus.memoryCount === 0) {
-    return (
-      <div className="px-2 pt-1.5 pb-0.5">
-        <div className="flex items-center justify-between">
-          <p className="text-[10px] text-muted-foreground/50">No project brain yet</p>
-          {projectId && projectPath && (
-            <button
-              onClick={() => buildBrainMutation.mutate({ projectId, projectPath })}
-              disabled={buildBrainMutation.isPending}
-              className="text-[9px] px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-400 hover:bg-teal-500/20 transition-colors disabled:opacity-50"
-            >
-              {buildBrainMutation.isPending ? "Building..." : "Build Brain"}
-            </button>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  const estimatedTokens = brainStatus.memoryCount * 80
-  const effectiveTokens = Math.min(estimatedTokens, 3000)
-  const percent = Math.round((effectiveTokens / 3000) * 100)
-
-  const isHeavy = effectiveTokens > 2500
-  const barColor = isHeavy ? "bg-red-500/70"
-    : effectiveTokens > 1500 ? "bg-amber-500/60"
-    : "bg-green-500/60"
-
-  const label = isHeavy
-    ? `${brainStatus.memoryCount} memories (~${effectiveTokens}t) — Trim will archive low-value memories`
-    : `${brainStatus.memoryCount} memories (~${effectiveTokens}t injected per session)`
-
-  return (
-    <div className="px-2 pt-1">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div>
-            <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
-              <div className={`h-full rounded-full ${barColor} transition-all`} style={{ width: `${percent}%` }} />
-            </div>
-            <div className="flex items-center justify-between mt-0.5">
-              <p className={`text-[9px] ${isHeavy ? "text-red-400/70" : "text-muted-foreground/50"}`}>
-                {isHeavy ? "injection heavy" : `~${effectiveTokens}t injected`}
-              </p>
-              {isHeavy && (
-                <button
-                  onClick={() => projectId && trimMutation.mutate({ projectId })}
-                  disabled={trimMutation.isPending}
-                  className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
-                >
-                  {trimMutation.isPending ? "..." : "Trim"}
-                </button>
-              )}
-            </div>
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="right" className="max-w-[200px]">{label}</TooltipContent>
-      </Tooltip>
-    </div>
   )
 }
