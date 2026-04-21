@@ -30,6 +30,10 @@ export type TriggerEvent =
   | "commit"
   | "branch-switch"
   | "ci-failure"
+  | "tool-error"
+  | "memory-conflict"
+  | "session-synthesis"
+  | "chat-batch"
 
 export type AnalysisModel = "heuristic" | "haiku" | "sonnet"
 

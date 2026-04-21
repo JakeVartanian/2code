@@ -185,13 +185,13 @@ export const ambientRouter = router({
               () => getClaudeCodeTokenFresh(),
               null, // TODO: pass OpenRouter key if configured
             ).catch((err) => {
-              console.warn("[Ambient] Provider init failed (Tier 0 only):", err.message)
+              console.warn("[GAAD] Provider init failed (Tier 0 only):", err.message)
             })
           }).catch((err) => {
-            console.warn("[Ambient] Failed to import claude module:", err.message)
+            console.error("[GAAD] Failed to import claude module:", err.message)
           })
         } catch (err) {
-          console.error("[Ambient] Failed to start agent:", err)
+          console.error("[GAAD] Failed to start agent:", err)
           // Clean up any partial state
           await ambientAgentRegistry.stop(input.projectId).catch(() => {})
           return { enabled: false, error: err instanceof Error ? err.message : "Failed to start ambient agent" }
@@ -245,8 +245,10 @@ export const ambientRouter = router({
           agent.initProvider(
             () => getClaudeCodeTokenFresh(),
             null,
-          ).catch(err => console.warn("[Ambient] Provider init:", err.message))
-        }).catch(() => {})
+          ).catch(err => console.warn("[GAAD] Provider init failed:", err.message))
+        }).catch((err) => {
+          console.error("[GAAD] Failed to import claude module for provider init:", err?.message ?? err)
+        })
         return { status: "running" as const }
       } catch (err) {
         console.error("[Ambient] Auto-start failed:", err)
@@ -646,6 +648,46 @@ export const ambientRouter = router({
 
       const zones = await synthesizeSystemMap(input.projectId, input.projectPath, provider)
       return { success: true, zones }
+    }),
+
+  // ============ SYSTEM MAP AUDIT ============
+
+  /**
+   * Audit all system map zones — reads linked files, runs Sonnet analysis,
+   * creates ambientSuggestions so zone cards update with confidence scores.
+   */
+  auditSystemMap: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      projectPath: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      const { getClaudeCodeTokenFresh } = await import("./claude")
+      const { auditSystemMap } = await import("../../ambient/system-map-audit")
+
+      const provider = await createAmbientProvider(
+        () => getClaudeCodeTokenFresh(),
+        null,
+      )
+
+      if (!provider) {
+        return { success: false, error: "No AI provider available", zonesAudited: 0, totalFindings: 0, suggestionsCreated: 0, durationMs: 0 }
+      }
+
+      const result = await auditSystemMap(
+        input.projectId,
+        input.projectPath,
+        provider,
+        (progress) => {
+          // Emit progress events for real-time UI updates
+          ambientEvents.emit(`project:${input.projectId}`, {
+            type: "audit-progress",
+            progress,
+          })
+        },
+      )
+
+      return { success: true, ...result }
     }),
 
   // ============ SUBSCRIPTIONS ============

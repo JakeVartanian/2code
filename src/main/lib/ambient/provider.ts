@@ -36,11 +36,11 @@ class CliProvider implements AmbientProvider {
   }
 
   async callHaiku(system: string, user: string): Promise<AmbientProviderCallResult> {
-    return callClaude({ system, userMessage: user, maxTokens: 1024, timeoutMs: 120_000 })
+    return callClaude({ system, userMessage: user, maxTokens: 1024, timeoutMs: 120_000, model: "haiku" })
   }
 
   async callSonnet(system: string, user: string): Promise<AmbientProviderCallResult> {
-    return callClaude({ system, userMessage: user, maxTokens: 4096, timeoutMs: 120_000 })
+    return callClaude({ system, userMessage: user, maxTokens: 4096, timeoutMs: 120_000, model: "sonnet" })
   }
 }
 

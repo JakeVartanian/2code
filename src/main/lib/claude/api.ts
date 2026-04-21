@@ -37,6 +37,8 @@ export interface CallClaudeOptions {
   userMessage: string
   /** Max output tokens (default 4096) */
   maxTokens?: number
+  /** Model tier: "haiku" for cheap/fast, "sonnet" for quality (default: CLI default) */
+  model?: "haiku" | "sonnet"
   /** Timeout in milliseconds (default 120_000) */
   timeoutMs?: number
   /** Abort signal for external cancellation */
@@ -90,16 +92,20 @@ export async function callClaude(opts: CallClaudeOptions): Promise<CallClaudeRes
     CLAUDE_CODE_OAUTH_TOKEN: token,
   }
 
-  // 4. Build prompt with system instructions embedded
-  // The CLI's --system-prompt flag isn't available via SDK query(),
-  // so we embed the system prompt in the user message.
-  const fullPrompt = `<system>\n${opts.system}\n</system>\n\n${opts.userMessage}`
+  // Force model selection via env vars if specified
+  if (opts.model === "haiku") {
+    finalEnv.ANTHROPIC_DEFAULT_SONNET_MODEL = "claude-haiku-4-5-20251001"
+    finalEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-haiku-4-5-20251001"
+    finalEnv.CLAUDE_CODE_SUBAGENT_MODEL = "claude-haiku-4-5-20251001"
+  }
+  // sonnet is the CLI default — no override needed
+
+  // 4. User message only — system prompt goes via the systemPrompt option
+  const fullPrompt = opts.userMessage
 
   // 5. Setup abort controller with timeout
   const abortController = new AbortController()
-  const timeout = opts.timeoutMs
-    ? setTimeout(() => abortController.abort(), opts.timeoutMs ?? 120_000)
-    : setTimeout(() => abortController.abort(), 120_000)
+  const timeout = setTimeout(() => abortController.abort(), opts.timeoutMs ?? 120_000)
 
   if (opts.signal) {
     opts.signal.addEventListener("abort", () => abortController.abort(), { once: true })

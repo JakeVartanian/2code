@@ -11,7 +11,8 @@ import { promisify } from "util"
 const execAsync = promisify(exec)
 import { eq, and, sql } from "drizzle-orm"
 import { getDatabase } from "../db"
-import { ambientSuggestions } from "../db/schema"
+import { ambientSuggestions, projectMemories } from "../db/schema"
+import { createId } from "../db/utils"
 import { runHeuristics } from "./heuristics"
 import { getHeuristicThreshold } from "./config"
 import { triageWithHaiku } from "./triage"
@@ -22,7 +23,7 @@ import { checkStaleness } from "./staleness"
 import { getMemoriesForInjection } from "../memory/injection"
 import type { AmbientProvider } from "./provider"
 import { runChatHeuristics, clearSessionTrackers } from "./chat-heuristics"
-import { buildSessionSummary, drainSessionEvents } from "./chat-bridge"
+import { buildSessionSummary, drainSessionEvents, getSessionEvents } from "./chat-bridge"
 import type {
   AmbientConfig,
   AmbientEvent,
@@ -356,17 +357,20 @@ export class AnalysisPipeline {
    * for Tier 1 triage, and triggers rolling synthesis every few prompts.
    */
   private async processChatEvent(event: ChatActivityEvent): Promise<void> {
-    // Session complete → cleanup trackers (synthesis happens continuously, not just here)
+    // Session complete → always cleanup, then optionally synthesize
     if (event.activityType === "session-complete" || event.activityType === "session-error") {
       clearSessionTrackers(event.subChatId)
       this.promptCounter.delete(event.subChatId)
 
-      // Still run synthesis on session-complete for any remaining accumulated context
+      // Run final synthesis on session-complete for any remaining context
       if (event.activityType === "session-complete" && this.provider) {
         await this.runPostSessionSynthesis(event).catch(err => {
           console.warn("[GAAD] Synthesis failed:", err.message)
         })
       }
+
+      // Always drain session events (prevents Map leak even if synthesis was skipped)
+      drainSessionEvents(event.subChatId)
       return
     }
 
@@ -442,7 +446,7 @@ export class AnalysisPipeline {
       description: `Recent activity involved ${[...files].slice(0, 5).join(", ")}${files.size > 5 ? ` (+${files.size - 5} more)` : ""} using ${[...tools].join(", ")}.`,
       confidence: 40,
       triggerFiles: [...files].slice(0, 10),
-      triggerEvent: "chat-batch" as any,
+      triggerEvent: "chat-batch",
     }
 
     // Triage with memory context
@@ -490,14 +494,14 @@ export class AnalysisPipeline {
   }
 
   private async _runPostSessionSynthesisInner(event: ChatActivityEvent): Promise<void> {
-    if (!this.provider) return
+    if (!this.provider) { console.log("[GAAD] Synthesis skipped: no provider"); return }
     if (this.disposeController.signal.aborted) return
 
     const sessionSummary = buildSessionSummary(event.subChatId)
-    if (!sessionSummary || sessionSummary.length < 50) return
-
-    // Drain the session buffer
-    drainSessionEvents(event.subChatId)
+    if (!sessionSummary || sessionSummary.length < 50) {
+      console.log(`[GAAD] Synthesis skipped: summary too short (${sessionSummary?.length ?? 0} chars)`)
+      return
+    }
 
     // Get project memories for context (increased budget for synthesis)
     let memoryContext = ""
@@ -507,15 +511,49 @@ export class AnalysisPipeline {
     } catch { /* non-critical */ }
 
     // Determine session type for dynamic prompt adaptation
+    // For session-complete events: use sessionMeta (has full stats)
+    // For rolling synthesis (user-prompt events): use accumulated events from chat bridge
     const meta = event.sessionMeta
-    const hasErrors = (meta?.errorCount ?? 0) > 0
-    const hasModifications = (meta?.filesModified?.length ?? 0) > 0
-    const isExploring = (meta?.filesRead?.length ?? 0) > (meta?.filesModified?.length ?? 0) * 2
-    const isBroadChange = (meta?.filesModified?.length ?? 0) >= 5
-    const isQuick = (meta?.toolCallCount ?? 0) < 3
+    let hasErrors: boolean
+    let hasModifications: boolean
+    let isExploring: boolean
+    let isBroadChange: boolean
+    let isQuick: boolean
 
-    // Require at least 1 file modification or 1 error to trigger synthesis
-    if (!hasErrors && !hasModifications && !isExploring) return
+    if (event.activityType === "session-complete" && meta) {
+      // Session-complete path: rich metadata available
+      hasErrors = (meta.errorCount ?? 0) > 0
+      hasModifications = (meta.filesModified?.length ?? 0) > 0
+      isExploring = (meta.filesRead?.length ?? 0) > (meta.filesModified?.length ?? 0) * 2
+      isBroadChange = (meta.filesModified?.length ?? 0) >= 5
+      isQuick = (meta.toolCallCount ?? 0) < 3
+    } else {
+      // Rolling synthesis path: derive from accumulated events
+      const accumulated = getSessionEvents(event.subChatId)
+      const toolCalls = accumulated.filter(e => e.activityType === "tool-call")
+      const errors = accumulated.filter(e => e.activityType === "tool-error")
+      const editTools = ["Edit", "Write", "file_edit", "file_write"]
+      const edits = toolCalls.filter(e => e.toolName && editTools.includes(e.toolName))
+      const reads = toolCalls.filter(e => e.toolName && !editTools.includes(e.toolName))
+
+      hasErrors = errors.length > 0
+      hasModifications = edits.length > 0
+      isExploring = reads.length > edits.length * 2
+      isBroadChange = edits.length >= 5
+      isQuick = toolCalls.length < 3
+
+      // For rolling synthesis, require at least some tool activity
+      if (toolCalls.length === 0) {
+        console.log("[GAAD] Rolling synthesis skipped: no tool calls yet")
+        return
+      }
+    }
+
+    // For session-complete: require meaningful activity
+    if (event.activityType === "session-complete" && !hasErrors && !hasModifications && !isExploring) {
+      console.log("[GAAD] Synthesis skipped: no meaningful activity in session")
+      return
+    }
 
     // Build dynamic emphasis based on session type
     let dynamicEmphasis = ""
@@ -593,7 +631,7 @@ ${memoryContext || "(no project memories yet)"}`
           description: `${s.description}${s.evidence ? `\n\n_Evidence: ${s.evidence}_` : ""}`,
           confidence: Math.min(95, Math.max(30, s.confidence ?? 50)),
           triggerFiles: s.files ?? [],
-          triggerEvent: "session-synthesis" as any,
+          triggerEvent: "session-synthesis",
         }
 
         if (!this.isRecentDuplicate(result)) {
@@ -642,7 +680,7 @@ ${memoryContext || "(no project memories yet)"}`
     if (pendingCount >= 10) return // Don't flood
 
     // Generate ID upfront so we can include it in the event
-    const { createId } = require("../db/utils")
+
     const suggestionId = createId()
 
     // Insert suggestion
@@ -745,8 +783,8 @@ ${memoryContext || "(no project memories yet)"}`
   private writeToMemory(analysis: import("./types").AnalysisResult): void {
     try {
       const db = getDatabase()
-      const { projectMemories } = require("../db/schema")
-      const { createId } = require("../db/utils")
+
+  
 
       // Map ambient category → memory category
       const memoryCategory =

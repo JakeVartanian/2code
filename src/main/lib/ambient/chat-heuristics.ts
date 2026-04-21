@@ -99,7 +99,7 @@ function checkErrorLoop(event: ChatActivityEvent): HeuristicResult[] {
         description: `The same tool has errored ${count} times on ${fileName} in this session. Consider trying a different approach or examining the file manually.`,
         confidence: 72,
         triggerFiles: [filePath],
-        triggerEvent: "tool-error" as any,
+        triggerEvent: "tool-error",
       })
     }
   }
@@ -142,7 +142,7 @@ function checkMissingTests(event: ChatActivityEvent): HeuristicResult[] {
       description: `${nonTestCount} files have been modified in this session without any test files being touched. Consider adding or updating tests.`,
       confidence: 55,
       triggerFiles: allFiles.slice(0, 5),
-      triggerEvent: "file-change" as any,
+      triggerEvent: "file-change",
     }]
   }
 
@@ -153,26 +153,34 @@ function checkMissingTests(event: ChatActivityEvent): HeuristicResult[] {
  * Memory conflict detection: check if files being edited have linked
  * "gotcha" or "debugging" memories that the user should be aware of.
  */
+// Cache gotcha/debugging memories to avoid full table scan on every tool-call event
+let memoriesCache: { projectId: string; data: any[]; expiry: number } | null = null
+const MEMORY_CACHE_TTL = 60_000 // 60s
+
+function getGotchaMemories(projectId: string) {
+  if (memoriesCache && memoriesCache.projectId === projectId && Date.now() < memoriesCache.expiry) {
+    return memoriesCache.data
+  }
+  const db = getDatabase()
+  const data = db.select()
+    .from(projectMemories)
+    .where(and(
+      eq(projectMemories.projectId, projectId),
+      eq(projectMemories.isArchived, false),
+    ))
+    .all()
+    .filter(m => (m.category === "gotcha" || m.category === "debugging") && m.linkedFiles)
+  memoriesCache = { projectId, data, expiry: Date.now() + MEMORY_CACHE_TTL }
+  return data
+}
+
 function checkMemoryConflicts(event: ChatActivityEvent): HeuristicResult[] {
   if (!event.filePaths?.length || !event.projectId) return []
 
   const results: HeuristicResult[] = []
 
   try {
-    const db = getDatabase()
-    const memories = db.select()
-      .from(projectMemories)
-      .where(and(
-        eq(projectMemories.projectId, event.projectId),
-        eq(projectMemories.isArchived, false),
-      ))
-      .all()
-
-    // Filter to gotcha/debugging memories that have linked files
-    const relevantMemories = memories.filter(m =>
-      (m.category === "gotcha" || m.category === "debugging") &&
-      m.linkedFiles,
-    )
+    const relevantMemories = getGotchaMemories(event.projectId)
 
     for (const memory of relevantMemories) {
       let linkedFiles: string[] = []
@@ -195,7 +203,7 @@ function checkMemoryConflicts(event: ChatActivityEvent): HeuristicResult[] {
           description: memory.content.slice(0, 300),
           confidence: 65,
           triggerFiles: event.filePaths!,
-          triggerEvent: "memory-conflict" as any,
+          triggerEvent: "memory-conflict",
         })
       }
     }

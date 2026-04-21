@@ -63,6 +63,14 @@ export function drainSessionEvents(subChatId: string): ChatActivityEvent[] {
 }
 
 /**
+ * Peek at accumulated events for a session without draining.
+ * Used by rolling synthesis to check if there's been meaningful activity.
+ */
+export function getSessionEvents(subChatId: string): ChatActivityEvent[] {
+  return sessionEvents.get(subChatId) ?? []
+}
+
+/**
  * Get a summary of accumulated session activity for synthesis prompts.
  */
 export function buildSessionSummary(subChatId: string): string {

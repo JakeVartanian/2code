@@ -279,10 +279,23 @@ function OnboardingCTA({
   projectId: string | null
   projectPath: string | null
 }) {
+  const toggleMutation = trpc.ambient.toggle.useMutation()
+  const utils = trpc.useUtils()
+
   const buildBrainMutation = trpc.ambient.buildBrain.useMutation({
     onSuccess: (result) => {
       if (result.success) {
         toast.success(`Project indexed: ${result.memoriesCreated} entries created`)
+        // Auto-start GAAD after brain build
+        if (projectId && projectPath) {
+          toggleMutation.mutate(
+            { projectId, projectPath, enabled: true },
+            { onSuccess: () => {
+              utils.ambient.getStatus.invalidate({ projectId })
+              utils.ambient.getBrainStatus.invalidate({ projectId })
+            }},
+          )
+        }
       } else {
         toast.error(result.error ?? "Failed to index project")
       }
@@ -293,9 +306,12 @@ function OnboardingCTA({
   if (!projectId || !projectPath) return null
 
   return (
-    <div className="px-2 pt-1 pb-2 space-y-2">
-      <p className="text-[11px] text-muted-foreground/60 leading-relaxed">
-        Watches for bugs, security issues, and performance problems as you code.
+    <div className="px-2 pt-1 pb-2 space-y-2.5">
+      <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
+        GAAD watches your coding sessions and suggests next steps, catches risks, and remembers patterns for future work.
+      </p>
+      <p className="text-[10px] text-muted-foreground/40 leading-relaxed">
+        One-time setup: ~3-5 min, ~$0.50 in API calls. After that, GAAD runs automatically.
       </p>
       <button
         onClick={() => buildBrainMutation.mutate({ projectId, projectPath })}
@@ -308,9 +324,9 @@ function OnboardingCTA({
         )}
       >
         {buildBrainMutation.isPending ? (
-          <><Loader2 className="h-3 w-3 animate-spin" />Indexing project...</>
+          <><Loader2 className="h-3 w-3 animate-spin" />Setting up GAAD...</>
         ) : (
-          <><Brain className="h-3 w-3" />Index this project</>
+          <><Brain className="h-3 w-3" />Set up GAAD for this project</>
         )}
       </button>
     </div>
