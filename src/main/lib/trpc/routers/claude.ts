@@ -600,7 +600,7 @@ const getClaudeQuery = async () => {
 // Active sessions for cancellation (with window tracking to prevent cross-window interference)
 const activeSessions = new Map<
   string,
-  { abortController: AbortController; windowId: number | null }
+  { abortController: AbortController; windowId: number | null; startedAt: number }
 >()
 
 // Track session completion promises for graceful shutdown
@@ -1518,27 +1518,41 @@ export const claudeRouter = router({
                 .from(chats)
                 .where(eq(chats.id, subChat.chatId))
                 .get()
-              // Effective cwd: worktreePath for worktree-mode, project.path for local-mode
+              // Effective cwd: worktreePath for worktree-mode only.
+              // Local-mode chats (no worktree) should NOT block each other — users
+              // expect to run multiple tabs simultaneously in the same project.
+              // Only worktree-mode needs conflict prevention (shared git worktree).
               effectiveWorktreeCwd = chat?.worktreePath ?? null
-              if (!effectiveWorktreeCwd && chat?.projectId) {
-                const project = db
-                  .select({ path: projectsTable.path })
-                  .from(projectsTable)
-                  .where(eq(projectsTable.id, chat.projectId))
-                  .get()
-                effectiveWorktreeCwd = project?.path ?? null
-              }
               if (effectiveWorktreeCwd) {
                 // Check if any OTHER active session is using the same directory
                 for (const [otherSubChatId, otherCwd] of activeSessionWorktrees) {
                   if (otherSubChatId !== input.subChatId && otherCwd === effectiveWorktreeCwd) {
-                    // Verify the other session is still actually alive
                     const otherSession = activeSessions.get(otherSubChatId)
-                    if (!otherSession || otherSession.abortController.signal.aborted) {
-                      // Stale entry — clean it up and allow this session to proceed
+
+                    // Determine if the blocking session is actually still alive
+                    const isAborted = !otherSession || otherSession.abortController.signal.aborted
+                    const isZombie = otherSession && (Date.now() - otherSession.startedAt > 5 * 60 * 1000)
+
+                    // DB streamId is authoritative — if null, session is done
+                    let isDbClean = false
+                    try {
+                      const otherSubChat = db
+                        .select({ streamId: subChats.streamId })
+                        .from(subChats)
+                        .where(eq(subChats.id, otherSubChatId))
+                        .get()
+                      isDbClean = !otherSubChat?.streamId
+                    } catch { /* non-fatal */ }
+
+                    // Evict if: controller aborted, DB says done, or zombie timeout
+                    if (isAborted || isDbClean || isZombie) {
+                      if (otherSession && !otherSession.abortController.signal.aborted) {
+                        otherSession.abortController.abort()
+                      }
                       activeSessions.delete(otherSubChatId)
                       activeSessionWorktrees.delete(otherSubChatId)
-                      console.log(`[claude] Cleaned up stale session for ${otherSubChatId.slice(-8)}`)
+                      sessionCompletionPromises.delete(otherSubChatId)
+                      console.log(`[claude] Evicted stale session ${otherSubChatId.slice(-8)} (aborted=${isAborted} dbClean=${isDbClean} zombie=${!!isZombie})`)
                       continue
                     }
                     emit.next({
@@ -1579,7 +1593,7 @@ export const claudeRouter = router({
 
         const abortController = new AbortController()
         const streamId = crypto.randomUUID()
-        activeSessions.set(input.subChatId, { abortController, windowId })
+        activeSessions.set(input.subChatId, { abortController, windowId, startedAt: Date.now() })
         // Register worktree occupancy for conflict detection
         if (effectiveWorktreeCwd) {
           activeSessionWorktrees.set(input.subChatId, effectiveWorktreeCwd)

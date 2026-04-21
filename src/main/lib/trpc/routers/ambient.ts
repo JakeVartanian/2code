@@ -6,7 +6,7 @@
 import { z } from "zod"
 import { router, publicProcedure } from "../index"
 import { getDatabase } from "../../db"
-import { ambientSuggestions, ambientBudget, ambientFeedback, subChats } from "../../db/schema"
+import { ambientSuggestions, ambientBudget, ambientFeedback, subChats, projects } from "../../db/schema"
 import { eq, and, desc, sql } from "drizzle-orm"
 import { observable } from "@trpc/server/observable"
 import { EventEmitter } from "events"
@@ -175,15 +175,33 @@ export const ambientRouter = router({
     }))
     .mutation(async ({ input }) => {
       if (input.enabled) {
-        const agent = await ambientAgentRegistry.getOrCreate(input.projectId, input.projectPath)
-        // Initialize the AI provider so Tier 1/2 analysis can run
-        const { getClaudeCodeTokenFresh } = await import("./claude")
-        await agent.initProvider(
-          () => getClaudeCodeTokenFresh(),
-          null, // TODO: pass OpenRouter key if configured
-        )
+        try {
+          const agent = await ambientAgentRegistry.getOrCreate(input.projectId, input.projectPath)
+          // Initialize the AI provider in background — don't block the UI
+          // The agent is already running (file watcher + git monitor active)
+          // Provider enables Tier 1/2 analysis; Tier 0 works without it
+          import("./claude").then(({ getClaudeCodeTokenFresh }) => {
+            agent.initProvider(
+              () => getClaudeCodeTokenFresh(),
+              null, // TODO: pass OpenRouter key if configured
+            ).catch((err) => {
+              console.warn("[Ambient] Provider init failed (Tier 0 only):", err.message)
+            })
+          }).catch((err) => {
+            console.warn("[Ambient] Failed to import claude module:", err.message)
+          })
+        } catch (err) {
+          console.error("[Ambient] Failed to start agent:", err)
+          // Clean up any partial state
+          await ambientAgentRegistry.stop(input.projectId).catch(() => {})
+          return { enabled: false, error: err instanceof Error ? err.message : "Failed to start ambient agent" }
+        }
       } else {
-        await ambientAgentRegistry.stop(input.projectId)
+        try {
+          await ambientAgentRegistry.stop(input.projectId)
+        } catch (err) {
+          console.error("[Ambient] Failed to stop agent:", err)
+        }
       }
       return { enabled: input.enabled }
     }),
@@ -526,6 +544,60 @@ export const ambientRouter = router({
     .input(z.object({ projectId: z.string() }))
     .query(({ input }) => {
       return getBrainStatus(input.projectId)
+    }),
+
+  // ============ SYSTEM MAP ============
+
+  /**
+   * Get the synthesized system architecture map for a project.
+   * Returns null if no map has been generated yet.
+   */
+  getSystemMap: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(({ input }) => {
+      const db = getDatabase()
+      const project = db
+        .select({ systemMap: projects.systemMap, systemMapBuiltAt: projects.systemMapBuiltAt })
+        .from(projects)
+        .where(eq(projects.id, input.projectId))
+        .get()
+
+      if (!project?.systemMap) return null
+
+      try {
+        return {
+          zones: JSON.parse(project.systemMap),
+          builtAt: project.systemMapBuiltAt,
+        }
+      } catch {
+        return null
+      }
+    }),
+
+  /**
+   * Regenerate the system map without a full brain rebuild.
+   * Uses existing architecture memories.
+   */
+  regenerateSystemMap: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      projectPath: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      const { getClaudeCodeTokenFresh } = await import("./claude")
+      const { synthesizeSystemMap } = await import("../../ambient/system-map-synthesis")
+
+      const provider = await createAmbientProvider(
+        () => getClaudeCodeTokenFresh(),
+        null,
+      )
+
+      if (!provider) {
+        return { success: false, error: "No AI provider available", zones: [] }
+      }
+
+      const zones = await synthesizeSystemMap(input.projectId, input.projectPath, provider)
+      return { success: true, zones }
     }),
 
   // ============ SUBSCRIPTIONS ============

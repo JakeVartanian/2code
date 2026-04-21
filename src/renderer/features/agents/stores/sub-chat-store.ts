@@ -39,6 +39,7 @@ interface AgentSubChatStore {
   addToOpenSubChats: (subChatId: string) => void
   removeFromOpenSubChats: (subChatId: string) => void
   togglePinSubChat: (subChatId: string) => void
+  reorderSubChats: (fromIndex: number, toIndex: number) => void
   setAllSubChats: (subChats: SubChatMeta[]) => void
   addToAllSubChats: (subChat: SubChatMeta) => void
   updateSubChatName: (subChatId: string, name: string) => void
@@ -263,6 +264,18 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
 
     set({ pinnedSubChatIds: newPinnedIds })
     if (chatId) saveToLS(chatId, "pinned", newPinnedIds)
+  },
+
+  reorderSubChats: (fromIndex, toIndex) => {
+    const { openSubChatIds, chatId } = get()
+    if (fromIndex === toIndex) return
+    if (fromIndex < 0 || fromIndex >= openSubChatIds.length) return
+    if (toIndex < 0 || toIndex >= openSubChatIds.length) return
+    const newIds = [...openSubChatIds]
+    const [moved] = newIds.splice(fromIndex, 1)
+    newIds.splice(toIndex, 0, moved)
+    set({ openSubChatIds: newIds })
+    if (chatId) saveToLS(chatId, "open", newIds)
   },
 
   setAllSubChats: (subChats) => {

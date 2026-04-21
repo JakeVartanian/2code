@@ -275,6 +275,17 @@ export async function buildBrain(
     runPass("opportunities", () => buildOpportunitiesContext(signals), PASS_PROMPTS.opportunities),
   ])
 
+  // Phase 5: Synthesize system architecture map from memories
+  try {
+    const { synthesizeSystemMap } = await import("./system-map-synthesis")
+    const zones = await synthesizeSystemMap(projectId, projectPath, provider)
+    if (zones.length > 0) sources.push("system-map")
+    console.log(`[Brain] System map synthesized: ${zones.length} zones`)
+  } catch (err) {
+    console.error("[Brain] System map synthesis FAILED:", err)
+    failedPasses.push("system-map")
+  }
+
   console.log(`[Brain] Complete: ${created} created, ${updated} existing, ${failedPasses.length} passes failed${failedPasses.length > 0 ? ` (${failedPasses.join(", ")})` : ""}`)
 
   return {

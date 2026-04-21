@@ -22,6 +22,9 @@ export const projects = sqliteTable("projects", {
   gitRepo: text("git_repo"),
   // Custom project icon (absolute path to local image file)
   iconPath: text("icon_path"),
+  // System architecture map (JSON-serialized SystemZone[])
+  systemMap: text("system_map"),
+  systemMapBuiltAt: integer("system_map_built_at", { mode: "timestamp" }),
 })
 
 export const projectsRelations = relations(projects, ({ many }) => ({

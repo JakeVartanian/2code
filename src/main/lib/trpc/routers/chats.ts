@@ -73,6 +73,57 @@ function sendWorktreeSetupFailure(
   }
 }
 
+/**
+ * Generate a chat name using a free OpenRouter model.
+ * Fast, zero-cost title generation from the user's first message.
+ */
+async function generateChatNameWithOpenRouter(
+  userMessage: string,
+  apiKey: string,
+): Promise<string | null> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 5000)
+
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "meta-llama/llama-3.1-8b-instruct:free",
+        messages: [
+          {
+            role: "system",
+            content: "Generate a concise 3-6 word title for this coding chat message. Return ONLY the title, no quotes, no punctuation, no explanation.",
+          },
+          {
+            role: "user",
+            content: userMessage.slice(0, 500),
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 20,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!res.ok) return null
+
+    const data = await res.json()
+    const name = data?.choices?.[0]?.message?.content?.trim()
+    if (!name || name.length < 2 || name.length > 60) return null
+
+    // Strip quotes if the model wrapped the title
+    return name.replace(/^["']|["']$/g, "").trim()
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 // Fallback to truncated user message if AI generation fails
 function getFallbackName(userMessage: string): string {
   const trimmed = userMessage.trim()
@@ -1378,18 +1429,27 @@ export const chatsRouter = router({
   generateSubChatName: publicProcedure
     .input(z.object({
       userMessage: z.string(),
-      ollamaModel: z.string().nullish(), // Optional model for offline mode
+      ollamaModel: z.string().nullish(),
+      openRouterApiKey: z.string().nullish(),
     }))
     .mutation(async ({ input }) => {
       try {
-        // Try Ollama first
-        console.log("[generateSubChatName] Trying Ollama...")
+        // Try OpenRouter first (free model, fast)
+        if (input.openRouterApiKey) {
+          const orName = await generateChatNameWithOpenRouter(input.userMessage, input.openRouterApiKey)
+          if (orName) {
+            console.log("[generateSubChatName] Generated name via OpenRouter:", orName)
+            return { name: orName }
+          }
+        }
+
+        // Try Ollama (local/offline)
         const ollamaName = await generateChatNameWithOllama(input.userMessage, input.ollamaModel)
         if (ollamaName) {
           console.log("[generateSubChatName] Generated name via Ollama:", ollamaName)
           return { name: ollamaName }
         }
-        console.log("[generateSubChatName] Ollama failed, using fallback")
+
         return { name: getFallbackName(input.userMessage) }
       } catch (error) {
         console.error("[generateSubChatName] Error:", error)

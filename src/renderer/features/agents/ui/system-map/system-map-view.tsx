@@ -1,7 +1,7 @@
 /**
  * SystemMapView — Main container for the System Map tab.
- * Hero: Codebase Coverage Heatmap grid showing directory-level
- * audit coverage, confidence, severity, and plan/memory overlays.
+ * Hero: System Architecture Map showing major zones with connections
+ * and confidence coloring derived from AI-synthesized architecture data.
  * Below: existing workspace AI state sections (memory, skills, etc.).
  */
 
@@ -20,13 +20,13 @@ import { selectedProjectAtom } from "../../../../lib/atoms"
 import { useSystemMapData } from "./use-system-map-data"
 import { WorkflowStages } from "./workflow-stages"
 import { MapSection } from "./map-section"
-import { MemoryCluster } from "./memory-cluster"
+import { MemoryBrain } from "./memory-brain"
 import { PlanNodes } from "./plan-nodes"
 import { SkillNodes } from "./skill-nodes"
 import { AgentNodes } from "./agent-nodes"
 import { OrchestrationSummary } from "./orchestration-summary"
 import { AmbientAlerts } from "./ambient-alerts"
-import { CoverageHeatmap } from "./coverage-heatmap/coverage-heatmap"
+import { ArchitectureMap } from "./architecture-map"
 
 interface SystemMapViewProps {
   chatId: string
@@ -43,8 +43,8 @@ export const SystemMapView = memo(function SystemMapView({
     <div className="relative h-full overflow-y-auto overflow-x-hidden">
       {/* Content */}
       <div className="relative z-10 p-4 space-y-4">
-        {/* Hero: Codebase Coverage Heatmap */}
-        <CoverageHeatmap
+        {/* Hero: System Architecture Map */}
+        <ArchitectureMap
           projectId={selectedProject?.id ?? null}
           projectPath={selectedProject?.path ?? null}
           chatId={chatId}
@@ -68,7 +68,7 @@ export const SystemMapView = memo(function SystemMapView({
               count={data.memories.length}
               accentColor="blue"
             >
-              <MemoryCluster memories={data.memories} />
+              <MemoryBrain memories={data.memories} />
             </MapSection>
 
             <MapSection

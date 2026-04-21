@@ -273,6 +273,10 @@ export const SubChatSelector = memo(function SubChatSelector({
     return set
   }, [pendingPlanApprovalsData])
 
+  // Drag-to-reorder state
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+
   const tabsContainerRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
   const textRefs = useRef<Map<string, HTMLSpanElement>>(new Map())
@@ -755,6 +759,40 @@ export const SubChatSelector = memo(function SubChatSelector({
                             tabRefs.current.delete(subChat.id)
                           }
                         }}
+                        draggable={mode !== "system-map" && mode !== "orchestrator"}
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData("text/plain", subChat.id)
+                          e.dataTransfer.effectAllowed = "move"
+                          setDraggingId(subChat.id)
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault()
+                          e.dataTransfer.dropEffect = "move"
+                          if (subChat.id !== draggingId) {
+                            setDragOverId(subChat.id)
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverId === subChat.id) setDragOverId(null)
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          const sourceId = e.dataTransfer.getData("text/plain")
+                          if (sourceId && sourceId !== subChat.id) {
+                            const store = useAgentSubChatStore.getState()
+                            const fromIdx = store.openSubChatIds.indexOf(sourceId)
+                            const toIdx = store.openSubChatIds.indexOf(subChat.id)
+                            if (fromIdx >= 0 && toIdx >= 0) {
+                              store.reorderSubChats(fromIdx, toIdx)
+                            }
+                          }
+                          setDragOverId(null)
+                          setDraggingId(null)
+                        }}
+                        onDragEnd={() => {
+                          setDragOverId(null)
+                          setDraggingId(null)
+                        }}
                         onClick={(e) => {
                           e.stopPropagation()
                           e.preventDefault()
@@ -799,6 +837,8 @@ export const SubChatSelector = memo(function SubChatSelector({
                           isInSplitPair && !isActive && "bg-muted/40 hover:bg-muted/60",
                           isInSplitPair && hasSplitPrev && "-ml-1 rounded-l-none",
                           isInSplitPair && hasSplitNext && "rounded-r-none",
+                          draggingId === subChat.id && "opacity-40",
+                          dragOverId === subChat.id && draggingId !== subChat.id && "ring-1 ring-teal-500/60",
                         )}
                       >
                         {/* Icon: question icon (priority) OR loading spinner OR mode icon with badge (hide when editing) */}
