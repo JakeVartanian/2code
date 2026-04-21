@@ -42,12 +42,9 @@ const ERROR_TOAST_CONFIG: Record<
   }
 > = {
   AUTH_FAILED_SDK: {
-    title: "Not logged in",
-    description: "Run 'claude login' in your terminal to authenticate",
-    action: {
-      label: "Copy command",
-      onClick: () => navigator.clipboard.writeText("claude login"),
-    },
+    title: "Not connected",
+    description:
+      "Not connected — Go to Settings → Claude Code to connect your account.",
   },
   INVALID_API_KEY_SDK: {
     title: "Invalid API key",
@@ -104,18 +101,12 @@ const ERROR_TOAST_CONFIG: Record<
   EXECUTABLE_NOT_FOUND: {
     title: "Claude CLI not found",
     description:
-      "Install Claude Code CLI: npm install -g @anthropic-ai/claude-code",
-    action: {
-      label: "Copy command",
-      onClick: () =>
-        navigator.clipboard.writeText(
-          "npm install -g @anthropic-ai/claude-code",
-        ),
-    },
+      "Claude CLI binary not found. Please reinstall 2Code or contact support.",
   },
   NETWORK_ERROR: {
-    title: "Network error",
-    description: "Check your internet connection and try again.",
+    title: "Connection lost",
+    description:
+      "Connection lost during response. Your message was received — send a follow-up to continue.",
   },
   AUTH_FAILURE: {
     title: "Authentication failed",
@@ -146,7 +137,7 @@ type IPCChatTransportConfig = {
   subChatId: string
   cwd: string
   projectPath?: string // Original project path for MCP config lookup (when using worktrees)
-  mode: "plan" | "agent" | "orchestrator"
+  mode: "plan" | "agent" | "orchestrator" | "system-map"
   model?: string
 }
 
@@ -280,7 +271,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
         ?.mode || this.config.mode
     // Orchestrator tabs never send messages through the chat transport,
     // but guard against invalid mode values reaching the Claude router
-    const currentMode = rawMode === "orchestrator" ? "agent" : rawMode
+    const currentMode = (rawMode === "orchestrator" || rawMode === "system-map") ? "agent" : rawMode
 
     // Stream debug logging
     const subId = this.config.subChatId.slice(-8)

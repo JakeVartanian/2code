@@ -3493,7 +3493,7 @@ export function AgentsSidebar({
       </div>
 
       {/* Ambient Agent Section */}
-      <AmbientSidebarSection projectId={selectedProject?.id ?? null} />
+      <AmbientSidebarSection projectId={selectedProject?.id ?? null} chatId={selectedChatId ?? null} />
 
       {/* Footer - Multi-select toolbar or normal footer */}
       <AnimatePresence mode="wait">

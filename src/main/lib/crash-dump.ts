@@ -11,8 +11,8 @@ import { join, dirname } from "path"
 import { app } from "electron"
 import log from "electron-log"
 
-// Keep only the last 5 crash dumps to avoid bloat
-const MAX_CRASH_DUMPS = 5
+// Keep only the last 10 crash dumps to avoid bloat
+const MAX_CRASH_DUMPS = 10
 
 /**
  * Get the directory for crash dumps
@@ -60,7 +60,10 @@ function cleanupOldCrashDumps(): void {
 }
 
 /**
- * Write a crash entry to the dump file synchronously
+ * Write a crash entry to the dump file synchronously.
+ * IMPORTANT: This must NEVER use console.log/console.error — if stdout/stderr
+ * is broken (EPIPE), writing to it triggers another uncaughtException, creating
+ * an infinite crash loop that fills the disk with dump files.
  */
 function writeCrashDump(type: "exception" | "rejection", error: any, context?: string): void {
   try {
@@ -89,10 +92,8 @@ function writeCrashDump(type: "exception" | "rejection", error: any, context?: s
     } else {
       writeFileSync(dumpPath, entry + "\n", "utf-8")
     }
-
-    console.log(`[CrashDump] Crash logged to ${dumpPath}`)
-  } catch (error) {
-    console.error("[CrashDump] Failed to write crash dump:", error)
+  } catch {
+    // Silently fail — cannot use console here (may cause EPIPE loop)
   }
 }
 
@@ -101,26 +102,71 @@ function writeCrashDump(type: "exception" | "rejection", error: any, context?: s
  * Must be called early in app startup, before any user code runs
  */
 export function initCrashDump(): void {
+  // Guard against re-entrant crash loops (e.g. EPIPE on console.error triggers
+  // another uncaughtException while we're already handling one)
+  let isHandlingCrash = false
+
   // Handle uncaught exceptions
   process.on("uncaughtException", (error) => {
-    console.error("[CrashDump] Uncaught exception:", error)
+    // EPIPE means stdout/stderr pipe is broken (e.g. parent process died).
+    // Trying to console.log/error would throw another EPIPE → infinite loop.
+    // Just write to file and suppress.
+    if (error && (error as NodeJS.ErrnoException).code === "EPIPE") {
+      if (!isHandlingCrash) {
+        isHandlingCrash = true
+        writeCrashDump("exception", error, "process.uncaughtException (EPIPE)")
+        isHandlingCrash = false
+      }
+      return
+    }
+
+    if (isHandlingCrash) return
+    isHandlingCrash = true
+
+    try {
+      console.error("[CrashDump] Uncaught exception:", error)
+    } catch {
+      // stdout/stderr may be broken — ignore
+    }
     writeCrashDump("exception", error, "process.uncaughtException")
 
     // Also sync electron-log to disk
     try {
       log.transports.file.getFile()?.sync?.()
     } catch {}
+
+    isHandlingCrash = false
   })
 
   // Handle unhandled promise rejections
   process.on("unhandledRejection", (reason, promise) => {
-    console.error("[CrashDump] Unhandled rejection:", reason)
+    // Suppress EMFILE watcher errors — they're non-fatal and will self-heal
+    // when file descriptors free up
+    if (reason && (reason as NodeJS.ErrnoException).code === "EMFILE") {
+      if (!isHandlingCrash) {
+        isHandlingCrash = true
+        writeCrashDump("rejection", reason, "promise (EMFILE)")
+        isHandlingCrash = false
+      }
+      return
+    }
+
+    if (isHandlingCrash) return
+    isHandlingCrash = true
+
+    try {
+      console.error("[CrashDump] Unhandled rejection:", reason)
+    } catch {
+      // stdout/stderr may be broken — ignore
+    }
     writeCrashDump("rejection", reason, `promise: ${promise}`)
 
     // Also sync electron-log to disk
     try {
       log.transports.file.getFile()?.sync?.()
     } catch {}
+
+    isHandlingCrash = false
   })
 
   // Cleanup old crash dumps on startup

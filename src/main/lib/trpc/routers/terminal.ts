@@ -1,17 +1,64 @@
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { isAbsolute, resolve } from "node:path"
 import { z } from "zod"
+import { app } from "electron"
 import { router, publicProcedure } from "../index"
 import { observable } from "@trpc/server/observable"
 import { terminalManager } from "../../terminal/manager"
 import type { TerminalEvent } from "../../terminal/types"
 import { TRPCError } from "@trpc/server"
+import { getDatabase, projects } from "../../db"
 
 function validateTerminalPath(p: string): void {
   if (p.includes("\0")) throw new TRPCError({ code: "BAD_REQUEST", message: "Path contains invalid characters" })
   if (!isAbsolute(p)) throw new TRPCError({ code: "BAD_REQUEST", message: "Path must be absolute" })
   resolve(p) // normalizes — throws on malformed paths
+}
+
+/**
+ * Validates that the given path is within an allowed directory:
+ * - A registered project path
+ * - A worktree path (under ~/.2code/worktrees/)
+ * - The user's home directory
+ * - The app's userData directory
+ */
+function validateTerminalPathScope(p: string): void {
+  const normalized = resolve(p)
+  const homeDir = os.homedir()
+  const userDataDir = app.getPath("userData")
+  const worktreesDir = path.join(homeDir, ".2code", "worktrees")
+
+  // Allow paths under the user's home directory
+  if (normalized.startsWith(homeDir + path.sep) || normalized === homeDir) {
+    return
+  }
+
+  // Allow paths under the app's userData directory
+  if (normalized.startsWith(userDataDir + path.sep) || normalized === userDataDir) {
+    return
+  }
+
+  // Allow paths under the worktrees directory
+  if (normalized.startsWith(worktreesDir + path.sep) || normalized === worktreesDir) {
+    return
+  }
+
+  // Check registered project paths from the database
+  const db = getDatabase()
+  const allProjects = db.select({ path: projects.path }).from(projects).all()
+  for (const project of allProjects) {
+    const projectPath = resolve(project.path)
+    if (normalized === projectPath || normalized.startsWith(projectPath + path.sep)) {
+      return
+    }
+  }
+
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: "Terminal path must be within a project directory",
+  })
 }
 
 export const terminalRouter = router({
@@ -33,7 +80,10 @@ export const terminalRouter = router({
 			}),
 		)
 		.mutation(async ({ input }) => {
-			if (input.cwd) validateTerminalPath(input.cwd)
+			if (input.cwd) {
+				validateTerminalPath(input.cwd)
+				validateTerminalPathScope(input.cwd)
+			}
 			try {
 				const result = await terminalManager.createOrAttach(input)
 				return {

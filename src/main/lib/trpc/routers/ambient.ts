@@ -245,6 +245,7 @@ export const ambientRouter = router({
     .input(z.object({
       suggestionId: z.string(),
       chatId: z.string(),
+      mode: z.enum(["plan", "agent"]).optional().default("agent"),
     }))
     .mutation(({ input }) => {
       const db = getDatabase()
@@ -271,7 +272,7 @@ export const ambientRouter = router({
           id: subChatId,
           name: suggestion.title,
           chatId: input.chatId,
-          mode: "agent",
+          mode: input.mode,
           messages: initialMessages,
         })
         .run()
@@ -458,8 +459,8 @@ export const ambientRouter = router({
       projectPath: z.string(),
     }))
     .mutation(async ({ input }) => {
-      // Get or create provider
-      const { getClaudeCodeTokenFresh } = require("./claude")
+      // Lazy import to avoid circular dependency at module init time
+      const { getClaudeCodeTokenFresh } = await import("./claude")
       const provider = await createAmbientProvider(
         () => getClaudeCodeTokenFresh(),
         null, // TODO: pass OpenRouter key if configured
@@ -489,7 +490,7 @@ export const ambientRouter = router({
       projectPath: z.string(),
     }))
     .mutation(async ({ input }) => {
-      const { getClaudeCodeTokenFresh } = require("./claude")
+      const { getClaudeCodeTokenFresh } = await import("./claude")
       const provider = await createAmbientProvider(
         () => getClaudeCodeTokenFresh(),
         null,

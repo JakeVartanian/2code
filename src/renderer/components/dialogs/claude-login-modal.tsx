@@ -171,6 +171,21 @@ export function ClaudeLoginModal({
     return () => clearTimeout(timer)
   }, [urlOpened])
 
+  // Timeout: if OAuth polling hasn't completed after 2 minutes, show a timeout error
+  useEffect(() => {
+    if (!isPolling && flowState.step !== "has_url") return
+    const timer = setTimeout(() => {
+      if (flowState.step === "waiting_url" || flowState.step === "has_url") {
+        setFlowState({
+          step: "error",
+          message:
+            "Connection timed out. Please check your internet connection and try again.",
+        })
+      }
+    }, 120_000)
+    return () => clearTimeout(timer)
+  }, [isPolling, flowState.step])
+
   // Reset state when modal closes
   useEffect(() => {
     if (!open) {

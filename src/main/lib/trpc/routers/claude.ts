@@ -615,6 +615,10 @@ export function registerSessionCompletion(subChatId: string, promise: Promise<vo
 /** Maximum number of concurrent Claude agent sessions */
 const MAX_CONCURRENT_AGENTS = 5
 
+// Track which effective working directory (worktree path or project path) each active session uses.
+// Used to enforce one-streaming-session-per-worktree to prevent silent file conflicts.
+const activeSessionWorktrees = new Map<string, string>() // subChatId → effective cwd
+
 /** Maximum messages to keep per sub-chat (prevents memory bloat with long conversations) */
 const MAX_MESSAGES_PER_CHAT = 500
 
@@ -709,16 +713,30 @@ export async function abortAllClaudeSessions(windowId?: number): Promise<void> {
     }
 
     activeSessions.delete(subChatId)
+    activeSessionWorktrees.delete(subChatId)
   }
 
   // Wait for all session async functions to finish their catch/finally blocks
   // This ensures flushPendingWrite() calls from abort handlers complete
+  // Timeout after 10 seconds to prevent app from hanging on quit
   if (pendingCompletions.length > 0) {
     console.log(
       `[claude] Waiting for ${pendingCompletions.length} session(s) to finish cleanup...`,
     )
     const cleanupStart = Date.now()
-    const results = await Promise.allSettled(pendingCompletions)
+    const timeoutPromise = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 10_000))
+    const raceResult = await Promise.race([
+      Promise.allSettled(pendingCompletions),
+      timeoutPromise,
+    ])
+
+    if (raceResult === "timeout") {
+      console.warn(`[claude] Session cleanup timed out after 10s — proceeding with shutdown`)
+    }
+
+    const results = raceResult === "timeout"
+      ? pendingCompletions.map(() => ({ status: "rejected" as const, reason: "timeout" }))
+      : raceResult
 
     const cleanupDuration = Date.now() - cleanupStart
     const failedCount = results.filter((r) => r.status === "rejected").length
@@ -751,6 +769,7 @@ export function abortClaudeSession(subChatId: string): boolean {
   console.log(`[claude] Aborting session ${subChatId}`)
   session.abortController.abort()
   activeSessions.delete(subChatId)
+  activeSessionWorktrees.delete(subChatId)
   return true
 }
 
@@ -1476,6 +1495,59 @@ export const claudeRouter = router({
           return
         }
 
+        // Enforce one-active-session-per-worktree to prevent silent file conflicts.
+        // Two tabs in the same workspace share one git worktree; concurrent edits
+        // cause last-write-wins data loss. Look up the effective working directory
+        // for this sub-chat and reject if another session is already streaming there.
+        let effectiveWorktreeCwd: string | null = null
+        if (!activeSessions.has(input.subChatId)) {
+          try {
+            const db = getDatabase()
+            const subChat = db
+              .select({ chatId: subChats.chatId })
+              .from(subChats)
+              .where(eq(subChats.id, input.subChatId))
+              .get()
+            if (subChat?.chatId) {
+              const chat = db
+                .select({
+                  worktreePath: chats.worktreePath,
+                  projectId: chats.projectId,
+                })
+                .from(chats)
+                .where(eq(chats.id, subChat.chatId))
+                .get()
+              // Effective cwd: worktreePath for worktree-mode, project.path for local-mode
+              effectiveWorktreeCwd = chat?.worktreePath ?? null
+              if (!effectiveWorktreeCwd && chat?.projectId) {
+                const project = db
+                  .select({ path: projectsTable.path })
+                  .from(projectsTable)
+                  .where(eq(projectsTable.id, chat.projectId))
+                  .get()
+                effectiveWorktreeCwd = project?.path ?? null
+              }
+              if (effectiveWorktreeCwd) {
+                // Check if any OTHER active session is using the same directory
+                for (const [otherSubChatId, otherCwd] of activeSessionWorktrees) {
+                  if (otherSubChatId !== input.subChatId && otherCwd === effectiveWorktreeCwd) {
+                    emit.next({
+                      type: "error",
+                      error:
+                        "Another tab is already running in this workspace. Wait for it to finish or cancel it first.",
+                    } as UIMessageChunk)
+                    emit.complete()
+                    return
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            // Non-fatal: if the lookup fails, skip the check and let the session proceed
+            console.warn("[claude] Failed to check worktree conflict:", err)
+          }
+        }
+
         // Abort any existing session for this subChatId before starting a new one
         // This prevents race conditions if two messages are sent in quick succession
         const existingSession = activeSessions.get(input.subChatId)
@@ -1497,6 +1569,10 @@ export const claudeRouter = router({
         const abortController = new AbortController()
         const streamId = crypto.randomUUID()
         activeSessions.set(input.subChatId, { abortController, windowId })
+        // Register worktree occupancy for conflict detection
+        if (effectiveWorktreeCwd) {
+          activeSessionWorktrees.set(input.subChatId, effectiveWorktreeCwd)
+        }
 
         // Stream debug logging
         const subId = input.subChatId.slice(-8) // Short ID for logs
@@ -3443,7 +3519,7 @@ ${prompt}
                   errorContext = "Claude Code process crashed"
                   errorCategory = "PROCESS_CRASH"
                 } else if (err.message?.includes("ENOENT")) {
-                  errorContext = "Required executable not found in PATH"
+                  errorContext = "Claude CLI binary not found — reinstall 2Code or contact support"
                   errorCategory = "EXECUTABLE_NOT_FOUND"
                 } else if (
                   err.message?.includes("authentication") ||
@@ -3715,6 +3791,9 @@ ${prompt}
             safeComplete()
           } finally {
             activeSessions.delete(input.subChatId)
+            activeSessionWorktrees.delete(input.subChatId)
+            // Always clean up injected memories tracking (may not have been cleaned in success path)
+            sessionInjectedMemories.delete(input.subChatId)
           }
         })()
 
@@ -3730,6 +3809,7 @@ ${prompt}
           isObservableActive = false // Prevent emit after unsubscribe
           abortController.abort()
           activeSessions.delete(input.subChatId)
+          activeSessionWorktrees.delete(input.subChatId)
           clearPendingApprovals("Session ended.", input.subChatId)
 
           // Clear streamId since we're no longer streaming.
@@ -3848,6 +3928,7 @@ ${prompt}
       if (session) {
         session.abortController.abort()
         activeSessions.delete(input.subChatId)
+        activeSessionWorktrees.delete(input.subChatId)
         clearPendingApprovals("Session cancelled.", input.subChatId)
       }
 

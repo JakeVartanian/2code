@@ -234,6 +234,13 @@ import { DiffStateContext, useDiffState, DiffSidebarContent, DiffStateProvider, 
 import { utf8ToBase64, base64ToUtf8 } from "../utils/base64"
 // Lazy-loaded: Orchestrator view only loads when orchestrator tab is active
 const OrchestratorView = lazy(() => import("../ui/orchestrator/orchestrator-view").then(m => ({ default: m.OrchestratorView })))
+// Lazy-loaded: System Map view only loads when system-map tab is active
+const SystemMapView = lazy(() => import("../ui/system-map/system-map-view").then(m => ({ default: m.SystemMapView })))
+
+// Guard against double orchestrator tab creation (React strict mode / effect re-runs)
+const orchestratorCreatingSet = new Set<string>()
+// Guard against double system-map tab creation (React strict mode / effect re-runs)
+const systemMapCreatingSet = new Set<string>()
 
 // Inner chat component - only rendered when chat object is ready
 // Memoized to prevent re-renders when parent state changes (e.g., selectedFilePath)
@@ -1306,11 +1313,15 @@ const ChatViewInner = memo(function ChatViewInner({
         await sendUserMessage(formatAnswersAsText(answers))
       } else {
         // Question is still live - use tool approval path
-        await trpcClient.claude.respondToolApproval.mutate({
-          toolUseId: displayQuestions.toolUseId,
-          approved: true,
-          updatedInput: { questions: displayQuestions.questions, answers },
-        })
+        try {
+          await trpcClient.claude.respondToolApproval.mutate({
+            toolUseId: displayQuestions.toolUseId,
+            approved: true,
+            updatedInput: { questions: displayQuestions.questions, answers },
+          })
+        } catch {
+          // Stream may have been aborted — ignore
+        }
         clearPendingQuestionCallback()
       }
     },
@@ -1582,6 +1593,7 @@ const ChatViewInner = memo(function ChatViewInner({
             // Invalidate the agentChat query to refetch with new PR info
             utils.chats.get.invalidate({ id: parentChatId })
           })
+          .catch(() => {}) // Non-critical — chat may have been deleted
 
         break // Only process first PR URL found
       }
@@ -4699,13 +4711,16 @@ Make sure to preserve all functionality from both branches when resolving confli
     }
 
     // Auto-create orchestrator tab if none exists for this workspace
+    // Guard against double-creation from React strict mode / effect re-runs
     const hasOrchestrator = allSubChats.some(sc => sc.mode === "orchestrator")
-    if (!hasOrchestrator && chatId) {
+    if (!hasOrchestrator && chatId && !orchestratorCreatingSet.has(chatId)) {
+      orchestratorCreatingSet.add(chatId)
       trpcClient.chats.createSubChat.mutate({
         chatId,
         name: "Orchestrator",
         mode: "orchestrator",
       }).then((newSc) => {
+        orchestratorCreatingSet.delete(chatId!)
         const store = useAgentSubChatStore.getState()
         const orchMeta: SubChatMeta = {
           id: newSc.id,
@@ -4722,6 +4737,37 @@ Make sure to preserve all functionality from both branches when resolving confli
         appStore.set(subChatModeAtomFamily(newSc.id), "orchestrator" as AgentMode)
       }).catch(() => {
         // Silently fail — orchestrator tab creation is non-critical
+        orchestratorCreatingSet.delete(chatId!)
+      })
+    }
+
+    // Auto-create system-map tab if none exists for this workspace
+    // Guard against double-creation from React strict mode / effect re-runs
+    const hasSystemMap = allSubChats.some(sc => sc.mode === "system-map")
+    if (!hasSystemMap && chatId && !systemMapCreatingSet.has(chatId)) {
+      systemMapCreatingSet.add(chatId)
+      trpcClient.chats.createSubChat.mutate({
+        chatId,
+        name: "System Map",
+        mode: "system-map",
+      }).then((newSc) => {
+        const store = useAgentSubChatStore.getState()
+        const smMeta: SubChatMeta = {
+          id: newSc.id,
+          name: "System Map",
+          mode: "system-map",
+          created_at: new Date().toISOString(),
+        }
+        store.addToAllSubChats(smMeta)
+        // Add to open tabs at position 0 (before orchestrator) so it's always visible
+        const currentOpen = store.openSubChatIds
+        if (!currentOpen.includes(newSc.id)) {
+          store.setOpenSubChats([newSc.id, ...currentOpen])
+        }
+        appStore.set(subChatModeAtomFamily(newSc.id), "system-map" as AgentMode)
+      }).catch(() => {
+        // Silently fail — system-map tab creation is non-critical
+        systemMapCreatingSet.delete(chatId!)
       })
     }
   }, [agentChat, chatId])
@@ -5983,6 +6029,7 @@ Make sure to preserve all functionality from both branches when resolving confli
 
                 // ACTIVE TAB: Full rendering with ChatViewInner or OrchestratorView
                 const subChatMeta = allSubChats.find(sc => sc.id === subChatId) ?? agentSubChats.find(sc => sc.id === subChatId)
+                const isSystemMapMode = subChatMeta?.mode === "system-map"
                 const isOrchestratorMode = subChatMeta?.mode === "orchestrator"
 
                 return (
@@ -5997,7 +6044,14 @@ Make sure to preserve all functionality from both branches when resolving confli
                       contain: "layout style paint",
                     }}
                   >
-                    {isOrchestratorMode ? (
+                    {isSystemMapMode ? (
+                      <Suspense fallback={<div className="flex items-center justify-center h-full"><IconSpinner className="h-6 w-6 animate-spin" /></div>}>
+                        <SystemMapView
+                          chatId={chatId}
+                          subChatId={subChatId}
+                        />
+                      </Suspense>
+                    ) : isOrchestratorMode ? (
                       <Suspense fallback={<div className="flex items-center justify-center h-full"><IconSpinner className="h-6 w-6 animate-spin" /></div>}>
                         <OrchestratorView
                           chatId={chatId}

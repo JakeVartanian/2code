@@ -12,6 +12,8 @@ let db: ReturnType<typeof drizzle<typeof schema>> | null = null
 let sqlite: Database.Database | null = null
 // Prevents infinite retry loops — once init fails, stop trying
 let dbInitFailed: Error | null = null
+// Track if closeDatabase() was called (vs never opened)
+let dbExplicitlyClosed = false
 
 /**
  * Get the database path in the app's user data directory
@@ -190,8 +192,17 @@ export function closeDatabase(): void {
     sqlite.close()
     sqlite = null
     db = null
+    dbExplicitlyClosed = true
     console.log("[DB] Database connection closed")
   }
+}
+
+/**
+ * Check if the database connection has been explicitly closed.
+ * Used by shutdown handlers to avoid writing after close.
+ */
+export function isDatabaseClosed(): boolean {
+  return dbExplicitlyClosed
 }
 
 /**

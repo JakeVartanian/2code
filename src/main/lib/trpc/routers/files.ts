@@ -5,6 +5,8 @@ import { join, relative, basename, extname, dirname, resolve, isAbsolute } from 
 import { app, shell } from "electron"
 import { watch } from "node:fs"
 import { observable } from "@trpc/server/observable"
+import { homedir } from "node:os"
+import { getDatabase, projects, chats } from "../../db"
 
 // Directories to ignore when scanning
 const IGNORED_DIRS = new Set([
@@ -100,6 +102,55 @@ function validateFileName(name: string): void {
   if (name === "." || name === "..") {
     throw new Error("Invalid file name")
   }
+}
+
+/**
+ * Check if a file path is within an allowed scope.
+ * Allowed scopes:
+ * - Any registered project path (from the projects table)
+ * - Any active worktree path (from the chats table)
+ * - The app's userData directory (internal session files, etc.)
+ * - The ~/.2code/ directory (worktrees, config)
+ */
+function validatePathWithinAllowedScope(filePath: string): void {
+  const resolved = resolve(filePath)
+  const userDataDir = app.getPath("userData")
+  const dotTwoCodeDir = join(homedir(), ".2code")
+
+  // Allow paths within the app's userData directory
+  if (resolved.startsWith(userDataDir + "/") || resolved === userDataDir) {
+    return
+  }
+
+  // Allow paths within ~/.2code/
+  if (resolved.startsWith(dotTwoCodeDir + "/") || resolved === dotTwoCodeDir) {
+    return
+  }
+
+  // Allow paths within any registered project path
+  try {
+    const db = getDatabase()
+    const allProjects = db.select({ path: projects.path }).from(projects).all()
+    for (const project of allProjects) {
+      if (project.path && (resolved.startsWith(project.path + "/") || resolved === project.path)) {
+        return
+      }
+    }
+
+    // Allow paths within any active worktree path
+    const allChats = db.select({ worktreePath: chats.worktreePath }).from(chats).all()
+    for (const chat of allChats) {
+      if (chat.worktreePath && (resolved.startsWith(chat.worktreePath + "/") || resolved === chat.worktreePath)) {
+        return
+      }
+    }
+  } catch (error) {
+    // If the database isn't initialized yet, deny by default
+    console.error("[files] Failed to check allowed paths from database:", error)
+    throw new Error("Access denied: unable to verify path scope")
+  }
+
+  throw new Error("Access denied: path is outside allowed project scope")
 }
 
 /**
@@ -317,6 +368,7 @@ export const filesRouter = router({
     .query(async ({ input }) => {
       const { filePath } = input
       validatePathSafe(filePath)
+      validatePathWithinAllowedScope(filePath)
 
       try {
         const content = await readFile(filePath, "utf-8")
@@ -336,6 +388,7 @@ export const filesRouter = router({
     .query(async ({ input }) => {
       const { filePath } = input
       validatePathSafe(filePath)
+      validatePathWithinAllowedScope(filePath)
       const MAX_SIZE = 2 * 1024 * 1024 // 2 MB
 
       try {
@@ -372,6 +425,7 @@ export const filesRouter = router({
     .query(async ({ input }) => {
       const { filePath } = input
       validatePathSafe(filePath)
+      validatePathWithinAllowedScope(filePath)
       const MAX_SIZE = 20 * 1024 * 1024 // 20 MB
 
       try {
@@ -487,6 +541,7 @@ export const filesRouter = router({
       const { absolutePath, newName } = input
 
       validatePathSafe(absolutePath)
+      validatePathWithinAllowedScope(absolutePath)
       validateFileName(newName)
 
       const dir = dirname(absolutePath)
@@ -508,6 +563,7 @@ export const filesRouter = router({
     }))
     .mutation(async ({ input }) => {
       validatePathSafe(input.absolutePath)
+      validatePathWithinAllowedScope(input.absolutePath)
       await shell.trashItem(input.absolutePath)
       return { success: true }
     }),

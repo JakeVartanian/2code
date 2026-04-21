@@ -12,7 +12,7 @@ import {
 } from "../../details-sidebar/atoms"
 import { chatSourceModeAtom } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
-import { Plus, AlignJustify, Play, TerminalSquare, Globe, X, Brain } from "lucide-react"
+import { Plus, AlignJustify, Play, TerminalSquare, Globe, X, Brain, Network } from "lucide-react"
 import {
   IconSpinner,
   PlanIcon,
@@ -104,6 +104,8 @@ const SearchHistoryPopover = memo(forwardRef<SearchHistoryPopoverRef, SearchHist
             <QuestionIcon className="w-4 h-4 text-blue-500" />
           ) : isLoading ? (
             <IconSpinner className="w-4 h-4 text-muted-foreground" />
+          ) : mode === "system-map" ? (
+            <Network className="w-4 h-4 text-cyan-400" />
           ) : mode === "orchestrator" ? (
             <Brain className="w-4 h-4 text-purple-400" />
           ) : mode === "plan" ? (
@@ -290,16 +292,19 @@ export const SubChatSelector = memo(function SubChatSelector({
 
   // Map open IDs to metadata and sort: orchestrator first, then pinned, then preserve user's tab order
   const openSubChats = useMemo(() => {
+    const systemMapChats: SubChatMeta[] = []
     const orchestratorChats: SubChatMeta[] = []
     const pinnedChats: SubChatMeta[] = []
     const unpinnedChats: SubChatMeta[] = []
 
-    // Separate orchestrator, pinned, and unpinned while preserving order
+    // Separate system-map, orchestrator, pinned, and unpinned while preserving order
     openSubChatIds.forEach((id) => {
       const chat = allSubChatsById.get(id)
       if (!chat) return
 
-      if (chat.mode === "orchestrator") {
+      if (chat.mode === "system-map") {
+        systemMapChats.push(chat)
+      } else if (chat.mode === "orchestrator") {
         orchestratorChats.push(chat)
       } else if (pinnedSubChatIds.includes(id)) {
         pinnedChats.push(chat)
@@ -315,8 +320,8 @@ export const SubChatSelector = memo(function SubChatSelector({
       return bT - aT
     })
 
-    // Orchestrator always first, then pinned, then unpinned
-    const result = [...orchestratorChats, ...pinnedChats, ...unpinnedChats]
+    // System-map first, then orchestrator, then pinned, then unpinned
+    const result = [...systemMapChats, ...orchestratorChats, ...pinnedChats, ...unpinnedChats]
 
     // Keep split tabs adjacent when split is active.
     if (splitPaneIds.length >= 2) {
@@ -369,19 +374,21 @@ export const SubChatSelector = memo(function SubChatSelector({
   }, [])
 
   const onCloseTab = useCallback((subChatId: string) => {
-    // Prevent closing orchestrator tab
+    // Prevent closing orchestrator and system-map tabs
     const meta = useAgentSubChatStore.getState().allSubChats.find(sc => sc.id === subChatId)
-    if (meta?.mode === "orchestrator") return
+    const isSpecialTab = meta?.mode === "orchestrator" || meta?.mode === "system-map"
+    if (isSpecialTab) return
     useAgentSubChatStore.getState().removeFromOpenSubChats(subChatId)
   }, [])
 
   const onCloseOtherTabs = useCallback((subChatId: string) => {
     const state = useAgentSubChatStore.getState()
-    // Don't close orchestrator tabs
+    // Don't close orchestrator or system-map tabs
     const idsToClose = state.openSubChatIds.filter((id) => {
       if (id === subChatId) return false
       const meta = state.allSubChats.find(sc => sc.id === id)
-      return meta?.mode !== "orchestrator"
+      const isSpecialTab = meta?.mode === "orchestrator" || meta?.mode === "system-map"
+      return !isSpecialTab
     })
     idsToClose.forEach((id) => state.removeFromOpenSubChats(id))
     state.setActiveSubChat(subChatId)
@@ -392,9 +399,9 @@ export const SubChatSelector = memo(function SubChatSelector({
       const state = useAgentSubChatStore.getState()
 
       // Use visual order from sorted openSubChats, not storage order
-      // Don't close orchestrator tabs
+      // Don't close orchestrator or system-map tabs
       const idsToClose = openSubChats.slice(visualIndex + 1)
-        .filter((sc) => sc.mode !== "orchestrator")
+        .filter((sc) => sc.mode !== "orchestrator" && sc.mode !== "system-map")
         .map((sc) => sc.id)
       idsToClose.forEach((id) => state.removeFromOpenSubChats(id))
     },
@@ -780,12 +787,14 @@ export const SubChatSelector = memo(function SubChatSelector({
                         className={cn(
                           "group relative flex items-center text-sm rounded-md transition-colors duration-75 cursor-pointer h-6 flex-shrink-0",
                           "outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
-                          editingSubChatId === subChat.id
-                            ? "overflow-visible px-0"
-                            : "overflow-hidden px-1.5 py-0.5 whitespace-nowrap min-w-[50px] gap-1.5",
+                          (mode === "orchestrator" || mode === "system-map")
+                            ? "px-1.5 py-0.5 w-6"
+                            : editingSubChatId === subChat.id
+                              ? "overflow-visible px-0"
+                              : "overflow-hidden px-1.5 py-0.5 whitespace-nowrap min-w-[50px] gap-1.5",
                           isActive
-                            ? "bg-muted text-foreground max-w-[180px]"
-                            : "hover:bg-muted/80 max-w-[150px]",
+                            ? cn("bg-muted text-foreground", mode !== "orchestrator" && mode !== "system-map" && "max-w-[180px]")
+                            : cn("hover:bg-muted/80", mode !== "orchestrator" && mode !== "system-map" && "max-w-[150px]"),
                           isInSplitPair && "border border-border/60",
                           isInSplitPair && !isActive && "bg-muted/40 hover:bg-muted/60",
                           isInSplitPair && hasSplitPrev && "-ml-1 rounded-l-none",
@@ -804,7 +813,9 @@ export const SubChatSelector = memo(function SubChatSelector({
                             ) : (
                               <>
                                 {/* Main mode icon */}
-                                {mode === "orchestrator" ? (
+                                {mode === "system-map" ? (
+                                  <Network className="w-3.5 h-3.5 text-cyan-400" />
+                                ) : mode === "orchestrator" ? (
                                   <Brain className="w-3.5 h-3.5 text-purple-400" />
                                 ) : mode === "plan" ? (
                                   <PlanIcon className="w-3.5 h-3.5 text-muted-foreground" />
@@ -833,33 +844,35 @@ export const SubChatSelector = memo(function SubChatSelector({
                           </div>
                         )}
 
-                        {editingSubChatId === subChat.id ? (
-                          <InlineEdit
-                            value={editName}
-                            onChange={setEditName}
-                            onSave={() => handleEditSave(subChat)}
-                            onCancel={() => handleEditCancel(subChat)}
-                            isEditing={true}
-                            disabled={editLoading}
-                            className="text-sm !px-1 !py-0 !h-6 min-w-[100px] border border-input rounded-md !ring-0 !shadow-none focus-visible:!ring-0 focus-visible:!ring-offset-0 focus-visible:!border-input"
-                          />
-                        ) : (
-                          <span
-                            ref={(el) => {
-                              if (el) {
-                                textRefs.current.set(subChat.id, el)
-                              } else {
-                                textRefs.current.delete(subChat.id)
-                              }
-                            }}
-                            className="relative z-0 text-left flex-1 min-w-0 pr-1 overflow-hidden block whitespace-nowrap"
-                          >
-                            {subChat.name || "New Chat"}
-                          </span>
+                        {mode !== "orchestrator" && mode !== "system-map" && (
+                          editingSubChatId === subChat.id ? (
+                            <InlineEdit
+                              value={editName}
+                              onChange={setEditName}
+                              onSave={() => handleEditSave(subChat)}
+                              onCancel={() => handleEditCancel(subChat)}
+                              isEditing={true}
+                              disabled={editLoading}
+                              className="text-sm !px-1 !py-0 !h-6 min-w-[100px] border border-input rounded-md !ring-0 !shadow-none focus-visible:!ring-0 focus-visible:!ring-offset-0 focus-visible:!border-input"
+                            />
+                          ) : (
+                            <span
+                              ref={(el) => {
+                                if (el) {
+                                  textRefs.current.set(subChat.id, el)
+                                } else {
+                                  textRefs.current.delete(subChat.id)
+                                }
+                              }}
+                              className="relative z-0 text-left flex-1 min-w-0 pr-1 overflow-hidden block whitespace-nowrap"
+                            >
+                              {subChat.name || "New Chat"}
+                            </span>
+                          )
                         )}
 
                         {/* Gradient fade on the right when text is truncated and not editing - visibility controlled via DOM */}
-                        {editingSubChatId !== subChat.id && (
+                        {editingSubChatId !== subChat.id && mode !== "orchestrator" && mode !== "system-map" && (
                           <div
                             data-truncate-gradient
                             className={cn(
@@ -872,10 +885,10 @@ export const SubChatSelector = memo(function SubChatSelector({
                           />
                         )}
 
-                        {/* Close button - only show when hovered and multiple tabs and not editing and not orchestrator */}
+                        {/* Close button - only show when hovered and multiple tabs and not editing and not orchestrator/system-map */}
                         {openSubChats.length > 1 &&
                           editingSubChatId !== subChat.id &&
-                          mode !== "orchestrator" && (
+                          mode !== "orchestrator" && mode !== "system-map" && (
                             <div className="absolute right-0 top-0 bottom-0 flex items-center justify-end pr-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10">
                               <div
                                 className={cn(

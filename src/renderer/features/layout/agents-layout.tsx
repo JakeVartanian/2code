@@ -261,6 +261,22 @@ export function AgentsLayout() {
     return unsubscribe
   }, [projects, setSelectedProject, setSettingsActiveTab, setSettingsDialogOpen])
 
+  // Disk full warning from main process
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const desktopApi = window.desktopApi as any
+    if (!desktopApi?.onDiskFullWarning) return
+
+    const unsubscribe = desktopApi.onDiskFullWarning(() => {
+      toast.error("Disk space critically low", {
+        description: "Your work may not be saved. Free up disk space immediately.",
+        duration: Infinity,
+      })
+    })
+
+    return unsubscribe
+  }, [])
+
   // Handle sign out
   const handleSignOut = useCallback(async () => {
     // Reset onboarding/provider selection state on logout.

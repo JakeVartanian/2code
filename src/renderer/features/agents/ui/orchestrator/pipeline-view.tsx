@@ -3,7 +3,7 @@
  * Core visual component of the orchestrator tab.
  */
 
-import { memo, useState, useEffect } from "react"
+import { memo, useState, useEffect, useCallback } from "react"
 import {
   ChevronDown,
   ChevronRight,
@@ -13,9 +13,14 @@ import {
   CheckCircle2,
   Clock,
   AlertTriangle,
+  Zap,
+  Loader2,
 } from "lucide-react"
 import { cn } from "../../../../lib/utils"
 import { trpc } from "../../../../lib/trpc"
+import { useAtomValue } from "jotai"
+import { selectedProjectAtom } from "../../../../lib/atoms"
+import { toast } from "sonner"
 import { TaskCard } from "./task-card"
 import type { OrchestrationRun, RunStatus, Autonomy } from "../../stores/orchestration-store"
 
@@ -61,19 +66,46 @@ function PipelineSection({
   )
 }
 
-// Memory section — shows top memories and stats
+// Memory section — shows top memories and stats, with Build Brain option
 function MemorySection({ projectId }: { projectId: string | null }) {
-  const { data: stats } = trpc.memory.stats.useQuery(
+  const selectedProject = useAtomValue(selectedProjectAtom)
+  const { data: stats, refetch: refetchStats } = trpc.memory.stats.useQuery(
     { projectId: projectId || "" },
     { enabled: !!projectId },
   )
 
-  const { data: memories } = trpc.memory.list.useQuery(
+  const { data: memories, refetch: refetchList } = trpc.memory.list.useQuery(
     { projectId: projectId || "" },
     { enabled: !!projectId },
   )
 
-  const topMemories = memories?.slice(0, 5) ?? []
+  const buildBrainMutation = trpc.ambient.buildBrain.useMutation({
+    onSuccess: (result) => {
+      if (result.success) {
+        toast.success(`Brain built: ${result.memoriesCreated} memories created`)
+        refetchStats()
+        refetchList()
+      } else {
+        toast.error(result.error ?? "Failed to build brain")
+      }
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
+  const handleBuildBrain = useCallback(() => {
+    if (!selectedProject) return
+    buildBrainMutation.mutate({
+      projectId: selectedProject.id,
+      projectPath: selectedProject.path,
+    })
+  }, [selectedProject])
+
+  const allMemories = memories ?? []
+  const hasMemories = (stats?.total ?? 0) > 0
+  const [showAll, setShowAll] = useState(false)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const displayMemories = showAll ? allMemories : allMemories.slice(0, 5)
+  const hasMore = allMemories.length > 5
 
   return (
     <PipelineSection
@@ -91,21 +123,85 @@ function MemorySection({ projectId }: { projectId: string | null }) {
             <span>~{stats.estimatedTokens} tokens</span>
           </div>
         )}
-        {topMemories.map((m) => (
-          <div
-            key={m.id}
-            className="text-xs px-2.5 py-1.5 rounded bg-muted/50 flex items-start gap-2"
-          >
-            <span className="text-[10px] px-1 py-0 rounded bg-foreground/10 text-foreground/70 shrink-0 capitalize">
-              {m.category}
-            </span>
-            <span className="text-foreground/80 truncate">{m.title}</span>
+        {hasMemories ? (
+          <>
+            {displayMemories.map((m) => {
+              const isExpanded = expandedId === m.id
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => setExpandedId(isExpanded ? null : m.id)}
+                  className="w-full text-left text-xs rounded bg-muted/50 hover:bg-muted/70 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-start gap-2 px-2.5 py-1.5">
+                    <ChevronRight className={cn(
+                      "w-3 h-3 mt-0.5 shrink-0 text-muted-foreground transition-transform",
+                      isExpanded && "rotate-90",
+                    )} />
+                    <span className="text-[10px] px-1 py-0 rounded bg-foreground/10 text-foreground/70 shrink-0 capitalize">
+                      {m.category}
+                    </span>
+                    <span className={cn("text-foreground/80 flex-1 min-w-0", !isExpanded && "truncate")}>
+                      {m.title}
+                    </span>
+                  </div>
+                  {isExpanded && (
+                    <div className="px-2.5 pb-2 pt-1 border-t border-border/30 mx-2.5 text-foreground/60 whitespace-pre-wrap">
+                      {m.content}
+                      {m.linkedFiles && (() => {
+                        try {
+                          const files = typeof m.linkedFiles === "string" ? JSON.parse(m.linkedFiles) : m.linkedFiles
+                          return Array.isArray(files) && files.length > 0 ? (
+                            <div className="mt-1.5 text-[10px] text-muted-foreground">
+                              Files: {files.join(", ")}
+                            </div>
+                          ) : null
+                        } catch { return null }
+                      })()}
+                    </div>
+                  )}
+                </button>
+              )
+            })}
+            {hasMore && (
+              <button
+                onClick={() => setShowAll(!showAll)}
+                className="text-xs text-purple-400 hover:text-purple-300 transition-colors"
+              >
+                {showAll ? "Show less" : `Show all ${allMemories.length} memories`}
+              </button>
+            )}
+          </>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              No memories yet. Build the brain from your project's git history and config files, or they'll be auto-captured from conversations.
+            </p>
+            {selectedProject && (
+              <button
+                onClick={handleBuildBrain}
+                disabled={buildBrainMutation.isPending}
+                className={cn(
+                  "w-full flex items-center justify-center gap-2 px-3 py-1.5 rounded-md",
+                  "border border-dashed border-purple-500/40 bg-purple-500/5",
+                  "text-xs text-purple-400 hover:bg-purple-500/10 transition-colors",
+                  "disabled:opacity-50 disabled:cursor-not-allowed",
+                )}
+              >
+                {buildBrainMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Building...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3 h-3" />
+                    <span>Build Brain from Project</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
-        ))}
-        {topMemories.length === 0 && (
-          <p className="text-xs text-muted-foreground">
-            No memories yet. They'll be auto-captured from conversations.
-          </p>
         )}
       </div>
     </PipelineSection>

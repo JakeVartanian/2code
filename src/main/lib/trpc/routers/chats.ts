@@ -16,6 +16,7 @@ import type { WorktreeSetupResult } from "../../git/worktree-config"
 import { computeContentHash, gitCache } from "../../git/cache"
 import { splitUnifiedDiffByFile } from "../../git/diff-parser"
 import { execWithShellEnv } from "../../git/shell-env"
+import { cleanupWorktreeMutex } from "../../git/git-factory"
 import { applyRollbackStash } from "../../git/stash"
 import { checkOllamaStatus } from "../../ollama"
 import { terminalManager } from "../../terminal/manager"
@@ -324,7 +325,7 @@ export const chatsRouter = router({
         baseBranch: z.string().optional(), // Branch to base the worktree off
         branchType: z.enum(["local", "remote"]).optional(), // Whether baseBranch is local or remote
         useWorktree: z.boolean().default(true), // If false, work directly in project dir
-        mode: z.enum(["plan", "agent", "orchestrator"]).default("agent"),
+        mode: z.enum(["plan", "agent", "orchestrator", "system-map"]).default("agent"),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -695,10 +696,11 @@ export const chatsRouter = router({
         })
       }
 
-      // Invalidate git cache for this worktree
+      // Invalidate git cache and release mutex for this worktree
       if (chat?.worktreePath) {
         gitCache.invalidateStatus(chat.worktreePath)
         gitCache.invalidateParsedDiff(chat.worktreePath)
+        cleanupWorktreeMutex(chat.worktreePath)
       }
 
       const deleted = db.delete(chats).where(eq(chats.id, input.id)).returning().get()
@@ -756,7 +758,7 @@ export const chatsRouter = router({
       z.object({
         chatId: z.string(),
         name: z.string().optional(),
-        mode: z.enum(["plan", "agent", "orchestrator"]).default("agent"),
+        mode: z.enum(["plan", "agent", "orchestrator", "system-map"]).default("agent"),
       }),
     )
     .mutation(({ input }) => {
@@ -929,6 +931,12 @@ export const chatsRouter = router({
   updateSubChatMessages: publicProcedure
     .input(z.object({ id: z.string(), messages: z.string() }))
     .mutation(({ input }) => {
+      // Validate that messages is valid JSON to prevent data corruption
+      try {
+        JSON.parse(input.messages)
+      } catch {
+        throw new Error("Invalid messages JSON")
+      }
       const db = getDatabase()
       return db
         .update(subChats)
@@ -1047,7 +1055,7 @@ export const chatsRouter = router({
    * Update sub-chat mode
    */
   updateSubChatMode: publicProcedure
-    .input(z.object({ id: z.string(), mode: z.enum(["plan", "agent", "orchestrator"]) }))
+    .input(z.object({ id: z.string(), mode: z.enum(["plan", "agent", "orchestrator", "system-map"]) }))
     .mutation(({ input }) => {
       const db = getDatabase()
       return db

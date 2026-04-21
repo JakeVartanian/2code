@@ -3,6 +3,7 @@
  * Server-derived state lives in the Zustand store (store.ts).
  */
 
+import { atom } from "jotai"
 import { atomWithStorage } from "jotai/utils"
 
 /** Whether the ambient sidebar section is expanded/collapsed */
@@ -11,5 +12,14 @@ export const ambientPanelExpandedAtom = atomWithStorage<boolean>(
   true,
 )
 
-// Indicator state is computed inline in ambient-sidebar-section.tsx
-// (derived from store suggestions, no atom needed)
+/** Which suggestion card is currently expanded (null = all collapsed) */
+export const expandedSuggestionIdAtom = atom<string | null>(null)
+
+/** Last-used implement mode — persisted so repeat users don't re-select */
+export const implementModeAtom = atomWithStorage<"plan" | "agent">(
+  "ambient:implementMode",
+  "plan",
+)
+
+/** Whether the suggestion history is expanded */
+export const suggestionHistoryExpandedAtom = atom<boolean>(false)

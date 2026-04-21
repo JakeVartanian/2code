@@ -259,6 +259,11 @@ class GitWatcherRegistry {
 				}
 			});
 
+			// Must handle error events to prevent EventEmitter from crashing the process
+			watcher.on("error", (error: Error) => {
+				console.error(`[GitWatcherRegistry] Watcher error for ${worktreePath}:`, error);
+			});
+
 			// Wait for the watcher to be ready
 			await watcher.waitForReady();
 		}

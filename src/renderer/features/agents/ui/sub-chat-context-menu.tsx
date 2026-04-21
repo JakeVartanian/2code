@@ -97,6 +97,7 @@ export function SubChatContextMenu({
 }: SubChatContextMenuProps) {
   const closeTabShortcut = useCloseTabShortcut()
   const isOrchestrator = subChat.mode === "orchestrator"
+  const isSpecialTab = isOrchestrator || subChat.mode === "system-map"
 
   const handleExport = useCallback((format: ExportFormat) => {
     if (!chatId) return
@@ -175,10 +176,10 @@ export function SubChatContextMenu({
           <ContextMenuItem
             onClick={() => onCloseTab?.(subChat.id)}
             className="justify-between"
-            disabled={isOnlyChat || isOrchestrator}
+            disabled={isOnlyChat || isSpecialTab}
           >
             Close chat
-            {!isOnlyChat && !isOrchestrator && <Kbd>{closeTabShortcut}</Kbd>}
+            {!isOnlyChat && !isSpecialTab && <Kbd>{closeTabShortcut}</Kbd>}
           </ContextMenuItem>
           <ContextMenuItem
             onClick={() => onCloseOtherTabs?.(subChat.id)}
@@ -198,10 +199,10 @@ export function SubChatContextMenu({
           <ContextMenuItem
             onClick={() => onArchive(subChat.id)}
             className="justify-between"
-            disabled={isOnlyChat || isOrchestrator}
+            disabled={isOnlyChat || isSpecialTab}
           >
             Archive chat
-            {!isOnlyChat && !isOrchestrator && <Kbd>{closeTabShortcut}</Kbd>}
+            {!isOnlyChat && !isSpecialTab && <Kbd>{closeTabShortcut}</Kbd>}
           </ContextMenuItem>
           <ContextMenuItem
             onClick={() => onArchiveAllBelow?.(subChat.id)}

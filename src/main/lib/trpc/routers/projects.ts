@@ -9,8 +9,9 @@ import { promisify } from "node:util"
 import { existsSync } from "node:fs"
 import { mkdir, copyFile, unlink } from "node:fs/promises"
 import { extname } from "node:path"
-import { getGitRemoteInfo } from "../../git"
+import { getGitRemoteInfo, removeWorktree } from "../../git"
 import { getLaunchDirectory } from "../../cli"
+import { chats } from "../../db/schema"
 
 const execFileAsync = promisify(execFile)
 
@@ -177,7 +178,7 @@ export const projectsRouter = router({
    */
   delete: publicProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(({ input }) => {
+    .mutation(async ({ input }) => {
       const db = getDatabase()
 
       // Stop ambient agent before deleting (DB cascade will clean data, but in-memory agent needs explicit stop)
@@ -185,6 +186,23 @@ export const projectsRouter = router({
         const { ambientAgentRegistry } = require("../../ambient")
         ambientAgentRegistry.stop(input.id)
       } catch { /* non-critical */ }
+
+      // Get the project path and all chats with worktrees BEFORE cascade delete
+      const project = db.select().from(projects).where(eq(projects.id, input.id)).get()
+      const projectChats = db.select().from(chats).where(eq(chats.projectId, input.id)).all()
+
+      // Clean up worktrees on disk (CASCADE only removes DB rows, not filesystem)
+      if (project) {
+        for (const chat of projectChats) {
+          if (chat.worktreePath && chat.branch) {
+            try {
+              await removeWorktree(project.path, chat.worktreePath)
+            } catch {
+              // Best-effort — don't block project deletion
+            }
+          }
+        }
+      }
 
       return db
         .delete(projects)
@@ -267,6 +285,12 @@ export const projectsRouter = router({
 
       if (!owner || !repo) {
         throw new Error("Invalid GitHub URL or repo format")
+      }
+
+      // Sanitize owner/repo to prevent directory traversal (e.g. "../../etc")
+      if (owner.includes("/") || owner.includes("\\") || owner.includes("..") ||
+          repo.includes("/") || repo.includes("\\") || repo.includes("..")) {
+        throw new Error("Invalid GitHub owner or repo name")
       }
 
       // Clone to ~/.2code/repos/{owner}/{repo}

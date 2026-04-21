@@ -24,6 +24,10 @@ interface ProjectSignals {
   tsconfig: string | null
   readme: string | null
   gitLog: string | null
+  gitLogDetailed: string | null
+  gitDiffStat: string | null
+  gitHotspots: string | null
+  gitRecentActivity: string | null
   eslintConfig: string | null
   ciWorkflows: string[]
   testPatterns: string[]
@@ -32,7 +36,7 @@ interface ProjectSignals {
 
 const ONBOARDING_SYSTEM_PROMPT = `You are analyzing a software project to create foundational knowledge memories. Your output will be injected into AI coding sessions so Claude automatically follows this project's patterns.
 
-Write 5-10 memories in this EXACT JSON format:
+Write 10-20 memories in this EXACT JSON format:
 [
   {
     "category": "architecture|convention|deployment|debugging|preference|gotcha",
@@ -45,9 +49,14 @@ Write 5-10 memories in this EXACT JSON format:
 Guidelines:
 - Focus on project-specific patterns, NOT general programming facts
 - Use ALWAYS/NEVER/Applies-to format so the knowledge is actionable as instructions
-- Categories: "architecture" for system design, "convention" for code style, "deployment" for build/CI, "gotcha" for pitfalls
+- Categories: "architecture" for system design, "convention" for code style, "deployment" for build/CI, "debugging" for known issues, "gotcha" for pitfalls, "preference" for style choices
 - Include file paths that demonstrate the pattern
-- Be specific to THIS project (reference actual file names, frameworks, patterns you observe)`
+- Be specific to THIS project (reference actual file names, frameworks, patterns you observe)
+- Study the git history carefully — what areas are actively being worked on? What patterns emerge from recent changes?
+- Look at the diff stats to understand which files are hotspots and what kind of work is happening
+- Identify architectural decisions visible from the code structure (state management choices, API patterns, data flow)
+- Note any migration/evolution patterns (e.g. moving from one approach to another)
+- Capture gotchas visible from git history (files that are frequently fixed, areas with many small commits indicating debugging)`
 
 /**
  * Run a rapid onboarding scan on a new project.
@@ -104,7 +113,11 @@ function gatherProjectSignals(projectPath: string): ProjectSignals {
     packageJson: readIfExists(join(projectPath, "package.json"), 2000),
     tsconfig: readIfExists(join(projectPath, "tsconfig.json"), 1000),
     readme: readIfExists(join(projectPath, "README.md"), 2000),
-    gitLog: getGitLog(projectPath, 30),
+    gitLog: getGitLog(projectPath, 50),
+    gitLogDetailed: getGitLogDetailed(projectPath, 20),
+    gitDiffStat: getGitDiffStat(projectPath),
+    gitHotspots: getGitHotspots(projectPath),
+    gitRecentActivity: getGitRecentActivity(projectPath),
     eslintConfig: readIfExists(join(projectPath, ".eslintrc.json"), 500)
       ?? readIfExists(join(projectPath, ".eslintrc.js"), 500)
       ?? readIfExists(join(projectPath, "eslint.config.js"), 500),
@@ -132,7 +145,23 @@ function buildOnboardingPrompt(signals: ProjectSignals): string {
   }
 
   if (signals.gitLog) {
-    prompt += "## Recent git history (30 commits)\n```\n" + signals.gitLog + "\n```\n\n"
+    prompt += "## Git history (50 commits, one-line)\n```\n" + signals.gitLog + "\n```\n\n"
+  }
+
+  if (signals.gitLogDetailed) {
+    prompt += "## Recent commits with files changed (last 20)\n```\n" + signals.gitLogDetailed + "\n```\n\n"
+  }
+
+  if (signals.gitHotspots) {
+    prompt += "## File change hotspots (most frequently modified files)\n```\n" + signals.gitHotspots + "\n```\n\n"
+  }
+
+  if (signals.gitRecentActivity) {
+    prompt += "## Recent activity summary (last 7 days)\n```\n" + signals.gitRecentActivity + "\n```\n\n"
+  }
+
+  if (signals.gitDiffStat) {
+    prompt += "## Overall diff stats (recent changes)\n```\n" + signals.gitDiffStat + "\n```\n\n"
   }
 
   if (signals.eslintConfig) {
@@ -151,9 +180,9 @@ function buildOnboardingPrompt(signals: ProjectSignals): string {
     prompt += "## Entry points\n" + signals.entryPoints.join(", ") + "\n\n"
   }
 
-  // Cap total prompt size to prevent excessive token usage
-  if (prompt.length > 15000) {
-    prompt = prompt.slice(0, 15000) + "\n\n[...analysis truncated for token budget]"
+  // Cap total prompt size — increased budget for richer analysis
+  if (prompt.length > 25000) {
+    prompt = prompt.slice(0, 25000) + "\n\n[...analysis truncated for token budget]"
   }
 
   return prompt
@@ -171,7 +200,7 @@ function parseMemories(text: string): Array<{ category: string; title: string; c
 
     return parsed
       .filter((m: any) => m.title && m.content && validCategories.has(m.category))
-      .slice(0, 10) // Max 10 memories
+      .slice(0, 20) // Max 20 memories
       .map((m: any) => ({
         category: m.category,
         title: String(m.title).slice(0, 100),
@@ -234,6 +263,66 @@ function getGitLog(projectPath: string, count: number): string | null {
       `git log --oneline --no-decorate -${count}`,
       { cwd: projectPath, encoding: "utf-8", timeout: 5000 }
     ).trim()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Detailed git log with files changed per commit — shows what areas are being worked on.
+ */
+function getGitLogDetailed(projectPath: string, count: number): string | null {
+  try {
+    const result = execSync(
+      `git log --no-decorate --stat=80 --format="--- %h %s (%ar)" -${count}`,
+      { cwd: projectPath, encoding: "utf-8", timeout: 5000, maxBuffer: 1024 * 256 }
+    ).trim()
+    return result.slice(0, 4000)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Find the most frequently modified files in recent history — identifies code hotspots.
+ */
+function getGitHotspots(projectPath: string): string | null {
+  try {
+    const result = execSync(
+      `git log --name-only --pretty=format: -100 | grep -v '^$' | sort | uniq -c | sort -rn | head -15`,
+      { cwd: projectPath, encoding: "utf-8", timeout: 5000, maxBuffer: 1024 * 256 }
+    ).trim()
+    return result.slice(0, 2000)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Recent activity summary — commits in the last 7 days with more detail.
+ */
+function getGitRecentActivity(projectPath: string): string | null {
+  try {
+    const result = execSync(
+      `git log --since="7 days ago" --format="%h %s (%an, %ar)" --shortstat --no-decorate -20`,
+      { cwd: projectPath, encoding: "utf-8", timeout: 5000, maxBuffer: 1024 * 256 }
+    ).trim()
+    return result ? result.slice(0, 3000) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Overall diff stats for recent changes — shows scale of recent work.
+ */
+function getGitDiffStat(projectPath: string): string | null {
+  try {
+    const result = execSync(
+      `git diff --shortstat HEAD~30 HEAD 2>/dev/null`,
+      { cwd: projectPath, encoding: "utf-8", timeout: 5000, maxBuffer: 1024 * 64 }
+    ).trim()
+    return result || null
   } catch {
     return null
   }

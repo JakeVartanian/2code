@@ -114,12 +114,21 @@ export class AmbientFileWatcher extends EventEmitter {
       },
       usePolling: false,
       followSymlinks: false,
-      depth: 10, // Don't recurse too deep
+      depth: 6, // Limit depth to reduce file descriptor usage
     })
 
     this.watcher.on("add", (filePath) => this.handleEvent(filePath, "add", path))
     this.watcher.on("change", (filePath) => this.handleEvent(filePath, "change", path))
     this.watcher.on("unlink", (filePath) => this.handleEvent(filePath, "unlink", path))
+    this.watcher.on("error", (error) => {
+      // EMFILE = too many open files. Close watcher to free fds and stop gracefully.
+      if ((error as NodeJS.ErrnoException).code === "EMFILE") {
+        console.error("[AmbientFileWatcher] EMFILE — too many open files, disposing watcher")
+        this.dispose()
+        return
+      }
+      console.error("[AmbientFileWatcher] Watcher error:", error)
+    })
 
     // Wait for initial scan to complete
     await new Promise<void>((resolve) => {

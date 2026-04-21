@@ -441,6 +441,60 @@ function registerIpcHandlers(): void {
       }
       console.log("[SignedFetch] Sender validated OK")
 
+      // SSRF protection: validate URL against allowlist
+      const allowedOrigins = [
+        getBaseUrl(),
+        "https://api.anthropic.com",
+        "https://openrouter.ai",
+      ].filter(Boolean)
+
+      let parsedUrl: URL
+      try {
+        parsedUrl = new URL(url)
+      } catch {
+        console.log("[SignedFetch] Invalid URL:", url)
+        return { ok: false, status: 400, data: null, error: "Invalid URL" }
+      }
+
+      // Block non-HTTPS requests
+      if (parsedUrl.protocol !== "https:") {
+        console.log("[SignedFetch] Blocked non-HTTPS URL:", url)
+        return { ok: false, status: 403, data: null, error: "Only HTTPS URLs are allowed" }
+      }
+
+      // Block private/internal IP ranges
+      const hostname = parsedUrl.hostname
+      const isPrivate =
+        hostname === "localhost" ||
+        hostname === "127.0.0.1" ||
+        hostname === "::1" ||
+        hostname === "0.0.0.0" ||
+        hostname.startsWith("10.") ||
+        hostname.startsWith("192.168.") ||
+        hostname.startsWith("169.254.") ||
+        hostname.endsWith(".local") ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
+
+      if (isPrivate) {
+        console.log("[SignedFetch] Blocked private/internal URL:", url)
+        return { ok: false, status: 403, data: null, error: "Requests to private networks are not allowed" }
+      }
+
+      // Check origin allowlist
+      const requestOrigin = parsedUrl.origin
+      const isAllowed = allowedOrigins.some((allowed) => {
+        try {
+          return new URL(allowed).origin === requestOrigin
+        } catch {
+          return false
+        }
+      })
+
+      if (!isAllowed) {
+        console.log("[SignedFetch] Blocked URL not in allowlist:", url)
+        return { ok: false, status: 403, data: null, error: `Origin not allowed: ${requestOrigin}` }
+      }
+
       const token = await getAuthManager().getValidToken()
       console.log("[SignedFetch] Token:", token ? "present" : "missing", "URL:", url)
       if (!token) {
@@ -754,15 +808,15 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
             // 'unsafe-inline' required: index.html has inline <script> blocks (theme detection, error handler)
             "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
             "style-src 'self' 'unsafe-inline'",
-            "img-src 'self' data: blob: filesystem: https:",
+            "img-src 'self' data: blob: filesystem: https://github.com https://avatars.githubusercontent.com",
             "font-src 'self' data:",
             "worker-src 'self' blob:",
             // ws://localhost:* needed for Vite HMR in dev; https://openrouter.ai for model fetching
-            // https: needed so preview iframe apps can call their own external APIs
-            "connect-src 'self' ws://localhost:* wss://localhost:* http://localhost:* https://openrouter.ai https:",
+            // Note: preview iframes (localhost) skip CSP entirely (see early return above)
+            "connect-src 'self' ws://localhost:* wss://localhost:* http://localhost:* https://openrouter.ai",
             "media-src 'self' blob:",
             "object-src 'none'",
-            "frame-src 'self' http://localhost:* https://localhost:*",
+            "frame-src 'self' http://localhost:* https://localhost:* https://*.csb.app https://*.e2b.app",
           ].join("; "),
         ],
       },

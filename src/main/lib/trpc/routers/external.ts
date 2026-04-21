@@ -107,6 +107,7 @@ export const externalRouter = router({
 						detached: true,
 						stdio: "ignore",
 					});
+					child.on("error", () => {}); // Prevent crash if spawn fails after which succeeds
 					child.unref();
 					return { success: true, editor: editor.cmd };
 				} catch {

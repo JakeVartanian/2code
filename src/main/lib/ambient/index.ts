@@ -180,10 +180,17 @@ class AmbientAgentRegistry {
 
     const promise = (async () => {
       const agent = new AmbientAgent(projectId, projectPath)
-      this.agents.set(projectId, agent)
-      await agent.start()
-      this.starting.delete(projectId)
-      return agent
+      try {
+        this.agents.set(projectId, agent)
+        await agent.start()
+        return agent
+      } catch (error) {
+        // Remove broken agent from registry so next call retries
+        this.agents.delete(projectId)
+        throw error
+      } finally {
+        this.starting.delete(projectId)
+      }
     })()
 
     this.starting.set(projectId, promise)

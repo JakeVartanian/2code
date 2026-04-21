@@ -233,6 +233,13 @@ contextBridge.exposeInMainWorld("desktopApi", {
     return () => ipcRenderer.removeListener("worktree:setup-failed", handler)
   },
 
+  // Disk full warning (from debounced-writer)
+  onDiskFullWarning: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on("disk-full-warning", handler)
+    return () => ipcRenderer.removeListener("disk-full-warning", handler)
+  },
+
   // Subscribe to git watcher for a worktree (from renderer)
   subscribeToGitWatcher: (worktreePath: string) => ipcRenderer.invoke("git:subscribe-watcher", worktreePath),
   unsubscribeFromGitWatcher: (worktreePath: string) => ipcRenderer.invoke("git:unsubscribe-watcher", worktreePath),
@@ -380,6 +387,8 @@ export interface DesktopApi {
   // Shortcuts
   onShortcutNewAgent: (callback: () => void) => () => void
   onShortcutOpenSettings: (callback: () => void) => () => void
+  // Disk full warning
+  onDiskFullWarning: (callback: () => void) => () => void
   // File changes
   onFileChanged: (callback: (data: { filePath: string; type: string; subChatId: string }) => void) => () => void
   // Git status changes (from file watcher)

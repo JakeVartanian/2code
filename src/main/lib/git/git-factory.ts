@@ -32,6 +32,14 @@ function getMutex(worktreePath: string): Mutex {
 }
 
 /**
+ * Remove the mutex for a worktree that's being deleted.
+ * Prevents unbounded growth of the mutex map over time.
+ */
+export function cleanupWorktreeMutex(worktreePath: string): void {
+	worktreeMutexes.delete(worktreePath);
+}
+
+/**
  * Creates a simple-git instance with configured timeouts.
  *
  * @param worktreePath - Path to the git worktree/repository

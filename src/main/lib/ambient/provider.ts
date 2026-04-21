@@ -41,7 +41,7 @@ class AnthropicProvider implements AmbientProvider {
   }
 
   async callSonnet(system: string, user: string): Promise<AmbientProviderCallResult> {
-    return this.call(SONNET_MODEL, system, user, 2048)
+    return this.call(SONNET_MODEL, system, user, 4096)
   }
 
   private async call(
@@ -51,7 +51,7 @@ class AnthropicProvider implements AmbientProvider {
     maxTokens: number,
   ): Promise<AmbientProviderCallResult> {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30_000)
+    const timeout = setTimeout(() => controller.abort(), 60_000)
 
     try {
       const response = await fetch(ANTHROPIC_API_URL, {
@@ -117,7 +117,7 @@ class OpenRouterProvider implements AmbientProvider {
     if (!this.info.supportsSonnet) {
       throw new Error("Sonnet not available on free-only OpenRouter plan")
     }
-    return this.call(OR_SONNET_MODEL, system, user, 2048)
+    return this.call(OR_SONNET_MODEL, system, user, 4096)
   }
 
   private async call(
@@ -127,7 +127,7 @@ class OpenRouterProvider implements AmbientProvider {
     maxTokens: number,
   ): Promise<AmbientProviderCallResult> {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30_000)
+    const timeout = setTimeout(() => controller.abort(), 60_000)
 
     try {
       const response = await fetch(OPENROUTER_API_URL, {

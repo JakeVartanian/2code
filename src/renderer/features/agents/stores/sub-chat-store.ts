@@ -14,7 +14,7 @@ export interface SubChatMeta {
   name: string
   created_at?: string
   updated_at?: string
-  mode?: "plan" | "agent" | "orchestrator"
+  mode?: "plan" | "agent" | "orchestrator" | "system-map"
   // Orchestration metadata (set for worker tabs and orchestrator tab)
   orchestrationRunId?: string | null
   orchestrationTaskId?: string | null
@@ -42,7 +42,7 @@ interface AgentSubChatStore {
   setAllSubChats: (subChats: SubChatMeta[]) => void
   addToAllSubChats: (subChat: SubChatMeta) => void
   updateSubChatName: (subChatId: string, name: string) => void
-  updateSubChatMode: (subChatId: string, mode: "plan" | "agent" | "orchestrator") => void
+  updateSubChatMode: (subChatId: string, mode: "plan" | "agent" | "orchestrator" | "system-map") => void
   updateSubChatTimestamp: (subChatId: string) => void
   addToSplit: (subChatId: string) => void
   removeFromSplit: (subChatId: string) => void

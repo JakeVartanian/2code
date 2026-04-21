@@ -12,8 +12,9 @@
  * discarded since only the final message array matters.
  */
 
+import { BrowserWindow } from "electron"
 import { eq } from "drizzle-orm"
-import { getDatabase } from "./index"
+import { getDatabase, isDatabaseClosed } from "./index"
 import { subChats, chats } from "./schema"
 
 const DEBOUNCE_MS = 100
@@ -35,6 +36,9 @@ interface PendingWrite {
 const pendingWrites = new Map<string, PendingWrite>()
 // Track retry timeouts so they can be cancelled during shutdown
 const activeRetryTimeouts = new Set<ReturnType<typeof setTimeout>>()
+
+// Entries currently in retry state — kept here so flushAllPendingWrites can find them
+const retryingWrites = new Map<string, PendingWrite>()
 
 /**
  * Execute a single pending write against the database with retry logic.
@@ -61,6 +65,8 @@ function executePendingWrite(pending: PendingWrite, retryCount = 0): void {
         .where(eq(chats.id, pending.chatId))
         .run()
     }
+    // Success — remove from retry tracking
+    retryingWrites.delete(pending.subChatId)
   } catch (error: any) {
     // Retry on database lock errors if we haven't exceeded max retries
     const isDatabaseBusy = error?.code === "SQLITE_BUSY" || error?.message?.includes("database is locked")
@@ -68,18 +74,32 @@ function executePendingWrite(pending: PendingWrite, retryCount = 0): void {
       console.warn(
         `[debounced-writer] Database locked for subChat ${pending.subChatId}, retry ${retryCount + 1}/${MAX_RETRIES} after ${RETRY_DELAY_MS}ms`,
       )
+      // Track in retryingWrites so flushAllPendingWrites can find it
+      retryingWrites.set(pending.subChatId, pending)
       const retryTimeout = setTimeout(() => {
         activeRetryTimeouts.delete(retryTimeout)
+        retryingWrites.delete(pending.subChatId)
         executePendingWrite(pending, retryCount + 1)
       }, RETRY_DELAY_MS)
       activeRetryTimeouts.add(retryTimeout)
       return
     }
 
+    retryingWrites.delete(pending.subChatId)
     console.error(
       `[debounced-writer] Failed to write subChat ${pending.subChatId} after ${retryCount} retries:`,
       error,
     )
+
+    // Notify renderer if the failure is due to disk being full
+    const isDiskFull =
+      error?.code === "SQLITE_FULL" ||
+      error?.message?.includes("database or disk is full")
+    if (isDiskFull) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send("disk-full-warning")
+      }
+    }
   }
 }
 
@@ -184,13 +204,31 @@ export function flushAllPendingWrites(): void {
   }
   activeRetryTimeouts.clear()
 
-  // Flush all pending writes synchronously without retry
-  const db = getDatabase()
+  // Guard: if DB is already closed (e.g. called from uncaughtException after shutdown), bail
+  if (isDatabaseClosed()) {
+    pendingWrites.clear()
+    retryingWrites.clear()
+    return
+  }
+
+  // Collect all writes that need flushing: pending + retrying
+  const allWrites = new Map<string, PendingWrite>()
+  for (const [subChatId, pending] of retryingWrites) {
+    allWrites.set(subChatId, pending)
+  }
+  retryingWrites.clear()
+  // pendingWrites overwrites retrying if both exist (pending is newer)
   for (const [subChatId, pending] of pendingWrites) {
+    allWrites.set(subChatId, pending)
+  }
+  pendingWrites.clear()
+
+  // Flush all writes synchronously without retry
+  const db = getDatabase()
+  for (const [subChatId, pending] of allWrites) {
     if (pending.timer) {
       clearTimeout(pending.timer)
     }
-    pendingWrites.delete(subChatId)
 
     try {
       db.update(subChats)
