@@ -96,20 +96,29 @@ export function useAmbientData(
           // Show toast so the user knows GAAD found something
           const s = event.suggestion
           if (s) {
-            const severityIcon = s.severity === "error" ? "🔴"
-              : s.severity === "warning" ? "🟡" : "🔵"
+            const label = s.category === "next-step" ? "Next step"
+              : s.category === "risk" ? "Risk"
+              : s.category === "bug" ? "Bug"
+              : s.category === "test-gap" ? "Test gap"
+              : s.category === "memory" ? "Memory"
+              : s.category
 
-            toast(s.title, {
-              description: `${severityIcon} ${s.category} — ${s.confidence}% confidence`,
-              duration: 6000,
-              action: {
-                label: "View",
-                onClick: () => {
-                  // Expand GAAD sidebar section
-                  // Store is updated via refetch, just need to draw attention
-                },
-              },
-            })
+            if (s.severity === "error") {
+              toast.error(s.title, {
+                description: `${label} — ${s.confidence}% confidence`,
+                duration: 8000,
+              })
+            } else if (s.severity === "warning") {
+              toast.warning(s.title, {
+                description: `${label} — ${s.confidence}% confidence`,
+                duration: 6000,
+              })
+            } else {
+              toast.info(s.title, {
+                description: `${label} — ${s.confidence}% confidence`,
+                duration: 5000,
+              })
+            }
           }
         }
         if (event.type === "suggestion-dismissed" && event.suggestionId) {
