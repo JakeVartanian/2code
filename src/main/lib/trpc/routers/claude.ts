@@ -1496,10 +1496,10 @@ export const claudeRouter = router({
           return
         }
 
-        // Enforce one-active-session-per-worktree to prevent silent file conflicts.
-        // Two tabs in the same workspace share one git worktree; concurrent edits
-        // cause last-write-wins data loss. Look up the effective working directory
-        // for this sub-chat and reject if another session is already streaming there.
+        // Look up the effective working directory for worktree occupancy tracking.
+        // Multiple tabs in the same workspace are allowed to run concurrently —
+        // the user expects parallel workflows. We still track occupancy so stale
+        // entries can be cleaned up when sessions end.
         let effectiveWorktreeCwd: string | null = null
         if (!activeSessions.has(input.subChatId)) {
           try {
@@ -1518,22 +1518,16 @@ export const claudeRouter = router({
                 .from(chats)
                 .where(eq(chats.id, subChat.chatId))
                 .get()
-              // Effective cwd: worktreePath for worktree-mode only.
-              // Local-mode chats (no worktree) should NOT block each other — users
-              // expect to run multiple tabs simultaneously in the same project.
-              // Only worktree-mode needs conflict prevention (shared git worktree).
               effectiveWorktreeCwd = chat?.worktreePath ?? null
+
+              // Evict stale sessions sharing this worktree (cleanup only, never blocks)
               if (effectiveWorktreeCwd) {
-                // Check if any OTHER active session is using the same directory
                 for (const [otherSubChatId, otherCwd] of activeSessionWorktrees) {
                   if (otherSubChatId !== input.subChatId && otherCwd === effectiveWorktreeCwd) {
                     const otherSession = activeSessions.get(otherSubChatId)
-
-                    // Determine if the blocking session is actually still alive
                     const isAborted = !otherSession || otherSession.abortController.signal.aborted
                     const isZombie = otherSession && (Date.now() - otherSession.startedAt > 5 * 60 * 1000)
 
-                    // DB streamId is authoritative — if null, session is done
                     let isDbClean = false
                     try {
                       const otherSubChat = db
@@ -1544,7 +1538,6 @@ export const claudeRouter = router({
                       isDbClean = !otherSubChat?.streamId
                     } catch { /* non-fatal */ }
 
-                    // Evict if: controller aborted, DB says done, or zombie timeout
                     if (isAborted || isDbClean || isZombie) {
                       if (otherSession && !otherSession.abortController.signal.aborted) {
                         otherSession.abortController.abort()
@@ -1553,23 +1546,13 @@ export const claudeRouter = router({
                       activeSessionWorktrees.delete(otherSubChatId)
                       sessionCompletionPromises.delete(otherSubChatId)
                       console.log(`[claude] Evicted stale session ${otherSubChatId.slice(-8)} (aborted=${isAborted} dbClean=${isDbClean} zombie=${!!isZombie})`)
-                      continue
                     }
-                    emit.next({
-                      type: "error",
-                      errorText:
-                        "Another tab is already running in this workspace. Wait for it to finish or cancel it first.",
-                      debugInfo: { category: "WORKTREE_CONFLICT" },
-                    } as UIMessageChunk)
-                    emit.complete()
-                    return
                   }
                 }
               }
             }
           } catch (err) {
-            // Non-fatal: if the lookup fails, skip the check and let the session proceed
-            console.warn("[claude] Failed to check worktree conflict:", err)
+            console.warn("[claude] Failed to check worktree occupancy:", err)
           }
         }
 

@@ -3,7 +3,7 @@
  * Core visual component of the orchestrator tab.
  */
 
-import { memo, useState, useEffect, useCallback } from "react"
+import { memo, useState, useEffect, useCallback, useMemo } from "react"
 import {
   ChevronDown,
   ChevronRight,
@@ -22,6 +22,7 @@ import { useAtomValue } from "jotai"
 import { selectedProjectAtom } from "../../../../lib/atoms"
 import { toast } from "sonner"
 import { TaskCard } from "./task-card"
+import { MemoryBrain } from "../system-map/memory-brain"
 import type { OrchestrationRun, RunStatus, Autonomy } from "../../stores/orchestration-store"
 
 // Collapsible section wrapper
@@ -66,17 +67,29 @@ function PipelineSection({
   )
 }
 
-// Memory section — shows top memories and stats, with Build Brain option
+// Helper: derive memory state from relevance + staleness
+function deriveMemoryState(memory: {
+  relevanceScore: number
+  isStale?: boolean | null
+  isArchived?: boolean | null
+}): "active" | "cold" | "dead" {
+  if (memory.isArchived) return "dead"
+  if (memory.isStale) return "cold"
+  if (memory.relevanceScore < 20) return "cold"
+  return "active"
+}
+
+// Memory section — visual brain + stats, with Build Brain option
 function MemorySection({ projectId }: { projectId: string | null }) {
   const selectedProject = useAtomValue(selectedProjectAtom)
   const { data: stats, refetch: refetchStats } = trpc.memory.stats.useQuery(
     { projectId: projectId || "" },
-    { enabled: !!projectId },
+    { enabled: !!projectId, refetchInterval: 10_000 },
   )
 
   const { data: memories, refetch: refetchList } = trpc.memory.list.useQuery(
-    { projectId: projectId || "" },
-    { enabled: !!projectId },
+    { projectId: projectId || "", includeArchived: false, includeStale: true },
+    { enabled: !!projectId, refetchInterval: 10_000 },
   )
 
   const buildBrainMutation = trpc.ambient.buildBrain.useMutation({
@@ -104,12 +117,23 @@ function MemorySection({ projectId }: { projectId: string | null }) {
     })
   }, [selectedProject])
 
-  const allMemories = memories ?? []
+  // Map DB memories to the format MemoryBrain expects
+  const brainMemories = useMemo(() => {
+    if (!memories) return []
+    return memories.map((m) => ({
+      id: m.id,
+      category: m.category,
+      title: m.title,
+      content: m.content,
+      relevanceScore: m.relevanceScore,
+      state: deriveMemoryState(m),
+      updatedAt: m.updatedAt instanceof Date
+        ? m.updatedAt.toISOString()
+        : String(m.updatedAt ?? ""),
+    }))
+  }, [memories])
+
   const hasMemories = (stats?.total ?? 0) > 0
-  const [showAll, setShowAll] = useState(false)
-  const [expandedId, setExpandedId] = useState<string | null>(null)
-  const displayMemories = showAll ? allMemories : allMemories.slice(0, 5)
-  const hasMore = allMemories.length > 5
 
   return (
     <PipelineSection
@@ -117,9 +141,9 @@ function MemorySection({ projectId }: { projectId: string | null }) {
       icon={Brain}
       badge={stats ? `${stats.total} memories` : undefined}
     >
-      <div className="pt-2 space-y-1.5">
+      <div className="pt-2 space-y-2">
         {stats && (
-          <div className="flex gap-3 text-xs text-muted-foreground mb-2">
+          <div className="flex gap-3 text-xs text-muted-foreground mb-1">
             <span>{stats.total} total</span>
             {stats.staleCount > 0 && (
               <span className="text-yellow-500">{stats.staleCount} stale</span>
@@ -128,54 +152,7 @@ function MemorySection({ projectId }: { projectId: string | null }) {
           </div>
         )}
         {hasMemories ? (
-          <>
-            {displayMemories.map((m) => {
-              const isExpanded = expandedId === m.id
-              return (
-                <button
-                  key={m.id}
-                  onClick={() => setExpandedId(isExpanded ? null : m.id)}
-                  className="w-full text-left text-xs rounded bg-muted/50 hover:bg-muted/70 transition-colors cursor-pointer"
-                >
-                  <div className="flex items-start gap-2 px-2.5 py-1.5">
-                    <ChevronRight className={cn(
-                      "w-3 h-3 mt-0.5 shrink-0 text-muted-foreground transition-transform",
-                      isExpanded && "rotate-90",
-                    )} />
-                    <span className="text-[10px] px-1 py-0 rounded bg-foreground/10 text-foreground/70 shrink-0 capitalize">
-                      {m.category}
-                    </span>
-                    <span className={cn("text-foreground/80 flex-1 min-w-0", !isExpanded && "truncate")}>
-                      {m.title}
-                    </span>
-                  </div>
-                  {isExpanded && (
-                    <div className="px-2.5 pb-2 pt-1 border-t border-border/30 mx-2.5 text-foreground/60 whitespace-pre-wrap">
-                      {m.content}
-                      {m.linkedFiles && (() => {
-                        try {
-                          const files = typeof m.linkedFiles === "string" ? JSON.parse(m.linkedFiles) : m.linkedFiles
-                          return Array.isArray(files) && files.length > 0 ? (
-                            <div className="mt-1.5 text-[10px] text-muted-foreground">
-                              Files: {files.join(", ")}
-                            </div>
-                          ) : null
-                        } catch { return null }
-                      })()}
-                    </div>
-                  )}
-                </button>
-              )
-            })}
-            {hasMore && (
-              <button
-                onClick={() => setShowAll(!showAll)}
-                className="text-xs text-purple-400 hover:text-purple-300 transition-colors"
-              >
-                {showAll ? "Show less" : `Show all ${allMemories.length} memories`}
-              </button>
-            )}
-          </>
+          <MemoryBrain memories={brainMemories} />
         ) : (
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
