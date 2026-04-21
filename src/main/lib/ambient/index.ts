@@ -3,7 +3,6 @@
  * One agent per active project, managed via the ambientAgentRegistry.
  */
 
-import { AmbientFileWatcher } from "./file-watcher"
 import { AmbientGitMonitor } from "./git-monitor"
 import { AnalysisPipeline } from "./pipeline"
 import { BudgetTracker } from "./budget"
@@ -24,7 +23,6 @@ import type {
 } from "./types"
 
 export class AmbientAgent {
-  private fileWatcher: AmbientFileWatcher | null = null
   private gitMonitor: AmbientGitMonitor | null = null
   private pipeline: AnalysisPipeline
   private budget: BudgetTracker
@@ -74,54 +72,33 @@ export class AmbientAgent {
     // Mark as running immediately so the UI updates
     this.status = "running"
 
-    // Defer watcher initialization to next tick to avoid blocking the main process.
-    // Chokidar's initial file tree scan can monopolize the event loop on large projects.
-    setTimeout(() => {
-      if (this.status !== "running") return // Already stopped before init started
+    // Initialize git monitor only — NO chokidar file watcher.
+    // Chokidar's initial file tree scan freezes the Electron main process on large
+    // projects. Instead, the git monitor watches .git/index (2 file descriptors total).
+    // When .git/index changes (file saved, staged, committed), the git monitor fires
+    // events that the pipeline processes. This is much lighter than watching every file.
+    try {
+      this.gitMonitor = new AmbientGitMonitor(this.projectPath)
+      this.gitMonitor.on("git-event", (event: GitEvent) => {
+        this.lastEventAt = Date.now()
+        this.handleEvent({ kind: "git", event })
+      })
+      // File-batch events from periodic git diff poll (replaces chokidar)
+      this.gitMonitor.on("file-batch", (batch: FileBatch) => {
+        batch.projectId = this.projectId
+        this.lastEventAt = Date.now()
+        this.handleEvent({ kind: "file-batch", batch })
+      })
 
-      // Initialize file watcher
-      try {
-        this.fileWatcher = new AmbientFileWatcher({
-          projectPath: this.projectPath,
-          projectId: this.projectId,
-          ignorePatterns: this.config.ignorePatterns,
-        })
-
-        this.fileWatcher.on("batch", (batch: FileBatch) => {
-          this.lastEventAt = Date.now()
-          this.handleEvent({ kind: "file-batch", batch })
-        })
-
-        this.fileWatcher.waitForReady().then(() => {
-          console.log(`[Ambient] File watcher ready for ${this.projectId}`)
-        }).catch((err) => {
-          console.warn("[Ambient] File watcher init failed:", err.message)
-          this.fileWatcher?.dispose()
-          this.fileWatcher = null
-        })
-      } catch (err) {
-        console.warn("[Ambient] File watcher creation failed:", err)
-        this.fileWatcher = null
-      }
-
-      // Initialize git monitor
-      try {
-        this.gitMonitor = new AmbientGitMonitor(this.projectPath)
-        this.gitMonitor.on("git-event", (event: GitEvent) => {
-          this.lastEventAt = Date.now()
-          this.handleEvent({ kind: "git", event })
-        })
-
-        this.gitMonitor.start().catch((err) => {
-          console.warn("[Ambient] Git monitor init failed:", err.message)
-          this.gitMonitor?.dispose()
-          this.gitMonitor = null
-        })
-      } catch (err) {
-        console.warn("[Ambient] Git monitor creation failed:", err)
+      this.gitMonitor.start().catch((err) => {
+        console.warn("[Ambient] Git monitor init failed:", err.message)
+        this.gitMonitor?.dispose()
         this.gitMonitor = null
-      }
-    }, 100) // Small delay so toggle mutation returns and UI updates first
+      })
+    } catch (err) {
+      console.warn("[Ambient] Git monitor creation failed:", err)
+      this.gitMonitor = null
+    }
 
     // --- Lifecycle scheduler ---
     // Run score decay immediately (catch-up for missed days), then every 24h
@@ -155,8 +132,6 @@ export class AmbientAgent {
   stop(): void {
     if (this.status === "stopped") return
 
-    this.fileWatcher?.dispose()
-    this.fileWatcher = null
     this.gitMonitor?.dispose()
     this.gitMonitor = null
     this.pipeline.dispose()

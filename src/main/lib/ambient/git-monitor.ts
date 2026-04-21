@@ -4,10 +4,16 @@
  */
 
 import { EventEmitter } from "events"
+import { exec } from "child_process"
+import { promisify } from "util"
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { gitWatcherRegistry } from "../git/watcher/git-watcher"
-import type { GitEvent } from "./types"
+import type { GitEvent, FileBatch, FileChangeEvent } from "./types"
+
+const execAsync = promisify(exec)
+
+const DIFF_POLL_INTERVAL = 60_000 // Check for changed files every 60s
 
 export class AmbientGitMonitor extends EventEmitter {
   private projectPath: string
@@ -15,6 +21,8 @@ export class AmbientGitMonitor extends EventEmitter {
   private lastHead: string | null = null
   private isDisposed = false
   private mergeConflictEmitted = false // Dedup: only emit once per conflict
+  private diffPollTimer: ReturnType<typeof setInterval> | null = null
+  private lastKnownFiles: Set<string> = new Set() // Track seen changes to dedup
 
   constructor(projectPath: string) {
     super()
@@ -37,6 +45,19 @@ export class AmbientGitMonitor extends EventEmitter {
     } else {
       this.unsubscribe = unsub
     }
+
+    // Periodic lightweight diff poll — replaces chokidar file watcher.
+    // Uses `git diff` and `git ls-files --others` (instant, zero fd overhead)
+    // to detect working-tree changes for the ambient pipeline.
+    this.diffPollTimer = setInterval(() => {
+      if (this.isDisposed) return
+      this.emitChangedFiles().catch(() => {})
+    }, DIFF_POLL_INTERVAL)
+
+    // Run once on start after a short delay
+    setTimeout(() => {
+      if (!this.isDisposed) this.emitChangedFiles().catch(() => {})
+    }, 5000)
   }
 
   dispose(): void {
@@ -44,7 +65,52 @@ export class AmbientGitMonitor extends EventEmitter {
     this.isDisposed = true
     this.unsubscribe?.()
     this.unsubscribe = null
+    if (this.diffPollTimer) clearInterval(this.diffPollTimer)
+    this.diffPollTimer = null
     this.removeAllListeners()
+  }
+
+  /**
+   * Use `git diff` to detect modified files and emit as a file-batch event.
+   * This replaces the chokidar file watcher — zero fd overhead, instant.
+   */
+  private async emitChangedFiles(): Promise<void> {
+    try {
+      // Get modified tracked files + untracked files in one shot
+      const [diffResult, untrackedResult] = await Promise.all([
+        execAsync("git diff --name-only", { cwd: this.projectPath, timeout: 5000 }).catch(() => ({ stdout: "" })),
+        execAsync("git ls-files --others --exclude-standard", { cwd: this.projectPath, timeout: 5000 }).catch(() => ({ stdout: "" })),
+      ])
+
+      const files = [
+        ...diffResult.stdout.trim().split("\n").filter(Boolean),
+        ...untrackedResult.stdout.trim().split("\n").filter(Boolean),
+      ]
+
+      if (files.length === 0) return
+
+      // Dedup against last known set — only emit genuinely new changes
+      const newFiles = files.filter(f => !this.lastKnownFiles.has(f))
+      if (newFiles.length === 0) return
+
+      // Update known set (keep it bounded)
+      this.lastKnownFiles = new Set(files.slice(0, 200))
+
+      // Build file-batch event (limit to 8 files per batch)
+      const path = await import("path")
+      const batch: FileBatch = {
+        files: newFiles.slice(0, 8).map((filePath): FileChangeEvent => ({
+          path: join(this.projectPath, filePath),
+          type: "change",
+          ext: path.extname(filePath).toLowerCase(),
+        })),
+        timestamp: Date.now(),
+        projectId: "", // Set by the agent when processing
+        projectPath: this.projectPath,
+      }
+
+      this.emit("file-batch", batch)
+    } catch { /* non-critical */ }
   }
 
   private checkGitState(): void {

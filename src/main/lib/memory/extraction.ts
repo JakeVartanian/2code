@@ -49,7 +49,27 @@ Rules:
 Respond with ONLY a valid JSON array, no other text.`
 
 /**
+ * Extract text content from a message, handling both flat `content` (string)
+ * and the 2Code parts-based format `{ parts: [{ type: "text", text }] }`.
+ */
+function extractMessageText(m: Record<string, unknown>): string {
+  // Flat content string (standard Anthropic format)
+  if (typeof m.content === "string") return m.content
+
+  // Parts-based format (2Code internal message format)
+  if (Array.isArray(m.parts)) {
+    return (m.parts as Array<Record<string, unknown>>)
+      .filter((p) => p?.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string)
+      .join("\n")
+  }
+
+  return ""
+}
+
+/**
  * Parse conversation messages into a text summary for extraction.
+ * Handles both flat `content` and 2Code's `parts`-based message format.
  */
 function summarizeMessages(messages: unknown[]): string {
   const lines: string[] = []
@@ -60,13 +80,14 @@ function summarizeMessages(messages: unknown[]): string {
     if (!msg || typeof msg !== "object") continue
     const m = msg as Record<string, unknown>
     const role = m.role as string | undefined
-    const content = m.content as string | undefined
 
-    if (!role || !content) continue
-    if (role !== "user" && role !== "assistant") continue
+    if (!role || (role !== "user" && role !== "assistant")) continue
+
+    const text = extractMessageText(m)
+    if (!text) continue
 
     // Truncate individual messages
-    const truncated = content.length > 1000 ? content.slice(0, 1000) + "..." : content
+    const truncated = text.length > 1000 ? text.slice(0, 1000) + "..." : text
     const line = `[${role}]: ${truncated}`
 
     if (charCount + line.length > MAX_CHARS) break
