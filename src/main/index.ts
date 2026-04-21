@@ -1062,6 +1062,15 @@ if (gotTheLock) {
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") {
       app.quit()
+    } else {
+      // macOS: pause GAAD agents to prevent zombie resource usage
+      // (git subprocesses, timers keep running with no windows open)
+      try {
+        const { ambientAgentRegistry } = require("./lib/ambient")
+        for (const agent of ambientAgentRegistry.getAll().values()) {
+          agent.pause()
+        }
+      } catch { /* non-critical */ }
     }
   })
 

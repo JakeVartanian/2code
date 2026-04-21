@@ -653,12 +653,24 @@ export const chatsRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(({ input }) => {
       const db = getDatabase()
-      return db
+      const restored = db
         .update(chats)
         .set({ archivedAt: null })
         .where(eq(chats.id, input.id))
         .returning()
         .get()
+
+      // Restart GAAD agent if it was stopped due to all chats being archived
+      if (restored?.projectId) {
+        try {
+          const project = db.select().from(projects).where(eq(projects.id, restored.projectId)).get()
+          if (project?.ambientEnabled && !ambientAgentRegistry.get(restored.projectId)) {
+            ambientAgentRegistry.getOrCreate(restored.projectId, project.path).catch(() => {})
+          }
+        } catch { /* non-critical */ }
+      }
+
+      return restored
     }),
 
   /**

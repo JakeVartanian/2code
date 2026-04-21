@@ -22,6 +22,7 @@ export class AmbientGitMonitor extends EventEmitter {
   private isDisposed = false
   private mergeConflictEmitted = false // Dedup: only emit once per conflict
   private diffPollTimer: ReturnType<typeof setInterval> | null = null
+  private initialPollTimer: ReturnType<typeof setTimeout> | null = null
   private lastKnownFiles: Set<string> = new Set() // Track seen changes to dedup
 
   constructor(projectPath: string) {
@@ -55,7 +56,7 @@ export class AmbientGitMonitor extends EventEmitter {
     }, DIFF_POLL_INTERVAL)
 
     // Run once on start after a short delay
-    setTimeout(() => {
+    this.initialPollTimer = setTimeout(() => {
       if (!this.isDisposed) this.emitChangedFiles().catch(() => {})
     }, 5000)
   }
@@ -67,6 +68,8 @@ export class AmbientGitMonitor extends EventEmitter {
     this.unsubscribe = null
     if (this.diffPollTimer) clearInterval(this.diffPollTimer)
     this.diffPollTimer = null
+    if (this.initialPollTimer) clearTimeout(this.initialPollTimer)
+    this.initialPollTimer = null
     this.removeAllListeners()
   }
 

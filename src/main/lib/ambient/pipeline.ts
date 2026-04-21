@@ -62,6 +62,10 @@ export class AnalysisPipeline {
   private pendingBatch: FileBatch | null = null
   // Cold start: timestamp when pipeline was created
   private createdAt = Date.now()
+  // Abort controller for graceful dispose — signals all in-flight async work
+  private disposeController = new AbortController()
+  // Synthesis concurrency guard — only one synthesis at a time
+  private synthesisBusy = false
 
   constructor(
     projectId: string,
@@ -80,6 +84,7 @@ export class AnalysisPipeline {
   }
 
   dispose(): void {
+    this.disposeController.abort() // Signal all in-flight async work to bail
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     if (this.chatBatchTimer) clearTimeout(this.chatBatchTimer)
     this.recentSuggestions.clear()
@@ -351,7 +356,7 @@ export class AnalysisPipeline {
       // Post-session synthesis: use accumulated session data + memories
       if (event.activityType === "session-complete" && this.provider) {
         await this.runPostSessionSynthesis(event).catch(err => {
-          console.warn("[Ambient] Post-session synthesis failed:", err.message)
+          console.warn("[GAAD] Post-session synthesis failed:", err.message)
         })
       }
       return
@@ -374,7 +379,7 @@ export class AnalysisPipeline {
       if (!this.chatBatchTimer) {
         this.chatBatchTimer = setTimeout(() => {
           this.flushChatBatch().catch(err => {
-            console.warn("[Ambient] Chat batch triage failed:", err.message)
+            console.warn("[GAAD] Chat batch triage failed:", err.message)
           })
         }, this.CHAT_BATCH_WINDOW)
       }
@@ -446,26 +451,72 @@ export class AnalysisPipeline {
   private async runPostSessionSynthesis(event: ChatActivityEvent): Promise<void> {
     if (!this.provider) return
     if (this.budget.getDegradationTier() !== "normal") return
+    if (this.synthesisBusy) return // One synthesis at a time
+    if (this.disposeController.signal.aborted) return
+
+    this.synthesisBusy = true
+    try {
+      await this._runPostSessionSynthesisInner(event)
+    } finally {
+      this.synthesisBusy = false
+    }
+  }
+
+  private async _runPostSessionSynthesisInner(event: ChatActivityEvent): Promise<void> {
+    if (!this.provider) return
+    if (this.disposeController.signal.aborted) return
 
     const sessionSummary = buildSessionSummary(event.subChatId)
-    if (!sessionSummary || sessionSummary.length < 50) return // Too short
+    if (!sessionSummary || sessionSummary.length < 50) return
 
     // Drain the session buffer
     drainSessionEvents(event.subChatId)
 
-    // Get project memories for context
+    // Get project memories for context (increased budget for synthesis)
     let memoryContext = ""
     try {
-      const memoryResult = await getMemoriesForInjection(this.projectId, null, 1500)
+      const memoryResult = await getMemoriesForInjection(this.projectId, null, 2500)
       memoryContext = memoryResult.markdown
     } catch { /* non-critical */ }
 
-    const system = `You are a project-aware development assistant. Review the completed session activity and project knowledge below. Identify any follow-up tasks, risks, or patterns worth flagging.
+    // Determine session type for dynamic prompt adaptation
+    const meta = event.sessionMeta
+    const hasErrors = (meta?.errorCount ?? 0) > 0
+    const isExploring = (meta?.filesRead?.length ?? 0) > (meta?.filesModified?.length ?? 0) * 2
+    const isBroadChange = (meta?.filesModified?.length ?? 0) >= 5
+    const isQuick = (meta?.toolCallCount ?? 0) < 3
 
-Respond with a JSON array of suggestions (0-3 items max). Each item:
-{"title": "short title", "description": "1-2 sentence explanation", "category": "bug"|"security"|"performance"|"test-gap"|"dead-code", "confidence": 50-90, "files": ["path1", "path2"]}
+    // Build dynamic emphasis based on session type
+    let dynamicEmphasis = ""
+    if (hasErrors) dynamicEmphasis = "\nThis session had errors — prioritize debugging insights, root cause analysis, and prevention strategies."
+    else if (isExploring) dynamicEmphasis = "\nThis session was mostly reading/exploring code — prioritize architecture insights, next steps, and what was learned."
+    else if (isBroadChange) dynamicEmphasis = "\nThis session made broad changes across many files — prioritize testing, integration risks, and what to verify before shipping."
 
-If nothing notable, respond with an empty array: []`
+    const maxSuggestions = isQuick ? 1 : 3
+
+    const system = `You are GAAD — Good Ambient Agent Directions — a brilliant co-founder and engineering partner who just watched this coding session. You think about code AND product AND business. You're always scanning for:
+
+🔥 WHAT'S NEXT: Based on what just happened, what feature, improvement, or optimization should they build next? Think about what users would love, what would make the product stickier, what would save time.
+
+💡 NEW IDEAS: Spot opportunities — new tools to integrate, APIs to leverage, UX patterns to borrow, architecture improvements that unlock future capabilities.
+
+💰 MONETIZATION: If relevant, suggest how this work creates value — premium features, efficiency gains, integrations that expand the market, UX improvements that reduce churn.
+
+📦 TOOLS & TECH: Recommend specific libraries, frameworks, or services that would accelerate the work or improve quality.
+
+🧠 MEMORY WORTHY: Identify patterns, conventions, gotchas, or decisions worth remembering for future sessions.
+
+⚡ MOMENTUM: What would keep development velocity high? Quick wins, blocker removal, technical debt that's slowing things down.
+${dynamicEmphasis}
+
+Respond with a JSON array (0-${maxSuggestions} items). Each item:
+{"title": "conversational forward-thinking title", "description": "2-4 sentences explaining what and WHY", "category": "next-step"|"idea"|"monetization"|"tool"|"memory"|"momentum"|"risk"|"bug"|"test-gap", "confidence": 50-95, "evidence": "specific file or tool reference from the session", "files": ["path1"], "suggestedPrompt": "a ready-to-use prompt that continues this work intelligently"}
+
+Rules:
+- Every suggestion MUST have a non-empty "evidence" field citing specific session data
+- Think like a founder who writes code — how does this make the product better and more valuable?
+- Don't surface trivial observations. Be genuinely useful.
+- If nothing notable happened, respond with: []`
 
     const user = `## Session Activity
 ${sessionSummary}
@@ -473,11 +524,22 @@ ${sessionSummary}
 ## Project Knowledge
 ${memoryContext || "(no project memories yet)"}`
 
-    try {
-      const { text } = await this.provider.callHaiku(system, user)
-      if (!text) return
+    // Weighted escalation: Sonnet for substantive sessions, Haiku for quick ones
+    const score = (meta?.toolCallCount ?? 0)
+                + (meta?.errorCount ?? 0) * 3
+                + (meta?.filesModified?.length ?? 0) * 2
+    const useSonnet = score >= 12 && this.provider.info.supportsSonnet
 
-      // Parse suggestions
+    try {
+      const modelLabel = useSonnet ? "sonnet" : "haiku"
+      console.log(`[GAAD] Post-session synthesis (${modelLabel}, score=${score})`)
+
+      const { text } = useSonnet
+        ? await this.provider.callSonnet(system, user)
+        : await this.provider.callHaiku(system, user)
+
+      if (!text || this.disposeController.signal.aborted) return
+
       const jsonMatch = text.match(/\[[\s\S]*\]/)
       if (!jsonMatch) return
 
@@ -486,28 +548,48 @@ ${memoryContext || "(no project memories yet)"}`
         description: string
         category: string
         confidence: number
+        evidence?: string
         files?: string[]
+        suggestedPrompt?: string
       }>
 
       if (!Array.isArray(suggestions)) return
 
-      for (const s of suggestions.slice(0, 3)) {
+      for (const s of suggestions.slice(0, maxSuggestions)) {
         if (!s.title || !s.description) continue
+        // Reject suggestions without evidence grounding
+        if (!s.evidence || s.evidence.trim().length === 0) continue
+
         const result: HeuristicResult = {
-          category: (s.category as any) ?? "bug",
-          severity: s.confidence >= 70 ? "warning" : "info",
+          category: (s.category as any) ?? "next-step",
+          severity: s.confidence >= 75 ? "warning" : "info",
           title: s.title,
-          description: s.description,
-          confidence: Math.min(90, Math.max(30, s.confidence ?? 50)),
+          description: `${s.description}${s.evidence ? `\n\n_Evidence: ${s.evidence}_` : ""}`,
+          confidence: Math.min(95, Math.max(30, s.confidence ?? 50)),
           triggerFiles: s.files ?? [],
           triggerEvent: "session-synthesis" as any,
         }
+
         if (!this.isRecentDuplicate(result)) {
-          this.persistSuggestion(result, undefined, "haiku")
+          this.persistSuggestion(result, s.suggestedPrompt, modelLabel)
+
+          // Auto-save "memory" category suggestions to project memory
+          if (s.category === "memory" && s.confidence >= 90) {
+            this.writeToMemory({
+              title: s.title,
+              description: s.description,
+              category: "memory" as any,
+              severity: "info",
+              confidence: s.confidence,
+              triggerFiles: s.files ?? [],
+              suggestedPrompt: s.suggestedPrompt ?? "",
+              tokensUsed: { input: 0, output: 0 },
+            })
+          }
         }
       }
     } catch (err) {
-      console.warn("[Ambient] Synthesis parse error:", err)
+      console.warn("[GAAD] Synthesis parse error:", err)
     }
   }
 
@@ -670,10 +752,10 @@ ${memoryContext || "(no project memories yet)"}`
         })
         .run()
 
-      console.log(`[Ambient] Memory written: ${analysis.title}`)
+      console.log(`[GAAD] Memory written: ${analysis.title}`)
     } catch (err) {
       // Non-critical — don't fail the pipeline
-      console.warn("[Ambient] Failed to write memory:", err)
+      console.warn("[GAAD] Failed to write memory:", err)
     }
   }
 

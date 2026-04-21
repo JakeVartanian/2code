@@ -34,6 +34,7 @@ import {
 import { anthropicAccounts, anthropicSettings, chats, claudeCodeCredentials, getDatabase, projects as projectsTable, subChats, projectMemories } from "../../db"
 import { getMemoriesForInjection } from "../../memory/injection"
 import { extractMemoriesAsync } from "../../memory/extraction"
+import { emitChatEvent } from "../../ambient/chat-bridge"
 
 // Track injected memory IDs per session for post-session feedback
 const sessionInjectedMemories = new Map<string, string[]>()
@@ -1751,8 +1752,7 @@ export const claudeRouter = router({
 
               // Ambient chat bridge: notify of user prompt
               if (resolvedProjectId) {
-                void import("../../ambient/chat-bridge").then(({ emitChatEvent }) => {
-                  emitChatEvent({
+                emitChatEvent({
                     subChatId: input.subChatId,
                     chatId: input.chatId,
                     projectId: resolvedProjectId!,
@@ -1760,7 +1760,6 @@ export const claudeRouter = router({
                     summary: input.prompt.slice(0, 500),
                     timestamp: Date.now(),
                   })
-                }).catch(() => {})
               }
             }
 
@@ -3398,8 +3397,7 @@ ${prompt}
                           const toolFiles: string[] = []
                           if (toolInput?.file_path) toolFiles.push(toolInput.file_path)
                           if (toolInput?.path) toolFiles.push(toolInput.path)
-                          void import("../../ambient/chat-bridge").then(({ emitChatEvent }) => {
-                            emitChatEvent({
+                          emitChatEvent({
                               subChatId: input.subChatId,
                               chatId: input.chatId,
                               projectId: resolvedProjectId!,
@@ -3409,7 +3407,6 @@ ${prompt}
                               filePaths: toolFiles.length > 0 ? toolFiles : undefined,
                               timestamp: Date.now(),
                             })
-                          }).catch(() => {})
                         }
                         break
                       case "tool-output-available":
@@ -3455,8 +3452,7 @@ ${prompt}
                           const failedPart = parts.find(p => p.toolCallId === (chunk as any).toolCallId)
                           const errorFiles: string[] = []
                           if (failedPart?.input?.file_path) errorFiles.push(failedPart.input.file_path)
-                          void import("../../ambient/chat-bridge").then(({ emitChatEvent }) => {
-                            emitChatEvent({
+                          emitChatEvent({
                               subChatId: input.subChatId,
                               chatId: input.chatId,
                               projectId: resolvedProjectId!,
@@ -3466,7 +3462,6 @@ ${prompt}
                               filePaths: errorFiles.length > 0 ? errorFiles : undefined,
                               timestamp: Date.now(),
                             })
-                          }).catch(() => {})
                         }
                         break
                       }
@@ -3801,7 +3796,7 @@ ${prompt}
             }
 
             // Auto-extract project memories from completed session (fire-and-forget)
-            if (messageCount >= 3) {
+            if (messageCount >= 1) {
               try {
                 const chatForMemory = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
                 if (chatForMemory?.projectId) {
@@ -3814,25 +3809,50 @@ ${prompt}
                     console.error("[SD] Memory extraction failed:", err)
                   })
 
-                  // Ambient chat bridge: notify session complete
-                  void import("../../ambient/chat-bridge").then(({ emitChatEvent }) => {
-                    emitChatEvent({
-                      subChatId: input.subChatId,
-                      chatId: input.chatId,
-                      projectId: chatForMemory.projectId,
-                      activityType: "session-complete",
-                      summary: `Session completed: ${messageCount} messages`,
-                      timestamp: Date.now(),
-                    })
-                  }).catch(() => {})
+                  // Extract files touched during session (used by both GAAD and memory feedback)
+                  const filesInSession = extractFilesFromMessages(messagesToSave ?? [])
+
+                  // Extract last assistant text for GAAD synthesis context
+                  let lastAssistantExcerpt = ""
+                  try {
+                    const finalMsgs = messagesToSave ?? []
+                    for (let i = finalMsgs.length - 1; i >= 0; i--) {
+                      if (finalMsgs[i]?.role === "assistant") {
+                        const textParts = finalMsgs[i].parts?.filter((p: any) => p.type === "text")
+                        if (textParts?.length) {
+                          lastAssistantExcerpt = textParts.map((p: any) => p.text).join(" ").slice(0, 500)
+                          break
+                        }
+                      }
+                    }
+                  } catch { /* non-critical */ }
+
+                  // GAAD: notify session complete with rich metadata
+                  const toolParts = parts.filter((p: any) => p.type?.startsWith("tool-"))
+                  emitChatEvent({
+                    subChatId: input.subChatId,
+                    chatId: input.chatId,
+                    projectId: chatForMemory.projectId,
+                    activityType: "session-complete",
+                    summary: `Session completed: ${messageCount} messages`,
+                    filePaths: [...filesInSession.read, ...filesInSession.modified],
+                    timestamp: Date.now(),
+                    sessionMeta: {
+                      durationSeconds: metadata.durationMs ? Math.round(metadata.durationMs / 1000) : undefined,
+                      model: metadata.model,
+                      filesRead: filesInSession.read,
+                      filesModified: filesInSession.modified,
+                      toolCallCount: toolParts.length,
+                      errorCount: toolParts.filter((p: any) => p.state === "error").length,
+                      lastAssistantExcerpt,
+                    },
+                  })
 
                   // Post-session memory feedback — track which injected memories were useful
                   try {
                     const injectedIds = sessionInjectedMemories.get(input.subChatId)
                     if (injectedIds && injectedIds.length > 0) {
                       const { recordSessionFeedback } = require("../../ambient/memory-cycling")
-                      // Extract files touched from the session messages
-                      const filesInSession = extractFilesFromMessages(messagesToSave ?? [])
                       recordSessionFeedback({
                         projectId: chatForMemory.projectId,
                         injectedMemoryIds: injectedIds,

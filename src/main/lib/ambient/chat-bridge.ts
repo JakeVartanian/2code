@@ -32,7 +32,8 @@ export function emitChatEvent(event: ChatActivityEvent): void {
     }
   }
 
-  queueMicrotask(() => {
+  // Use setImmediate to yield to I/O between events (queueMicrotask blocks I/O)
+  setImmediate(() => {
     try {
       const agent = ambientAgentRegistry.get(event.projectId)
       if (!agent) return // No agent running — silently drop
@@ -42,7 +43,7 @@ export function emitChatEvent(event: ChatActivityEvent): void {
       // Log for debugging (single line, no spam)
       if (event.activityType === "session-complete" || event.activityType === "tool-error") {
         console.log(
-          `[ChatBridge] ${event.activityType} → ambient (project=${event.projectId.slice(0, 8)}, sub=${event.subChatId.slice(0, 8)})`,
+          `[GAAD] ${event.activityType} → pipeline (project=${event.projectId.slice(0, 8)}, sub=${event.subChatId.slice(0, 8)})`,
         )
       }
     } catch {
@@ -86,31 +87,62 @@ export function buildSessionSummary(subChatId: string): string {
     if (e.toolName) tools.add(e.toolName)
   }
 
-  const parts: string[] = []
-  parts.push(`Session had ${prompts.length} user messages, ${toolCalls.length} tool calls, ${errors.length} errors.`)
-
-  if (files.size > 0) {
-    parts.push(`Files touched: ${[...files].slice(0, 20).join(", ")}${files.size > 20 ? ` (+${files.size - 20} more)` : ""}`)
-  }
-
-  if (tools.size > 0) {
-    parts.push(`Tools used: ${[...tools].join(", ")}`)
-  }
-
-  // Include user prompt themes (first 3 prompts, truncated)
-  if (prompts.length > 0) {
-    parts.push("User topics:")
-    for (const p of prompts.slice(0, 3)) {
-      parts.push(`- ${p.summary.slice(0, 150)}`)
+  // Split files into read vs modified (the distinction tells a story)
+  const filesRead = new Set<string>()
+  const filesModified = new Set<string>()
+  for (const e of events) {
+    if (e.filePaths) {
+      const isEdit = e.toolName === "Edit" || e.toolName === "Write" || e.toolName === "file_edit" || e.toolName === "file_write"
+      for (const f of e.filePaths) {
+        if (isEdit) filesModified.add(f)
+        else filesRead.add(f)
+      }
     }
   }
 
-  // Include errors
+  // Get session metadata from the most recent event (session-complete has it)
+  const lastEvent = events[events.length - 1]
+  const meta = lastEvent?.sessionMeta
+
+  const parts: string[] = []
+  parts.push(`Session: ${prompts.length} user messages, ${toolCalls.length} tool calls, ${errors.length} errors.`)
+
+  if (meta?.durationSeconds) {
+    parts.push(`Duration: ${Math.round(meta.durationSeconds / 60)}min. Model: ${meta.model ?? "unknown"}.`)
+  }
+
+  if (filesModified.size > 0) {
+    parts.push(`Files MODIFIED (${filesModified.size}): ${[...filesModified].slice(0, 15).join(", ")}`)
+  }
+  if (filesRead.size > 0) {
+    parts.push(`Files READ (${filesRead.size}): ${[...filesRead].slice(0, 10).join(", ")}`)
+  }
+
+  // Tool call sequence (shows the working pattern)
+  if (toolCalls.length > 0) {
+    const sequence = toolCalls.slice(0, 30).map(e => e.toolName ?? "?").join(" → ")
+    parts.push(`Tool sequence: ${sequence}`)
+  }
+
+  // All user prompts (not just 3 — the full conversation arc matters)
+  if (prompts.length > 0) {
+    parts.push("\nUser messages:")
+    for (const p of prompts.slice(0, 10)) {
+      parts.push(`- ${p.summary.slice(0, 300)}`)
+    }
+  }
+
+  // Errors with context
   if (errors.length > 0) {
-    parts.push("Errors encountered:")
+    parts.push("\nErrors encountered:")
     for (const e of errors.slice(0, 5)) {
       parts.push(`- [${e.toolName ?? "unknown"}] ${e.summary.slice(0, 200)}`)
     }
+  }
+
+  // Last assistant response excerpt (what Claude concluded)
+  if (meta?.lastAssistantExcerpt) {
+    parts.push(`\nClaude's last response (excerpt): ${meta.lastAssistantExcerpt}`)
   }
 
   return parts.join("\n")

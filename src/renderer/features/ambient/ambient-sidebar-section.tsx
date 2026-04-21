@@ -110,7 +110,7 @@ export function AmbientSidebarSection({
       useAmbientStore.getState().setAgentStatus(variables.enabled ? "running" : "stopped")
     },
     onError: () => {
-      toast.error("Failed to toggle ambient agent")
+      toast.error("Failed to toggle GAAD")
     },
   })
 
@@ -138,7 +138,7 @@ export function AmbientSidebarSection({
       >
         {expanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
         <Zap className="h-3 w-3 flex-shrink-0" />
-        <span className="flex-1 text-left">Ambient</span>
+        <span className="flex-1 text-left">GAAD</span>
 
         {/* Badge count */}
         {badgeCount > 0 && (
@@ -174,11 +174,11 @@ export function AmbientSidebarSection({
                     : agentStatus === "paused" ? "bg-amber-400"
                     : "bg-zinc-500",
                 )} />
-                {agentStatus === "running" ? "Watching" : agentStatus === "paused" ? "Paused" : "Off"}
+                {agentStatus === "running" ? "Active" : agentStatus === "paused" ? "Paused" : "Off"}
               </span>
             </TooltipTrigger>
             <TooltipContent side="right">
-              {agentStatus === "running" ? "Click to stop ambient agent" : "Click to start ambient agent"}
+              {agentStatus === "running" ? "Click to pause GAAD" : "Click to start GAAD"}
             </TooltipContent>
           </Tooltip>
         )}

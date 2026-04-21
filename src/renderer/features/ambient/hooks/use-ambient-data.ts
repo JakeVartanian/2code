@@ -4,7 +4,6 @@
  */
 
 import { useEffect, useRef } from "react"
-import { toast } from "sonner"
 import { trpc } from "../../../lib/trpc"
 import { useAmbientStore } from "../store"
 
@@ -91,19 +90,8 @@ export function useAmbientData(
       onData: (event) => {
         if (event.type === "new-suggestion") {
           // Invalidate the query cache to trigger immediate refetch
+          // GAAD chip component handles inline notification — no toast needed
           utils.ambient.listSuggestions.invalidate({ projectId: projectId! })
-
-          // Show toast notification for warning/error severity
-          const suggestion = (event as any).suggestion
-          if (suggestion) {
-            const sev = suggestion.severity as string
-            if (sev === "error" || sev === "warning") {
-              toast(suggestion.title, {
-                description: `${suggestion.category} · ${suggestion.confidence}% confidence`,
-                duration: sev === "error" ? 12000 : 8000,
-              })
-            }
-          }
         }
         if (event.type === "suggestion-dismissed" && event.suggestionId) {
           removeSuggestion(event.suggestionId)

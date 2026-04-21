@@ -59,8 +59,13 @@ export interface CallClaudeResult {
  * don't need tool execution permissions.
  */
 export async function callClaude(opts: CallClaudeOptions): Promise<CallClaudeResult> {
-  // 1. Get OAuth token
-  const token = await getClaudeCodeTokenFresh()
+  // 1. Get OAuth token (with 10s timeout to prevent indefinite hangs)
+  const token = await Promise.race([
+    getClaudeCodeTokenFresh(),
+    new Promise<null>((_, reject) =>
+      setTimeout(() => reject(new Error("Token fetch timeout (10s)")), 10_000),
+    ),
+  ])
   if (!token) {
     throw new Error("No OAuth token available — user must connect Claude account in Settings")
   }
@@ -102,6 +107,7 @@ export async function callClaude(opts: CallClaudeOptions): Promise<CallClaudeRes
 
   try {
     // 6. Run query through CLI binary — plan mode, no tools needed
+    const claudeBinaryPath = getBundledClaudeBinaryPath()
     const stream = query({
       prompt: fullPrompt,
       options: {
@@ -111,6 +117,7 @@ export async function callClaude(opts: CallClaudeOptions): Promise<CallClaudeRes
         systemPrompt: opts.system,
         env: finalEnv,
         permissionMode: "plan" as const,
+        pathToClaudeCodeExecutable: claudeBinaryPath,
       },
     })
 

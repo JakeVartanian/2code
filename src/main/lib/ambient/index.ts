@@ -57,9 +57,9 @@ export class AmbientAgent {
     this.ambientProvider = provider
     this.pipeline.setProvider(provider)
     if (provider) {
-      console.log(`[Ambient] Provider initialized: ${provider.type}`)
+      console.log(`[GAAD] Provider initialized: ${provider.type}`)
     } else {
-      console.log("[Ambient] No AI provider available — running Tier 0 only")
+      console.log("[GAAD] No AI provider available — running Tier 0 only")
     }
   }
 
@@ -92,29 +92,29 @@ export class AmbientAgent {
       })
 
       this.gitMonitor.start().catch((err) => {
-        console.warn("[Ambient] Git monitor init failed:", err.message)
+        console.warn("[GAAD] Git monitor init failed:", err.message)
         this.gitMonitor?.dispose()
         this.gitMonitor = null
       })
     } catch (err) {
-      console.warn("[Ambient] Git monitor creation failed:", err)
+      console.warn("[GAAD] Git monitor creation failed:", err)
       this.gitMonitor = null
     }
 
     // --- Lifecycle scheduler ---
     // Run score decay immediately (catch-up for missed days), then every 24h
-    try { applyScoreDecay(this.projectId) } catch (e) { console.warn("[Ambient] Initial decay error:", e) }
+    try { applyScoreDecay(this.projectId) } catch (e) { console.warn("[GAAD] Initial decay error:", e) }
 
     this.schedulerTimers.push(
       setInterval(() => {
-        try { applyScoreDecay(this.projectId) } catch (e) { console.warn("[Ambient] Decay error:", e) }
+        try { applyScoreDecay(this.projectId) } catch (e) { console.warn("[GAAD] Decay error:", e) }
       }, 24 * 60 * 60 * 1000), // 24h
     )
 
     // Trim low-value memories every 6h
     this.schedulerTimers.push(
       setInterval(() => {
-        try { trimMemories(this.projectId) } catch (e) { console.warn("[Ambient] Trim error:", e) }
+        try { trimMemories(this.projectId) } catch (e) { console.warn("[GAAD] Trim error:", e) }
       }, 6 * 60 * 60 * 1000), // 6h
     )
 
@@ -123,11 +123,11 @@ export class AmbientAgent {
       setInterval(() => {
         if (!this.ambientProvider) return
         runWeeklySynthesis(this.projectId, this.projectPath, this.ambientProvider)
-          .catch(e => console.warn("[Ambient] Synthesis error:", e))
+          .catch(e => console.warn("[GAAD] Synthesis error:", e))
       }, 7 * 24 * 60 * 60 * 1000), // 7 days
     )
 
-    console.log(`[Ambient] Started for project ${this.projectId}`)
+    console.log(`[GAAD] Started for project ${this.projectId}`)
   }
 
   stop(): void {
@@ -142,7 +142,7 @@ export class AmbientAgent {
     this.schedulerTimers = []
 
     this.status = "stopped"
-    console.log(`[Ambient] Stopped for project ${this.projectId}`)
+    console.log(`[GAAD] Stopped for project ${this.projectId}`)
   }
 
   pause(): void {
@@ -226,7 +226,7 @@ export class AmbientAgent {
     this.pipeline.processEvent(event).then(() => {
       this.lastAnalysisAt = Date.now()
     }).catch((err) => {
-      console.error("[Ambient] Pipeline error:", err)
+      console.error("[GAAD] Pipeline error:", err)
     })
   }
 }
