@@ -6,8 +6,7 @@
 import { exec } from "node:child_process"
 import { readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { callAnthropic } from "../claude/api"
-import { getClaudeCodeTokenFresh } from "../trpc/routers/claude"
+import { callClaude } from "../claude/api"
 import {
   DECOMPOSITION_SYSTEM_PROMPT,
   buildDecompositionUserPrompt,
@@ -112,11 +111,6 @@ async function getGitLog(projectPath: string): Promise<string> {
 export async function decomposeGoal(
   input: DecomposeInput,
 ): Promise<DecomposedPlan> {
-  const token = await getClaudeCodeTokenFresh()
-  if (!token) {
-    throw new Error("Not authenticated with Claude. Please connect your account in Settings.")
-  }
-
   const fileTree = getFileTree(input.projectPath)
   const recentGitLog = await getGitLog(input.projectPath)
 
@@ -127,12 +121,10 @@ export async function decomposeGoal(
     projectMemories: input.projectMemories,
   })
 
-  const { text } = await callAnthropic({
-    token,
-    model: "claude-sonnet-4-5-20250929",
-    maxTokens: 4096,
+  const { text } = await callClaude({
     system: DECOMPOSITION_SYSTEM_PROMPT,
     userMessage: userPrompt,
+    maxTokens: 4096,
     timeoutMs: 90_000,
   })
 

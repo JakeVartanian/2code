@@ -12,8 +12,7 @@ import {
 } from "./agent-utils"
 import { discoverInstalledPlugins, getPluginComponentPaths } from "../../plugins"
 import { getEnabledPlugins } from "./claude-settings"
-import { callAnthropic } from "../../claude/api"
-import { getClaudeCodeTokenFresh } from "./claude"
+import { callClaude } from "../../claude/api"
 
 // Shared procedure for listing agents
 const listAgentsProcedure = publicProcedure
@@ -334,11 +333,6 @@ export const agentsRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const token = await getClaudeCodeTokenFresh()
-      if (!token) {
-        throw new Error("Not authenticated with Claude. Please sign in first.")
-      }
-
       const systemPrompt = `You are an expert at creating Claude subagent definitions. When given a description of what a subagent should do, generate a complete, thorough agent definition.
 
 Respond with ONLY a valid JSON object (no markdown fences, no explanation) with these fields:
@@ -355,12 +349,10 @@ Respond with ONLY a valid JSON object (no markdown fences, no explanation) with 
 
 Make the system prompt specific and actionable, not generic. Include concrete examples of the kind of analysis or output the agent should produce.`
 
-      const { text } = await callAnthropic({
-        token,
-        model: "claude-sonnet-4-5-20250514",
-        maxTokens: 2048,
+      const { text } = await callClaude({
         system: systemPrompt,
         userMessage: `Create a subagent for: ${input.description}`,
+        maxTokens: 2048,
       })
 
       // Extract JSON from the response

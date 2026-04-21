@@ -6,8 +6,7 @@
 import { getDatabase } from "../db"
 import { orchestrationTasks, subChats } from "../db/schema"
 import { eq } from "drizzle-orm"
-import { callAnthropic } from "../claude/api"
-import { getClaudeCodeTokenFresh } from "../trpc/routers/claude"
+import { callClaude } from "../claude/api"
 import {
   SUPERVISOR_DIAGNOSIS_SYSTEM_PROMPT,
   buildDiagnosisUserPrompt,
@@ -189,15 +188,6 @@ export async function diagnoseStuckWorker(
     }
   }
 
-  const token = await getClaudeCodeTokenFresh()
-  if (!token) {
-    return {
-      diagnosis: "Cannot diagnose — not authenticated",
-      intervention: "escalate",
-      reason: "Authentication required for diagnosis",
-    }
-  }
-
   const userPrompt = buildDiagnosisUserPrompt({
     taskDescription,
     lastMessages,
@@ -205,12 +195,10 @@ export async function diagnoseStuckWorker(
   })
 
   try {
-    const { text } = await callAnthropic({
-      token,
-      model: "claude-haiku-4-5-20251001",
-      maxTokens: 512,
+    const { text } = await callClaude({
       system: SUPERVISOR_DIAGNOSIS_SYSTEM_PROMPT,
       userMessage: userPrompt,
+      maxTokens: 512,
       timeoutMs: 30_000,
     })
 

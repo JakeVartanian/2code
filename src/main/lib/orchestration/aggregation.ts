@@ -3,8 +3,7 @@
  * using a lightweight Claude call.
  */
 
-import { callAnthropic } from "../claude/api"
-import { getClaudeCodeTokenFresh } from "../trpc/routers/claude"
+import { callClaude } from "../claude/api"
 import {
   AGGREGATION_SYSTEM_PROMPT,
   buildAggregationUserPrompt,
@@ -27,21 +26,13 @@ export interface AggregationInput {
 export async function aggregateResults(
   input: AggregationInput,
 ): Promise<string> {
-  const token = await getClaudeCodeTokenFresh()
-  if (!token) {
-    // Fallback: generate a simple summary without Claude
-    return generateFallbackSummary(input)
-  }
-
   const userPrompt = buildAggregationUserPrompt(input)
 
   try {
-    const { text } = await callAnthropic({
-      token,
-      model: "claude-haiku-4-5-20251001",
-      maxTokens: 1024,
+    const { text } = await callClaude({
       system: AGGREGATION_SYSTEM_PROMPT,
       userMessage: userPrompt,
+      maxTokens: 1024,
       timeoutMs: 30_000,
     })
     return text || generateFallbackSummary(input)

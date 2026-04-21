@@ -1,9 +1,14 @@
 /**
- * Ambient provider abstraction — handles API calls to Anthropic or OpenRouter.
- * Selects the right endpoint, model ID, request format, and auth based on available credentials.
+ * Ambient provider abstraction — handles AI calls for background features.
+ *
+ * ╔═══════════════════════════════════════════════════════════════════════╗
+ * ║  ALL AI CALLS GO THROUGH THE BUNDLED CLI BINARY.                    ║
+ * ║  The AnthropicProvider uses callClaude() which spawns the CLI       ║
+ * ║  subprocess with CLAUDE_CODE_OAUTH_TOKEN — never direct API calls.  ║
+ * ╚═══════════════════════════════════════════════════════════════════════╝
  */
 
-import { callAnthropic } from "../claude/api"
+import { callClaude } from "../claude/api"
 import type { AmbientProviderInfo, AmbientProviderType } from "./types"
 
 export interface AmbientProviderCallResult {
@@ -20,12 +25,9 @@ export interface AmbientProvider {
   callSonnet(system: string, user: string): Promise<AmbientProviderCallResult>
 }
 
-// ============ ANTHROPIC PROVIDER ============
+// ============ CLI-BASED PROVIDER (via bundled Claude binary) ============
 
-const HAIKU_MODEL = "claude-haiku-4-5-20251001"
-const SONNET_MODEL = "claude-sonnet-4-5-20250929"
-
-class AnthropicProvider implements AmbientProvider {
+class CliProvider implements AmbientProvider {
   type: AmbientProviderType = "anthropic"
   info: AmbientProviderInfo = {
     type: "anthropic",
@@ -33,32 +35,12 @@ class AnthropicProvider implements AmbientProvider {
     supportsSonnet: true,
   }
 
-  constructor(private getToken: () => Promise<string | null>) {}
-
   async callHaiku(system: string, user: string): Promise<AmbientProviderCallResult> {
-    return this.call(HAIKU_MODEL, system, user, 1024)
+    return callClaude({ system, userMessage: user, maxTokens: 1024, timeoutMs: 120_000 })
   }
 
   async callSonnet(system: string, user: string): Promise<AmbientProviderCallResult> {
-    return this.call(SONNET_MODEL, system, user, 4096)
-  }
-
-  private async call(
-    model: string,
-    system: string,
-    user: string,
-    maxTokens: number,
-  ): Promise<AmbientProviderCallResult> {
-    const token = await this.getToken()
-    if (!token) throw new Error("No OAuth token available for ambient API call")
-    return callAnthropic({
-      token,
-      model,
-      system,
-      userMessage: user,
-      maxTokens,
-      timeoutMs: 120_000,
-    })
+    return callClaude({ system, userMessage: user, maxTokens: 4096, timeoutMs: 120_000 })
   }
 }
 
@@ -145,17 +127,20 @@ class OpenRouterProvider implements AmbientProvider {
 
 /**
  * Create the appropriate ambient provider based on available credentials.
- * Resolution order: Anthropic OAuth → OpenRouter → null (Tier 0 only)
+ * Resolution order: CLI (Anthropic OAuth) → OpenRouter → null (Tier 0 only)
+ *
+ * The getAnthropicToken param is kept for backward compatibility but the
+ * CliProvider handles token resolution internally via callClaude().
  */
 export async function createAmbientProvider(
   getAnthropicToken: () => Promise<string | null>,
   openRouterKey: string | null,
   openRouterFreeOnly: boolean = false,
 ): Promise<AmbientProvider | null> {
-  // Try Anthropic first (pass getter so token refreshes automatically)
+  // Try CLI-based Anthropic provider first
   const anthropicToken = await getAnthropicToken()
   if (anthropicToken) {
-    return new AnthropicProvider(getAnthropicToken)
+    return new CliProvider()
   }
 
   // Try OpenRouter

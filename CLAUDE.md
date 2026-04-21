@@ -32,6 +32,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 If an optimization introduces user-visible latency, breaks parallel workflows, or makes behavior unpredictable — it's not an optimization, it's a regression.
 
+## ⛔ ABSOLUTE RULE: CLI-Only AI Calls — NO Direct API Access
+
+**Every single AI call in this app MUST go through the bundled Claude CLI binary.** This is non-negotiable.
+
+```
+╔══════════════════════════════════════════════════════════════════════════╗
+║  NEVER import @anthropic-ai/sdk and call client.messages.create()      ║
+║  NEVER call api.anthropic.com directly via fetch()                     ║
+║  NEVER pass OAuth tokens as Authorization: Bearer headers              ║
+║  NEVER create new Anthropic() client instances                         ║
+║                                                                        ║
+║  ALWAYS use callClaude() from src/main/lib/claude/api.ts               ║
+║  ALWAYS route through the CLI binary via @anthropic-ai/claude-agent-sdk║
+║  ALWAYS authenticate via CLAUDE_CODE_OAUTH_TOKEN env var → subprocess  ║
+╚══════════════════════════════════════════════════════════════════════════╝
+```
+
+**Why:** OAuth tokens issued by `platform.claude.com` do NOT work as direct API bearer tokens. The Anthropic API rejects them with `"OAuth authentication is currently not supported."` They ONLY work when passed to the CLI binary via `CLAUDE_CODE_OAUTH_TOKEN` env var, which handles the auth internally.
+
+**For interactive chat sessions:** Use `query()` from `@anthropic-ai/claude-agent-sdk` (see `claude.ts` router).
+
+**For background one-shot calls** (ambient agent, memory extraction, orchestration, agent generation): Use `callClaude()` from `src/main/lib/claude/api.ts`, which wraps the same CLI binary in plan mode.
+
+**The only exception** is OpenRouter, which uses its own API key via direct fetch (not OAuth).
+
+If you are tempted to "simplify" by calling the Anthropic SDK directly — **stop**. It will break auth for every user. This rule exists because it was broken before and caused a production-blocking 401 error.
+
 ## What is this?
 
 **2Code** - A local-first Electron desktop app for AI-powered code assistance. Users create chat sessions linked to local project folders, interact with Claude in Plan or Agent mode, and see real-time tool execution (bash, file edits, web search, etc.).
@@ -500,7 +527,7 @@ This flow is battle-tested and fragile by nature. Any "cleanup" risks breaking a
 |-------|-----------|
 | Binary not found | Run `bun run claude:download` |
 | OAuth token ignored in dev | `ANTHROPIC_API_KEY` is stripped; ensure OAuth connection via Settings → Claude Code |
-| "OAuth authentication is currently not supported" | OAuth tokens must be written as `.credentials.json` in `CLAUDE_CONFIG_DIR`, NOT passed via `ANTHROPIC_AUTH_TOKEN` env var |
+| "OAuth authentication is currently not supported" | OAuth tokens CANNOT be used as direct API keys. All calls must go through the CLI binary via `CLAUDE_CODE_OAUTH_TOKEN` env var (see "CLI-Only AI Calls" rule above) |
 | OpenRouter key stripped | Pass via `customEnv`, not shell env |
 | Nested session detection | `CLAUDECODE` env key is always stripped from the child process |
 | Shell env stale after nvm/brew changes | Call `clearClaudeEnvCache()` and restart the app |

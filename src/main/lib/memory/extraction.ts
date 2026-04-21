@@ -7,8 +7,7 @@ import { getDatabase } from "../db"
 import { projectMemories } from "../db/schema"
 import { eq, and } from "drizzle-orm"
 import { createId } from "../db/utils"
-import { callAnthropic } from "../claude/api"
-import { getClaudeCodeTokenFresh } from "../trpc/routers/claude"
+import { callClaude } from "../claude/api"
 
 /** Valid memory categories */
 export const MEMORY_CATEGORIES = [
@@ -149,19 +148,10 @@ export async function extractMemoriesAsync(
     const conversationText = summarizeMessages(messages)
     if (conversationText.length < 200) return // Too short to extract from
 
-    // Use OAuth token (same as all other orchestration API calls)
-    const token = await getClaudeCodeTokenFresh()
-    if (!token) {
-      console.log("[memory:extract] No auth token available for extraction, skipping")
-      return
-    }
-
-    const { text } = await callAnthropic({
-      token,
-      model: "claude-haiku-4-5-20251001",
-      maxTokens: 1024,
+    const { text } = await callClaude({
       system: EXTRACTION_SYSTEM_PROMPT,
       userMessage: `Extract project memories from this conversation:\n\n${conversationText}`,
+      maxTokens: 1024,
       timeoutMs: 30_000,
     })
 

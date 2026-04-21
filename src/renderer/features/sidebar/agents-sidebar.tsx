@@ -1215,11 +1215,11 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
                     </div>
                   )}
 
-                  {/* ── ACTION NEEDED ── */}
+                  {/* ── DETECTED ── */}
                   {detectedMissing.length > 0 && (
                     <div>
-                      <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-400/70 mb-1.5">
-                        Detected — needs key
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400/70 mb-1.5">
+                        Detected
                         <span className="ml-1 normal-case tracking-normal font-normal">{detectedMissing.length}</span>
                       </p>
                       <div className="flex flex-col gap-0.5">
@@ -1230,12 +1230,12 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
                               onClick={() => setExpandedItem(expandedItem === apiKey.key ? null : apiKey.key)}
                               className="flex items-center gap-1.5 py-1 px-1 w-full rounded hover:bg-muted/50 transition-colors text-left"
                             >
-                              <AlertCircle className="h-3 w-3 shrink-0 text-amber-500" />
+                              <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
                               <span className="text-xs truncate text-foreground flex-1">{apiKey.name}</span>
-                              <span className="text-[10px] text-amber-500/60">connect</span>
+                              <span className="text-[10px] text-emerald-500/60">connect</span>
                             </button>
                             {expandedItem === apiKey.key && (
-                              <div className="ml-5 mb-1.5 p-2 rounded bg-muted/30 border border-amber-500/15">
+                              <div className="ml-5 mb-1.5 p-2 rounded bg-muted/30 border border-emerald-500/15">
                                 <p className="text-[10px] text-muted-foreground/60 mb-1.5">Set in <code className="text-[10px]">.env</code> or shell:</p>
                                 {apiKey.envVars.map((envVar) => (
                                   <div key={envVar} className="flex items-center gap-1.5 mb-1">
