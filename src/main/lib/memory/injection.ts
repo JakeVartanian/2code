@@ -24,7 +24,17 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
 }
 
 /**
- * Score a memory based on relevance, recency, frequency, and context hint matching.
+ * Extract file paths mentioned in text (for matching against linkedFiles).
+ */
+function extractFilePaths(text: string): string[] {
+  // Match common file path patterns: src/foo/bar.ts, ./config.json, etc.
+  const pathPattern = /(?:^|\s|["'`(])([.\w/-]+\.(?:ts|tsx|js|jsx|json|css|html|md|py|go|rs|sql|yml|yaml|toml|sh))\b/gi
+  const matches = text.matchAll(pathPattern)
+  return [...new Set([...matches].map(m => m[1]))]
+}
+
+/**
+ * Score a memory based on relevance, recency, frequency, context hint, and file matching.
  */
 function scoreMemory(memory: ProjectMemory, contextHint: string | null): number {
   // Exclude stale memories entirely (check first to avoid wasted computation)
@@ -42,6 +52,26 @@ function scoreMemory(memory: ProjectMemory, contextHint: string | null): number 
 
   // Boost: +5 per access count (capped at +25)
   score += Math.min((memory.accessCount ?? 0) * 5, 25)
+
+  // LinkedFiles matching: +30 if user's mentioned files match memory's linked files
+  // This is the highest-signal relevance indicator — files the user is working on
+  if (contextHint && memory.linkedFiles) {
+    try {
+      const linked: string[] = JSON.parse(memory.linkedFiles)
+      if (linked.length > 0) {
+        const mentionedFiles = extractFilePaths(contextHint)
+        const hasFileMatch = mentionedFiles.some(mentioned =>
+          linked.some(linkedFile =>
+            mentioned.endsWith(linkedFile) || linkedFile.endsWith(mentioned) ||
+            mentioned.includes(linkedFile) || linkedFile.includes(mentioned)
+          )
+        )
+        if (hasFileMatch) {
+          score += 30 // Strongest boost — direct file relevance
+        }
+      }
+    } catch { /* malformed linkedFiles JSON */ }
+  }
 
   // Context hint matching (if provided)
   if (contextHint) {

@@ -3397,12 +3397,21 @@ ${prompt}
                           const toolFiles: string[] = []
                           if (toolInput?.file_path) toolFiles.push(toolInput.file_path)
                           if (toolInput?.path) toolFiles.push(toolInput.path)
+                          // Build rich summary with tool input excerpt
+                          let toolSummary = `${chunk.toolName}(${toolFiles[0] ?? ""})`
+                          if (chunk.toolName === "Bash" && toolInput?.command) {
+                            toolSummary = `Bash: ${String(toolInput.command).slice(0, 200)}`
+                          } else if (chunk.toolName === "Edit" && toolInput?.old_string) {
+                            toolSummary = `Edit ${toolFiles[0] ?? ""}: "${String(toolInput.old_string).slice(0, 80)}" → "${String(toolInput.new_string ?? "").slice(0, 80)}"`
+                          } else if (chunk.toolName === "Write" && toolInput?.file_path) {
+                            toolSummary = `Write ${toolFiles[0]}: ${String(toolInput.content ?? "").slice(0, 100)}`
+                          }
                           emitChatEvent({
                               subChatId: input.subChatId,
                               chatId: input.chatId,
                               projectId: resolvedProjectId!,
                               activityType: "tool-call",
-                              summary: `${chunk.toolName}(${toolFiles[0] ?? ""})`.slice(0, 500),
+                              summary: toolSummary.slice(0, 500),
                               toolName: chunk.toolName,
                               filePaths: toolFiles.length > 0 ? toolFiles : undefined,
                               timestamp: Date.now(),

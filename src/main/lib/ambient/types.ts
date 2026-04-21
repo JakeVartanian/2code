@@ -12,13 +12,9 @@ export type SuggestionCategory =
   | "dead-code"
   | "dependency"
   // GAAD partner categories
-  | "next-step"    // what to build/do next
-  | "idea"         // new feature, integration, or approach
-  | "monetization" // revenue opportunity, premium feature, cost savings
-  | "tool"         // library, service, or dev tool recommendation
-  | "memory"       // pattern worth remembering (auto-saved)
-  | "momentum"     // quick win, blocker removal, velocity booster
-  | "risk"         // something that might bite you
+  | "next-step"    // what to build/do next (includes ideas, momentum, tools)
+  | "risk"         // something that might bite you (includes security, performance)
+  | "memory"       // pattern worth remembering (auto-saved to project memory)
 
 export type SuggestionSeverity = "info" | "warning" | "error"
 

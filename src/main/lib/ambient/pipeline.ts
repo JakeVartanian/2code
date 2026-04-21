@@ -509,40 +509,39 @@ export class AnalysisPipeline {
     // Determine session type for dynamic prompt adaptation
     const meta = event.sessionMeta
     const hasErrors = (meta?.errorCount ?? 0) > 0
+    const hasModifications = (meta?.filesModified?.length ?? 0) > 0
     const isExploring = (meta?.filesRead?.length ?? 0) > (meta?.filesModified?.length ?? 0) * 2
     const isBroadChange = (meta?.filesModified?.length ?? 0) >= 5
     const isQuick = (meta?.toolCallCount ?? 0) < 3
 
+    // Require at least 1 file modification or 1 error to trigger synthesis
+    if (!hasErrors && !hasModifications && !isExploring) return
+
     // Build dynamic emphasis based on session type
     let dynamicEmphasis = ""
-    if (hasErrors) dynamicEmphasis = "\nThis session had errors — prioritize debugging insights, root cause analysis, and prevention strategies."
-    else if (isExploring) dynamicEmphasis = "\nThis session was mostly reading/exploring code — prioritize architecture insights, next steps, and what was learned."
-    else if (isBroadChange) dynamicEmphasis = "\nThis session made broad changes across many files — prioritize testing, integration risks, and what to verify before shipping."
+    if (hasErrors) dynamicEmphasis = "\nThis session had errors — what went wrong and how to prevent it next time?"
+    else if (isBroadChange) dynamicEmphasis = "\nBroad changes across many files — what should be tested, and are there integration risks?"
+    else if (isExploring) dynamicEmphasis = "\nMostly reading/exploring — what was learned, and what's the next concrete step?"
 
     const maxSuggestions = isQuick ? 1 : 3
 
-    const system = `You are GAAD — Good Ambient Agent Directions — a brilliant co-founder and engineering partner who just watched this coding session. You think about code AND product AND business. You're always scanning for:
+    const system = `You are GAAD — a sharp development partner who just watched this coding session. Your job: identify 1-${maxSuggestions} things the developer would NOT notice themselves.
 
-🔥 WHAT'S NEXT: Based on what just happened, what feature, improvement, or optimization should they build next? Think about what users would love, what would make the product stickier, what would save time.
-
-💡 NEW IDEAS: Spot opportunities — new tools to integrate, APIs to leverage, UX patterns to borrow, architecture improvements that unlock future capabilities.
-
-💰 MONETIZATION: If relevant, suggest how this work creates value — premium features, efficiency gains, integrations that expand the market, UX improvements that reduce churn.
-
-📦 TOOLS & TECH: Recommend specific libraries, frameworks, or services that would accelerate the work or improve quality.
-
-🧠 MEMORY WORTHY: Identify patterns, conventions, gotchas, or decisions worth remembering for future sessions.
-
-⚡ MOMENTUM: What would keep development velocity high? Quick wins, blocker removal, technical debt that's slowing things down.
+Focus ONLY on what's genuinely useful:
+- NEXT STEP: The single most impactful thing to do next (feature, fix, optimization, tool to try)
+- RISK: Something that could break, conflict, or cause problems they haven't noticed
+- BUG: An actual defect or error pattern you spotted
+- TEST GAP: Missing test coverage for what was just changed
+- MEMORY: A pattern, gotcha, or convention worth saving for future sessions
 ${dynamicEmphasis}
 
 Respond with a JSON array (0-${maxSuggestions} items). Each item:
-{"title": "conversational forward-thinking title", "description": "2-4 sentences explaining what and WHY", "category": "next-step"|"idea"|"monetization"|"tool"|"memory"|"momentum"|"risk"|"bug"|"test-gap", "confidence": 50-95, "evidence": "specific file or tool reference from the session", "files": ["path1"], "suggestedPrompt": "a ready-to-use prompt that continues this work intelligently"}
+{"title": "specific, actionable title", "description": "2-3 sentences: what, why, and what to do about it", "category": "next-step"|"risk"|"bug"|"test-gap"|"memory", "confidence": 50-95, "evidence": "cite a specific file path or tool call from the session", "files": ["affected/file/paths"], "suggestedPrompt": "A copy-pasteable prompt that references specific files and describes the exact task. No editing needed."}
 
 Rules:
-- Every suggestion MUST have a non-empty "evidence" field citing specific session data
-- Think like a founder who writes code — how does this make the product better and more valuable?
-- Don't surface trivial observations. Be genuinely useful.
+- Every suggestion MUST cite a specific file or tool call from the session in "evidence"
+- suggestedPrompt must reference actual files and describe a concrete task
+- Only surface things the developer would genuinely benefit from hearing
 - If nothing notable happened, respond with: []`
 
     const user = `## Session Activity
