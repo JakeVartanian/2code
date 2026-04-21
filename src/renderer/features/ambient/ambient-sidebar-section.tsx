@@ -3,7 +3,7 @@
  * implement/snooze/dismiss actions, badge count, and history view.
  */
 
-import { memo, useCallback, useState } from "react"
+import { memo, useCallback, useMemo, useState } from "react"
 import { useAtom, useSetAtom } from "jotai"
 import {
   ChevronDown,
@@ -22,6 +22,7 @@ import {
   Loader2,
   FileCode,
   History,
+  Power,
 } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -84,9 +85,11 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 export function AmbientSidebarSection({
   projectId,
+  projectPath,
   chatId,
 }: {
   projectId: string | null
+  projectPath: string | null
   chatId: string | null
 }) {
   useAmbientData(projectId)
@@ -94,6 +97,8 @@ export function AmbientSidebarSection({
   const [expanded, setExpanded] = useAtom(ambientPanelExpandedAtom)
   const { suggestions, agentStatus, budgetStatus } = useAmbientStore()
   const [showHistory, setShowHistory] = useAtom(suggestionHistoryExpandedAtom)
+
+  const toggleMutation = trpc.ambient.toggle.useMutation()
 
   const pendingSuggestions = suggestions.filter(s => s.status === "pending")
   const visibleSuggestions = pendingSuggestions.slice(0, MAX_VISIBLE)
@@ -125,15 +130,38 @@ export function AmbientSidebarSection({
           </span>
         )}
 
+        {/* Toggle + Status dot */}
+        {projectId && projectPath && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                role="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleMutation.mutate({
+                    projectId,
+                    projectPath,
+                    enabled: agentStatus !== "running",
+                  })
+                }}
+                className={cn(
+                  "inline-flex items-center justify-center h-4 w-4 rounded transition-colors",
+                  agentStatus === "running"
+                    ? "text-teal-500 hover:text-teal-400"
+                    : "text-muted-foreground/40 hover:text-muted-foreground",
+                )}
+              >
+                <Power className="h-2.5 w-2.5" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              {agentStatus === "running" ? "Stop ambient agent" : "Start ambient agent"}
+            </TooltipContent>
+          </Tooltip>
+        )}
+
         {/* Status dot */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            Agent {agentStatus}
-          </TooltipContent>
-        </Tooltip>
+        <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
       </button>
 
       {/* Expanded content */}
@@ -189,8 +217,8 @@ export function AmbientSidebarSection({
             </div>
           )}
 
-          {/* Injection weight indicator */}
-          <InjectionWeightBar projectId={projectId} />
+          {/* Injection weight indicator + brain status */}
+          <InjectionWeightBar projectId={projectId} projectPath={projectPath} />
         </div>
       )}
     </div>
@@ -494,7 +522,7 @@ function SuggestionHistory({
 
 // ============ INJECTION WEIGHT BAR ============
 
-function InjectionWeightBar({ projectId }: { projectId: string | null }) {
+function InjectionWeightBar({ projectId, projectPath }: { projectId: string | null; projectPath: string | null }) {
   const { data: brainStatus, refetch: refetchBrain } = trpc.ambient.getBrainStatus.useQuery(
     { projectId: projectId! },
     { enabled: !!projectId, refetchInterval: 60_000 },
@@ -504,7 +532,37 @@ function InjectionWeightBar({ projectId }: { projectId: string | null }) {
     onSuccess: () => { refetchBrain() },
   })
 
-  if (!brainStatus || brainStatus.memoryCount === 0) return null
+  const buildBrainMutation = trpc.ambient.buildBrain.useMutation({
+    onSuccess: () => {
+      refetchBrain()
+      toast.success("Brain built successfully")
+    },
+    onError: () => {
+      toast.error("Failed to build brain")
+    },
+  })
+
+  if (!brainStatus) return null
+
+  // No memories yet — show build brain CTA
+  if (brainStatus.memoryCount === 0) {
+    return (
+      <div className="px-2 pt-1.5 pb-0.5">
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] text-muted-foreground/50">No project brain yet</p>
+          {projectId && projectPath && (
+            <button
+              onClick={() => buildBrainMutation.mutate({ projectId, projectPath })}
+              disabled={buildBrainMutation.isPending}
+              className="text-[9px] px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-400 hover:bg-teal-500/20 transition-colors disabled:opacity-50"
+            >
+              {buildBrainMutation.isPending ? "Building..." : "Build Brain"}
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   const estimatedTokens = brainStatus.memoryCount * 80
   const effectiveTokens = Math.min(estimatedTokens, 3000)
@@ -516,8 +574,8 @@ function InjectionWeightBar({ projectId }: { projectId: string | null }) {
     : "bg-green-500/60"
 
   const label = isHeavy
-    ? `~${effectiveTokens} tokens injected — Trim will archive low-value memories`
-    : `~${effectiveTokens} tokens injected per session`
+    ? `${brainStatus.memoryCount} memories (~${effectiveTokens}t) — Trim will archive low-value memories`
+    : `${brainStatus.memoryCount} memories (~${effectiveTokens}t injected per session)`
 
   return (
     <div className="px-2 pt-1">

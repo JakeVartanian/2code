@@ -1,7 +1,8 @@
 /**
  * SystemMapView — Main container for the System Map tab.
- * Composes all section components into a 6-zone CSS Grid layout
- * providing a calm, centered overview of the workspace's AI state.
+ * Hero: Codebase Coverage Heatmap grid showing directory-level
+ * audit coverage, confidence, severity, and plan/memory overlays.
+ * Below: existing workspace AI state sections (memory, skills, etc.).
  */
 
 import { memo } from "react"
@@ -25,7 +26,7 @@ import { SkillNodes } from "./skill-nodes"
 import { AgentNodes } from "./agent-nodes"
 import { OrchestrationSummary } from "./orchestration-summary"
 import { AmbientAlerts } from "./ambient-alerts"
-import { ConnectionLines } from "./connection-lines"
+import { CoverageHeatmap } from "./coverage-heatmap/coverage-heatmap"
 
 interface SystemMapViewProps {
   chatId: string
@@ -40,11 +41,15 @@ export const SystemMapView = memo(function SystemMapView({
 
   return (
     <div className="relative h-full overflow-y-auto overflow-x-hidden">
-      {/* SVG connection overlay */}
-      <ConnectionLines connections={[]} />
-
-      {/* Content grid */}
+      {/* Content */}
       <div className="relative z-10 p-4 space-y-4">
+        {/* Hero: Codebase Coverage Heatmap */}
+        <CoverageHeatmap
+          projectId={selectedProject?.id ?? null}
+          projectPath={selectedProject?.path ?? null}
+          chatId={chatId}
+        />
+
         {/* Workflow stages — full width */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-3">
           <WorkflowStages

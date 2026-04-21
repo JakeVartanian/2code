@@ -215,6 +215,21 @@ export const memoryRouter = router({
     }),
 
   /**
+   * Delete all memories for a project. Used for brain rebuild from scratch.
+   */
+  deleteAllForProject: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      const deleted = db
+        .delete(projectMemories)
+        .where(eq(projectMemories.projectId, input.projectId))
+        .returning()
+        .all()
+      return { deleted: deleted.length }
+    }),
+
+  /**
    * Extract memories from a completed session (fire-and-forget Haiku call).
    */
   extractFromSession: publicProcedure

@@ -2036,15 +2036,19 @@ const ChatViewInner = memo(function ChatViewInner({
       }
       // Validate Chat object is ready before calling regenerate.
       // @ai-sdk/react's Chat.makeRequest accesses internal store state that may be
-      // undefined if the Chat hasn't fully initialized. regenerate() is async so
-      // try-catch won't catch rejections — use .catch() instead.
+      // undefined if the Chat hasn't fully initialized. The SDK can throw synchronously
+      // (accessing undefined .state) so we need both try-catch AND .catch().
       const chat = agentChatStore.get(subChatId)
       if (chat) {
-        regenerateRef.current().catch((error: unknown) => {
-          console.error("[active-chat] Auto-regenerate failed:", error)
-          // Reset flag so user can manually retry
+        try {
+          regenerateRef.current().catch((error: unknown) => {
+            console.error("[active-chat] Auto-regenerate failed:", error)
+            hasTriggeredAutoGenerateRef.current = false
+          })
+        } catch (error) {
+          console.error("[active-chat] Auto-regenerate threw sync error:", error)
           hasTriggeredAutoGenerateRef.current = false
-        })
+        }
       } else {
         // Chat not ready yet, will retry on next effect
         hasTriggeredAutoGenerateRef.current = false
@@ -2198,6 +2202,15 @@ const ChatViewInner = memo(function ChatViewInner({
   imagesRef.current = images
   const filesRef = useRef(files)
   filesRef.current = files
+
+  // Double-Enter on empty input sends "Continue." to resume Claude's work
+  const handleContinue = useCallback(async () => {
+    if (isStreamingRef.current || isArchived) return
+    sendMessageRef.current({
+      role: "user",
+      parts: [{ type: "text", text: "Continue." }],
+    })
+  }, [isArchived])
 
   const handleSend = useCallback(async () => {
     // Block sending while sandbox is still being set up
@@ -3139,6 +3152,7 @@ const ChatViewInner = memo(function ChatViewInner({
         firstQueueItemId={queue[0]?.id}
         onInputContentChange={setInputHasContent}
         onSubmitWithQuestionAnswer={submitWithQuestionAnswerCallback}
+        onContinue={handleContinue}
         onProviderChange={handleInputProviderChange}
         onContinueWithProvider={handleContinueWithProvider}
         isActive={isActive}
@@ -5901,6 +5915,7 @@ Make sure to preserve all functionality from both branches when resolving confli
 
           {/* GitHub Workflow Panel — shows branch/stage/action for this chat */}
           <GitWorkflowPanel
+            key={chatId}
             chatId={chatId}
             worktreePath={worktreePath}
             branch={(agentChat as any)?.branch ?? null}

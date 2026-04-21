@@ -9,6 +9,11 @@ import { AnalysisPipeline } from "./pipeline"
 import { BudgetTracker } from "./budget"
 import { createAmbientProvider, type AmbientProvider } from "./provider"
 import { loadAmbientConfig, isQuietHours } from "./config"
+import { applyScoreDecay, trimMemories } from "./memory-cycling"
+import { runWeeklySynthesis } from "./synthesis"
+import { eq, and } from "drizzle-orm"
+import { getDatabase } from "../db"
+import { ambientSuggestions } from "../db/schema"
 import type {
   AmbientConfig,
   AmbientEvent,
@@ -29,6 +34,8 @@ export class AmbientAgent {
   private status: AmbientAgentStatus = "stopped"
   private lastEventAt: number | null = null
   private lastAnalysisAt: number | null = null
+  private schedulerTimers: ReturnType<typeof setInterval>[] = []
+  private ambientProvider: AmbientProvider | null = null
 
   constructor(projectId: string, projectPath: string) {
     this.projectId = projectId
@@ -48,6 +55,7 @@ export class AmbientAgent {
     openRouterFreeOnly: boolean = false,
   ): Promise<void> {
     const provider = await createAmbientProvider(getAnthropicToken, openRouterKey, openRouterFreeOnly)
+    this.ambientProvider = provider
     this.pipeline.setProvider(provider)
     if (provider) {
       console.log(`[Ambient] Provider initialized: ${provider.type}`)
@@ -86,6 +94,33 @@ export class AmbientAgent {
     await this.gitMonitor.start()
 
     this.status = "running"
+
+    // --- Lifecycle scheduler ---
+    // Run score decay immediately (catch-up for missed days), then every 24h
+    try { applyScoreDecay(this.projectId) } catch (e) { console.warn("[Ambient] Initial decay error:", e) }
+
+    this.schedulerTimers.push(
+      setInterval(() => {
+        try { applyScoreDecay(this.projectId) } catch (e) { console.warn("[Ambient] Decay error:", e) }
+      }, 24 * 60 * 60 * 1000), // 24h
+    )
+
+    // Trim low-value memories every 6h
+    this.schedulerTimers.push(
+      setInterval(() => {
+        try { trimMemories(this.projectId) } catch (e) { console.warn("[Ambient] Trim error:", e) }
+      }, 6 * 60 * 60 * 1000), // 6h
+    )
+
+    // Weekly synthesis (guarded by provider availability)
+    this.schedulerTimers.push(
+      setInterval(() => {
+        if (!this.ambientProvider) return
+        runWeeklySynthesis(this.projectId, this.projectPath, this.ambientProvider)
+          .catch(e => console.warn("[Ambient] Synthesis error:", e))
+      }, 7 * 24 * 60 * 60 * 1000), // 7 days
+    )
+
     console.log(`[Ambient] Started for project ${this.projectId}`)
   }
 
@@ -97,6 +132,11 @@ export class AmbientAgent {
     this.gitMonitor?.dispose()
     this.gitMonitor = null
     this.pipeline.dispose()
+
+    // Clear scheduled timers
+    for (const timer of this.schedulerTimers) clearInterval(timer)
+    this.schedulerTimers = []
+
     this.status = "stopped"
     console.log(`[Ambient] Stopped for project ${this.projectId}`)
   }
@@ -115,7 +155,18 @@ export class AmbientAgent {
     return {
       agentStatus: this.status,
       budget: this.budget.getStatus(),
-      pendingSuggestions: 0, // TODO: query from DB
+      pendingSuggestions: (() => {
+        try {
+          const db = getDatabase()
+          return db.select({ id: ambientSuggestions.id })
+            .from(ambientSuggestions)
+            .where(and(
+              eq(ambientSuggestions.projectId, this.projectId),
+              eq(ambientSuggestions.status, "pending"),
+            ))
+            .all().length
+        } catch { return 0 }
+      })(),
       lastEventAt: this.lastEventAt,
       lastAnalysisAt: this.lastAnalysisAt,
     }

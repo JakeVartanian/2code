@@ -20,8 +20,10 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "fs"
+import { readdir, stat, readFile } from "fs/promises"
 import { join, extname, relative } from "path"
-import { execSync } from "child_process"
+import { execSync, exec } from "child_process"
+import { promisify } from "util"
 import { eq, and } from "drizzle-orm"
 import { getDatabase } from "../db"
 import { projectMemories } from "../db/schema"
@@ -224,14 +226,14 @@ export async function buildBrain(
   }
 
   // Phase 0b: Git coupling analysis (free, local)
-  const gitCreated = analyzeGitCoupling(projectId, projectPath)
+  const gitCreated = await analyzeGitCoupling(projectId, projectPath)
   if (gitCreated > 0) {
     created += gitCreated
     sources.push("git-coupling")
   }
 
-  // Gather all signals once (reused across passes)
-  const signals = gatherDeepSignals(projectPath)
+  // Gather all signals once (reused across passes) — async to avoid blocking event loop
+  const signals = await gatherDeepSignals(projectPath)
   const failedPasses: string[] = []
 
   // Helper to run a pass with error tracking
@@ -378,12 +380,45 @@ interface DeepSignals {
   gitRevertCommits: string | null   // Reverts (indicates mistakes/instability)
 }
 
-function gatherDeepSignals(projectPath: string): DeepSignals {
+async function gatherDeepSignals(projectPath: string): Promise<DeepSignals> {
   const allFiles = getAllSourceFiles(projectPath)
+
+  // Run ALL git commands in parallel (async) so they don't block the event loop
+  const [
+    gitLogFull,
+    gitLogDetailed,
+    gitLogByArea,
+    gitContributors,
+    gitBranches,
+    gitTags,
+    gitFixCommits,
+    gitFeatureCommits,
+    gitHotspots,
+    gitRecentDiffs,
+    todoComments,
+    gitRefactorCommits,
+    gitRevertCommits,
+    directoryTree,
+  ] = await Promise.all([
+    gitCmdAsync(projectPath, "git log --oneline --no-decorate -200"),
+    gitCmdAsync(projectPath, 'git log --no-decorate --stat=80 --format="--- %h %s (%an, %ar)" -30'),
+    gitCmdAsync(projectPath, 'git log --no-decorate --name-only --format="--- %h %s" -100'),
+    gitCmdAsync(projectPath, 'git shortlog -sn --all --no-merges'),
+    gitCmdAsync(projectPath, 'git branch -a --format="%(refname:short) %(committerdate:relative)"'),
+    gitCmdAsync(projectPath, 'git tag --sort=-creatordate -l | head -20'),
+    gitCmdAsync(projectPath, 'git log --oneline --no-decorate --grep="fix\\|bug\\|crash\\|broken\\|revert\\|hotfix" -i -40'),
+    gitCmdAsync(projectPath, 'git log --oneline --no-decorate --grep="feat\\|add\\|implement\\|new\\|support" -i -40'),
+    gitCmdAsync(projectPath, "git log --name-only --pretty=format: -200 | grep -v '^$' | sort | uniq -c | sort -rn | head -30"),
+    gitCmdAsync(projectPath, 'git log --no-decorate -p --stat=80 -5 -- "*.ts" "*.tsx" | head -500'),
+    gitCmdAsync(projectPath, 'grep -rn "TODO\\|FIXME\\|HACK\\|XXX\\|WORKAROUND\\|DEPRECATED" --include="*.ts" --include="*.tsx" --include="*.js" . | grep -v node_modules | grep -v ".git/" | head -40'),
+    gitCmdAsync(projectPath, 'git log --oneline --no-decorate --grep="refactor\\|cleanup\\|clean up\\|reorganize\\|restructure\\|simplify" -i -20'),
+    gitCmdAsync(projectPath, 'git log --oneline --no-decorate --grep="revert\\|rollback\\|undo" -i -15'),
+    getDirectoryTreeAsync(projectPath),
+  ])
 
   return {
     fileTree: getShallowFileTree(projectPath, 4),
-    directoryTree: getDirectoryTree(projectPath),
+    directoryTree,
     sourceFileCount: allFiles.length,
     totalFileList: allFiles,
 
@@ -394,16 +429,16 @@ function gatherDeepSignals(projectPath: string): DeepSignals {
     eslintConfig: readIfExists(join(projectPath, ".eslintrc.json"), 500)
       ?? readIfExists(join(projectPath, "eslint.config.js"), 500),
 
-    gitLogFull: gitCmd(projectPath, "git log --oneline --no-decorate -200"),
-    gitLogDetailed: gitCmd(projectPath, 'git log --no-decorate --stat=80 --format="--- %h %s (%an, %ar)" -30'),
-    gitLogByArea: gitCmd(projectPath, 'git log --no-decorate --name-only --format="--- %h %s" -100'),
-    gitContributors: gitCmd(projectPath, 'git shortlog -sn --all --no-merges'),
-    gitBranches: gitCmd(projectPath, 'git branch -a --format="%(refname:short) %(committerdate:relative)"'),
-    gitTags: gitCmd(projectPath, 'git tag --sort=-creatordate -l | head -20'),
-    gitFixCommits: gitCmd(projectPath, 'git log --oneline --no-decorate --grep="fix\\|bug\\|crash\\|broken\\|revert\\|hotfix" -i -40'),
-    gitFeatureCommits: gitCmd(projectPath, 'git log --oneline --no-decorate --grep="feat\\|add\\|implement\\|new\\|support" -i -40'),
-    gitHotspots: gitCmd(projectPath, "git log --name-only --pretty=format: -200 | grep -v '^$' | sort | uniq -c | sort -rn | head -30"),
-    gitRecentDiffs: gitCmd(projectPath, 'git log --no-decorate -p --stat=80 -5 -- "*.ts" "*.tsx" | head -500'),
+    gitLogFull,
+    gitLogDetailed,
+    gitLogByArea,
+    gitContributors,
+    gitBranches,
+    gitTags,
+    gitFixCommits,
+    gitFeatureCommits,
+    gitHotspots,
+    gitRecentDiffs,
 
     sampledFiles: sampleKeyFiles(projectPath, allFiles),
 
@@ -412,9 +447,9 @@ function gatherDeepSignals(projectPath: string): DeepSignals {
 
     schemaFiles: findSchemaFiles(projectPath, allFiles),
 
-    todoComments: gitCmd(projectPath, 'grep -rn "TODO\\|FIXME\\|HACK\\|XXX\\|WORKAROUND\\|DEPRECATED" --include="*.ts" --include="*.tsx" --include="*.js" . | grep -v node_modules | grep -v ".git/" | head -40'),
-    gitRefactorCommits: gitCmd(projectPath, 'git log --oneline --no-decorate --grep="refactor\\|cleanup\\|clean up\\|reorganize\\|restructure\\|simplify" -i -20'),
-    gitRevertCommits: gitCmd(projectPath, 'git log --oneline --no-decorate --grep="revert\\|rollback\\|undo" -i -15'),
+    todoComments,
+    gitRefactorCommits,
+    gitRevertCommits,
   }
 }
 
@@ -758,6 +793,23 @@ function findSchemaFiles(projectPath: string, allFiles: string[]): string[] {
 
 // ============ GIT UTILITIES ============
 
+const execAsync = promisify(exec)
+
+async function gitCmdAsync(projectPath: string, cmd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execAsync(cmd, {
+      cwd: projectPath,
+      encoding: "utf-8",
+      timeout: 8000,
+      maxBuffer: 1024 * 512,
+    })
+    const trimmed = stdout.trim()
+    return trimmed || null
+  } catch {
+    return null
+  }
+}
+
 function gitCmd(projectPath: string, cmd: string): string | null {
   try {
     const result = execSync(cmd, {
@@ -823,6 +875,18 @@ function getDirectoryTree(projectPath: string): string {
       { cwd: projectPath, encoding: "utf-8", timeout: 5000 },
     ).trim()
     return result
+  } catch {
+    return ""
+  }
+}
+
+async function getDirectoryTreeAsync(projectPath: string): Promise<string> {
+  try {
+    const { stdout } = await execAsync(
+      "find . -type d -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/out/*' -not -path '*/build/*' -not -path '*/.next/*' -not -path '*/.cache/*' | sort | head -60",
+      { cwd: projectPath, encoding: "utf-8", timeout: 5000 },
+    )
+    return stdout.trim()
   } catch {
     return ""
   }
@@ -901,13 +965,14 @@ function importClaudeMd(projectId: string, projectPath: string): number {
 
 // ============ GIT COUPLING ============
 
-function analyzeGitCoupling(projectId: string, projectPath: string): number {
+async function analyzeGitCoupling(projectId: string, projectPath: string): Promise<number> {
   let gitLog: string
   try {
-    gitLog = execSync(
+    const { stdout } = await execAsync(
       'git log --name-only --pretty=format:"---" -150',
       { cwd: projectPath, encoding: "utf-8", timeout: 10000 },
     )
+    gitLog = stdout
   } catch {
     return 0
   }

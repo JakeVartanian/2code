@@ -175,7 +175,13 @@ export const ambientRouter = router({
     }))
     .mutation(async ({ input }) => {
       if (input.enabled) {
-        await ambientAgentRegistry.getOrCreate(input.projectId, input.projectPath)
+        const agent = await ambientAgentRegistry.getOrCreate(input.projectId, input.projectPath)
+        // Initialize the AI provider so Tier 1/2 analysis can run
+        const { getClaudeCodeTokenFresh } = await import("./claude")
+        await agent.initProvider(
+          () => getClaudeCodeTokenFresh(),
+          null, // TODO: pass OpenRouter key if configured
+        )
       } else {
         await ambientAgentRegistry.stop(input.projectId)
       }

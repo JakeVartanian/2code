@@ -1,10 +1,11 @@
 /**
  * Ambient analysis pipeline — coordinates the three-tier funnel.
  * Tier 0: Local heuristics (free, instant)
- * Tier 1: Haiku triage (cheap, batched) — TODO Phase 5
- * Tier 2: Sonnet analysis (expensive, gated) — TODO Phase 6
+ * Tier 1: Haiku triage (cheap, batched)
+ * Tier 2: Sonnet analysis (expensive, gated)
  */
 
+import { execSync } from "child_process"
 import { eq, and, sql } from "drizzle-orm"
 import { getDatabase } from "../db"
 import { ambientSuggestions } from "../db/schema"
@@ -15,6 +16,7 @@ import { analyzeWithSonnet } from "./analysis"
 import { FeedbackTracker } from "./feedback"
 import { BudgetTracker } from "./budget"
 import { checkStaleness } from "./staleness"
+import { getMemoriesForInjection } from "../memory/injection"
 import type { AmbientProvider } from "./provider"
 import type {
   AmbientConfig,
@@ -35,7 +37,7 @@ function getAmbientEvents() {
 
 const RECENT_CACHE_TTL = 24 * 60 * 60 * 1000 // 24 hours
 const RECENT_CACHE_SWEEP_INTERVAL = 60 * 60 * 1000 // Sweep every hour
-const COLD_START_DURATION = 4 * 60 * 60 * 1000 // 4 hours observation mode
+const COLD_START_DURATION = 15 * 60 * 1000 // 15 minutes observation mode
 const SUGGESTION_EXPIRY_HOURS = 48 // Expire pending suggestions after 48h
 
 export class AnalysisPipeline {
@@ -118,8 +120,7 @@ export class AnalysisPipeline {
         this.isProcessing = false
       }
     } else if (event.kind === "git") {
-      // Git events currently just trigger a batch re-analysis
-      // In Phase 5+, git commits will trigger their own triage path
+      await this.processGitEvent(event.event)
     }
   }
 
@@ -154,14 +155,20 @@ export class AnalysisPipeline {
 
     if (unsuppressed.length === 0) return
 
+    // Apply feedback weights to confidence (gradient between suppressed and boosted)
+    const weighted = unsuppressed.map(c => ({
+      ...c,
+      confidence: Math.round(c.confidence * this.feedback.getCategoryWeight(c.category)),
+    }))
+
     // Deduplicate against recent suggestions
-    const novel = unsuppressed.filter(c => !this.isRecentDuplicate(c))
+    const novel = weighted.filter(c => !this.isRecentDuplicate(c))
 
     if (novel.length === 0) return
 
     // --- COLD START MODE: first 4 hours, only surface very high-confidence items ---
     if (isColdStart) {
-      const veryHighConfidence = novel.filter(c => c.confidence >= 90)
+      const veryHighConfidence = novel.filter(c => c.confidence >= 70)
       for (const result of veryHighConfidence) {
         this.persistSuggestion(result)
       }
@@ -170,8 +177,12 @@ export class AnalysisPipeline {
 
     // --- TIER 1: Haiku triage ---
     if (this.provider && this.budget.getDegradationTier() === "normal") {
-      // Use Haiku to triage candidates
-      const projectContext = "" // TODO: inject memory context in Phase 8
+      // Inject project memory context for smarter triage (lightweight 800-token budget)
+      let projectContext = ""
+      try {
+        const memoryResult = await getMemoriesForInjection(this.projectId, null, 800)
+        projectContext = memoryResult.markdown
+      } catch { /* non-critical — triage without context */ }
       const triageResult = await triageWithHaiku(
         novel,
         this.provider,
@@ -232,6 +243,80 @@ export class AnalysisPipeline {
       const highConfidence = novel.filter(c => c.confidence >= 60)
       for (const result of highConfidence) {
         this.persistSuggestion(result)
+      }
+    }
+  }
+
+  /**
+   * Process git events — commits get triaged, merge conflicts surface immediately.
+   */
+  private async processGitEvent(event: import("./types").GitEvent): Promise<void> {
+    if (event.type === "merge-conflict") {
+      // Merge conflicts are always high-confidence, surface immediately
+      this.persistSuggestion({
+        category: "bug",
+        severity: "error",
+        title: "Merge conflict detected",
+        description: `A merge conflict was detected. Resolve conflicts before continuing work.`,
+        confidence: 90,
+        triggerFiles: [],
+        triggerEvent: "git",
+      })
+      return
+    }
+
+    if (event.type !== "commit") return
+
+    // Only triage commits if we have a provider and budget allows
+    if (!this.provider || this.budget.getDegradationTier() !== "normal") return
+
+    // Get last commit info
+    let commitInfo: string
+    try {
+      commitInfo = execSync("git log -1 --stat --format=%B", {
+        cwd: this.projectPath,
+        timeout: 5000,
+        encoding: "utf-8",
+      }).trim()
+    } catch { return }
+
+    // Skip trivial commits (< 3 files changed)
+    const statLines = commitInfo.split("\n").filter(l => l.match(/\|/))
+    if (statLines.length < 3) return
+
+    // Create a synthetic candidate and triage it
+    const candidate: HeuristicResult = {
+      category: "bug",
+      severity: "warning",
+      title: `Commit review: ${commitInfo.split("\n")[0]?.slice(0, 60) ?? "recent commit"}`,
+      description: commitInfo.slice(0, 500),
+      confidence: 50,
+      triggerFiles: statLines.map(l => l.split("|")[0]?.trim()).filter(Boolean),
+      triggerEvent: "git",
+    }
+
+    // Load memory context for better triage
+    let projectContext = ""
+    try {
+      const memoryResult = await getMemoriesForInjection(this.projectId, null, 800)
+      projectContext = memoryResult.markdown
+    } catch { /* non-critical */ }
+
+    const triageResult = await triageWithHaiku(
+      [candidate],
+      this.provider,
+      this.budget,
+      projectContext,
+      this.config.triageThreshold,
+    )
+
+    for (const item of triageResult.items) {
+      if (item.relevance >= 0.5) {
+        this.persistSuggestion({
+          ...candidate,
+          category: item.category,
+          confidence: Math.round(item.relevance * 100),
+        }, undefined, "haiku")
       }
     }
   }

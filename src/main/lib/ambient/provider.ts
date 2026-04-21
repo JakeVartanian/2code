@@ -3,6 +3,7 @@
  * Selects the right endpoint, model ID, request format, and auth based on available credentials.
  */
 
+import { callAnthropic } from "../claude/api"
 import type { AmbientProviderInfo, AmbientProviderType } from "./types"
 
 export interface AmbientProviderCallResult {
@@ -21,8 +22,6 @@ export interface AmbientProvider {
 
 // ============ ANTHROPIC PROVIDER ============
 
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-const ANTHROPIC_VERSION = "2023-06-01"
 const HAIKU_MODEL = "claude-haiku-4-5-20251001"
 const SONNET_MODEL = "claude-sonnet-4-5-20250929"
 
@@ -50,44 +49,14 @@ class AnthropicProvider implements AmbientProvider {
     user: string,
     maxTokens: number,
   ): Promise<AmbientProviderCallResult> {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 120_000)
-
-    try {
-      const response = await fetch(ANTHROPIC_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.token}`,
-          "anthropic-version": ANTHROPIC_VERSION,
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: maxTokens,
-          system,
-          messages: [{ role: "user", content: user }],
-        }),
-        signal: controller.signal,
-      })
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "")
-        throw new Error(`Anthropic API ${response.status}: ${errText.slice(0, 200)}`)
-      }
-
-      const result = (await response.json()) as {
-        content?: Array<{ type: string; text?: string }>
-        usage?: { input_tokens?: number; output_tokens?: number }
-      }
-
-      return {
-        text: result.content?.[0]?.text ?? "",
-        inputTokens: result.usage?.input_tokens ?? 0,
-        outputTokens: result.usage?.output_tokens ?? 0,
-      }
-    } finally {
-      clearTimeout(timeout)
-    }
+    return callAnthropic({
+      token: this.token,
+      model,
+      system,
+      userMessage: user,
+      maxTokens,
+      timeoutMs: 120_000,
+    })
   }
 }
 

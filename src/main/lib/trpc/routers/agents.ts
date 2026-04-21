@@ -12,6 +12,7 @@ import {
 } from "./agent-utils"
 import { discoverInstalledPlugins, getPluginComponentPaths } from "../../plugins"
 import { getEnabledPlugins } from "./claude-settings"
+import { callAnthropic } from "../../claude/api"
 import { getClaudeCodeTokenFresh } from "./claude"
 
 // Shared procedure for listing agents
@@ -354,37 +355,13 @@ Respond with ONLY a valid JSON object (no markdown fences, no explanation) with 
 
 Make the system prompt specific and actionable, not generic. Include concrete examples of the kind of analysis or output the agent should produce.`
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-5-20250514",
-          max_tokens: 2048,
-          system: systemPrompt,
-          messages: [
-            {
-              role: "user",
-              content: `Create a subagent for: ${input.description}`,
-            },
-          ],
-        }),
+      const { text } = await callAnthropic({
+        token,
+        model: "claude-sonnet-4-5-20250514",
+        maxTokens: 2048,
+        system: systemPrompt,
+        userMessage: `Create a subagent for: ${input.description}`,
       })
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "")
-        throw new Error(
-          `Claude API error (${response.status}): ${errorText.slice(0, 200)}`
-        )
-      }
-
-      const data = (await response.json()) as {
-        content: Array<{ type: string; text: string }>
-      }
-      const text = data.content[0]?.text ?? ""
 
       // Extract JSON from the response
       const jsonMatch = text.match(/\{[\s\S]*\}/)

@@ -7,6 +7,7 @@ import { getDatabase } from "../db"
 import { projectMemories } from "../db/schema"
 import { eq, and } from "drizzle-orm"
 import { createId } from "../db/utils"
+import { callAnthropic } from "../claude/api"
 import { getClaudeCodeTokenFresh } from "../trpc/routers/claude"
 
 /** Valid memory categories */
@@ -134,30 +135,14 @@ export async function extractMemoriesAsync(
       return
     }
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
-        system: EXTRACTION_SYSTEM_PROMPT,
-        messages: [
-          { role: "user", content: `Extract project memories from this conversation:\n\n${conversationText}` },
-        ],
-      }),
+    const { text } = await callAnthropic({
+      token,
+      model: "claude-haiku-4-5-20251001",
+      maxTokens: 1024,
+      system: EXTRACTION_SYSTEM_PROMPT,
+      userMessage: `Extract project memories from this conversation:\n\n${conversationText}`,
     })
 
-    if (!response.ok) {
-      console.log(`[memory:extract] Haiku API error: ${response.status}`)
-      return
-    }
-
-    const result = await response.json()
-    const text = result.content?.[0]?.text
     if (!text) return
 
     // Parse JSON response

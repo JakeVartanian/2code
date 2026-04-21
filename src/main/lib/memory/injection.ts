@@ -40,9 +40,9 @@ function scoreMemory(memory: ProjectMemory, contextHint: string | null): number 
   // Boost: +5 per access count (capped at +25)
   score += Math.min((memory.accessCount ?? 0) * 5, 25)
 
-  // Penalty: -20 if stale
+  // Exclude stale memories entirely
   if (memory.isStale) {
-    score -= 20
+    return -Infinity
   }
 
   // Context hint matching (if provided)

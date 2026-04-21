@@ -201,6 +201,8 @@ export interface ChatInputAreaProps {
   onInputContentChange?: (hasContent: boolean) => void
   // Callback to send message with question answer (Enter sends immediately, not to queue)
   onSubmitWithQuestionAnswer?: () => void
+  // Double-Enter on empty input sends "Continue." to resume Claude
+  onContinue?: () => void
   // Whether this sub-chat tab is the active/visible one (prevents window-level hotkeys in background tabs)
   isActive?: boolean
 }
@@ -255,7 +257,8 @@ function arePropsEqual(prevProps: ChatInputAreaProps, nextProps: ChatInputAreaPr
     prevProps.onCacheFileContent !== nextProps.onCacheFileContent ||
     prevProps.onInputContentChange !== nextProps.onInputContentChange ||
     prevProps.onSubmitWithQuestionAnswer !== nextProps.onSubmitWithQuestionAnswer ||
-    prevProps.onSendFromQueue !== nextProps.onSendFromQueue
+    prevProps.onSendFromQueue !== nextProps.onSendFromQueue ||
+    prevProps.onContinue !== nextProps.onContinue
   ) {
     return false
   }
@@ -404,6 +407,7 @@ export const ChatInputArea = memo(function ChatInputArea({
   firstQueueItemId,
   onInputContentChange,
   onSubmitWithQuestionAnswer,
+  onContinue,
   isActive = true,
 }: ChatInputAreaProps) {
   // Local state - changes here don't re-render parent
@@ -718,6 +722,8 @@ export const ChatInputArea = memo(function ChatInputArea({
   const currentSubChatIdRef = useRef<string>(subChatId)
   const currentChatIdRef = useRef<string | null>(parentChatId)
   const currentDraftTextRef = useRef<string>("")
+  // Track last empty-Enter timestamp for double-Enter → Continue shortcut
+  const lastEmptyEnterRef = useRef<number>(0)
   currentSubChatIdRef.current = subChatId
   currentChatIdRef.current = parentChatId
 
@@ -981,6 +987,7 @@ export const ChatInputArea = memo(function ChatInputArea({
 
   // Editor submit handler - handles Enter key with queue logic
   // If input is empty and queue has items, stop stream and send first from queue
+  // If input is empty and no queue, double-Enter within 400ms sends "Continue."
   const handleEditorSubmit = useCallback(async () => {
     const inputValue = editorRef.current?.getValue() || ""
     const hasText = inputValue.trim().length > 0
@@ -990,10 +997,19 @@ export const ChatInputArea = memo(function ChatInputArea({
       // Input empty, queue has items - stop stream and send from queue
       await onStop()
       onSendFromQueue(firstQueueItemId)
+    } else if (!hasText && !hasAttachments && onContinue) {
+      // Input empty, no queue - double-Enter sends "Continue."
+      const now = Date.now()
+      if (now - lastEmptyEnterRef.current < 400) {
+        lastEmptyEnterRef.current = 0
+        onContinue()
+      } else {
+        lastEmptyEnterRef.current = now
+      }
     } else {
       onSend()
     }
-  }, [editorRef, images, files, textContexts, diffTextContexts, queueLength, onSendFromQueue, firstQueueItemId, onStop, onSend])
+  }, [editorRef, images, files, textContexts, diffTextContexts, queueLength, onSendFromQueue, firstQueueItemId, onStop, onSend, onContinue])
 
   // Mention select handler
   const handleMentionSelect = useCallback((mention: FileMentionOption) => {

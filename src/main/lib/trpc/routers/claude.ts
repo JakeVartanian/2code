@@ -1489,7 +1489,8 @@ export const claudeRouter = router({
         ) {
           emit.next({
             type: "error",
-            error: `Too many concurrent agent sessions (max ${MAX_CONCURRENT_AGENTS}). Please wait for an existing session to finish or cancel one.`,
+            errorText: `Too many concurrent agent sessions (max ${MAX_CONCURRENT_AGENTS}). Please wait for an existing session to finish or cancel one.`,
+            debugInfo: { category: "CONCURRENT_LIMIT" },
           } as UIMessageChunk)
           emit.complete()
           return
@@ -1531,10 +1532,20 @@ export const claudeRouter = router({
                 // Check if any OTHER active session is using the same directory
                 for (const [otherSubChatId, otherCwd] of activeSessionWorktrees) {
                   if (otherSubChatId !== input.subChatId && otherCwd === effectiveWorktreeCwd) {
+                    // Verify the other session is still actually alive
+                    const otherSession = activeSessions.get(otherSubChatId)
+                    if (!otherSession || otherSession.abortController.signal.aborted) {
+                      // Stale entry — clean it up and allow this session to proceed
+                      activeSessions.delete(otherSubChatId)
+                      activeSessionWorktrees.delete(otherSubChatId)
+                      console.log(`[claude] Cleaned up stale session for ${otherSubChatId.slice(-8)}`)
+                      continue
+                    }
                     emit.next({
                       type: "error",
-                      error:
+                      errorText:
                         "Another tab is already running in this workspace. Wait for it to finish or cancel it first.",
+                      debugInfo: { category: "WORKTREE_CONFLICT" },
                     } as UIMessageChunk)
                     emit.complete()
                     return

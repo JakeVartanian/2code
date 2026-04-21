@@ -6,6 +6,7 @@
 import { getDatabase } from "../db"
 import { orchestrationTasks, subChats } from "../db/schema"
 import { eq } from "drizzle-orm"
+import { callAnthropic } from "../claude/api"
 import { getClaudeCodeTokenFresh } from "../trpc/routers/claude"
 import {
   SUPERVISOR_DIAGNOSIS_SYSTEM_PROMPT,
@@ -203,36 +204,15 @@ export async function diagnoseStuckWorker(
     stuckReason,
   })
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30_000) // 30s timeout
-
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 512,
-        system: SUPERVISOR_DIAGNOSIS_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-      signal: controller.signal,
+    const { text } = await callAnthropic({
+      token,
+      model: "claude-haiku-4-5-20251001",
+      maxTokens: 512,
+      system: SUPERVISOR_DIAGNOSIS_SYSTEM_PROMPT,
+      userMessage: userPrompt,
+      timeoutMs: 30_000,
     })
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "")
-      const safeError = errorText.slice(0, 200).replace(/sk-ant-[^\s"]+/g, "[REDACTED]")
-      throw new Error(`Supervisor API error ${response.status}: ${safeError}`)
-    }
-
-    const result = (await response.json()) as {
-      content?: Array<{ type: string; text?: string }>
-    }
-    const text = result.content?.[0]?.text ?? ""
 
     const jsonStr = extractJsonObject(text)
     if (!jsonStr) {
@@ -258,8 +238,6 @@ export async function diagnoseStuckWorker(
       intervention: "escalate",
       reason: "API call failed",
     }
-  } finally {
-    clearTimeout(timeout)
   }
 }
 

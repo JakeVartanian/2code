@@ -63,6 +63,7 @@ interface SuggestionItem {
   title: string
   category: string
   severity: string
+  confidence: number
   triggerFiles: string[]
 }
 
@@ -272,6 +273,7 @@ export function useSystemMapData(projectId: string | null, chatId: string): Syst
       title: s.title,
       category: s.category,
       severity: s.severity,
+      confidence: (s as any).confidence ?? 50,
       triggerFiles: Array.isArray(s.triggerFiles) ? s.triggerFiles : [],
     }))
   }, [suggestionsQuery.data])

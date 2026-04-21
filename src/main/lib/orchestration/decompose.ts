@@ -6,6 +6,7 @@
 import { exec } from "node:child_process"
 import { readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
+import { callAnthropic } from "../claude/api"
 import { getClaudeCodeTokenFresh } from "../trpc/routers/claude"
 import {
   DECOMPOSITION_SYSTEM_PROMPT,
@@ -126,41 +127,14 @@ export async function decomposeGoal(
     projectMemories: input.projectMemories,
   })
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 90_000) // 90s timeout
-
-  let response: Response
-  try {
-    response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5-20250929",
-        max_tokens: 4096,
-        system: DECOMPOSITION_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-      signal: controller.signal,
-    })
-  } finally {
-    clearTimeout(timeout)
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "")
-    // Truncate error body to prevent leaking sensitive API response data
-    const safeError = errorText.slice(0, 200).replace(/sk-ant-[^\s"]+/g, "[REDACTED]")
-    throw new Error(`Claude API error ${response.status}: ${safeError}`)
-  }
-
-  const result = (await response.json()) as {
-    content?: Array<{ type: string; text?: string }>
-  }
-  const text = result.content?.[0]?.text ?? ""
+  const { text } = await callAnthropic({
+    token,
+    model: "claude-sonnet-4-5-20250929",
+    maxTokens: 4096,
+    system: DECOMPOSITION_SYSTEM_PROMPT,
+    userMessage: userPrompt,
+    timeoutMs: 90_000,
+  })
 
   // Parse the JSON response using balanced brace extraction
   let plan: DecomposedPlan

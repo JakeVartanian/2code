@@ -1127,10 +1127,11 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
     prevOpen.current = open
   }, [open])
 
-  // Separate workspace-level (shell) keys from project-level (.env) keys
+  // Separate workspace-level (shell) keys from project-level keys
   const shellApiKeys = data?.apiKeys.filter((k) => k.source === "shell") ?? []
-  const projectApiKeys = data?.apiKeys.filter((k) => k.source === "project-env") ?? []
-  const absentApiKeys = data?.apiKeys.filter((k) => !k.present) ?? []
+  // "Connected" = has env var in .env OR detected in project (deps, config, CLAUDE.md)
+  const connectedProjectKeys = data?.apiKeys.filter((k) => k.source === "project-env" || (k.detected && k.source !== "shell")) ?? []
+  const absentApiKeys = data?.apiKeys.filter((k) => !k.present && !k.detected) ?? []
 
   // Project folder name for display
   const projectFolderName = projectPath ? projectPath.split("/").filter(Boolean).pop() : null
@@ -1231,10 +1232,10 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
                           {projectFolderName}
                         </span>
                       </div>
-                      <p className="text-[10px] text-muted-foreground/40 mb-1">API Keys — .env</p>
-                      {projectApiKeys.length > 0 ? (
+                      <p className="text-[10px] text-muted-foreground/40 mb-1">Connected Services</p>
+                      {connectedProjectKeys.length > 0 ? (
                         <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
-                          {projectApiKeys.map((apiKey) => (
+                          {connectedProjectKeys.map((apiKey) => (
                             <div key={apiKey.key} className="flex items-center gap-1.5 py-0.5">
                               <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
                               <span className="text-xs truncate text-foreground">{apiKey.name}</span>
@@ -1242,7 +1243,7 @@ const EnvToolsButton = memo(function EnvToolsButton({ projectPath }: { projectPa
                           ))}
                         </div>
                       ) : (
-                        <p className="text-[11px] text-muted-foreground/40 italic">No .env keys found</p>
+                        <p className="text-[11px] text-muted-foreground/40 italic">No services detected</p>
                       )}
                     </div>
                   )}
@@ -2827,6 +2828,17 @@ export function AgentsSidebar({
       }
     }
 
+    // Notify user of workspace switch (only when actually changing workspaces)
+    if (selectedChatId && selectedChatId !== originalId) {
+      const targetChat = filteredChats.find((c) => c.id === (isRemote ? `remote_${originalId}` : originalId))
+      if (targetChat) {
+        const label = targetChat.branch
+          ? `Switched to ${targetChat.branch}`
+          : `Switched to ${targetChat.name}`
+        toast(label, { duration: 1500, position: "top-center" })
+      }
+    }
+
     setSelectedChatId(originalId)
     setSelectedChatIsRemote(isRemote)
     // Sync chatSourceMode for ChatView to load data from correct source
@@ -3493,7 +3505,7 @@ export function AgentsSidebar({
       </div>
 
       {/* Ambient Agent Section */}
-      <AmbientSidebarSection projectId={selectedProject?.id ?? null} chatId={selectedChatId ?? null} />
+      <AmbientSidebarSection projectId={selectedProject?.id ?? null} projectPath={selectedProject?.path ?? null} chatId={selectedChatId ?? null} />
 
       {/* Footer - Multi-select toolbar or normal footer */}
       <AnimatePresence mode="wait">

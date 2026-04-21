@@ -31,6 +31,12 @@ interface ApiKeyDef {
   name: string
   key: string
   envVars: string[]
+  /** Package name prefixes to look for in package.json dependencies */
+  packages?: string[]
+  /** Config files whose presence indicates the service is used */
+  configFiles?: string[]
+  /** Directory names whose presence indicates the service is used */
+  configDirs?: string[]
   description?: string
 }
 
@@ -53,30 +59,38 @@ const CLI_TOOLS: CliToolDef[] = [
   { name: "Railway", key: "railway", binary: "railway", hint: "npm install -g @railway/cli" },
   { name: "Vercel", key: "vercel", binary: "vercel", hint: "npm install -g vercel" },
   { name: "Netlify", key: "netlify", binary: "netlify", hint: "npm install -g netlify-cli" },
+  { name: "Hardhat", key: "hardhat", binary: "hardhat", hint: "npm install -g hardhat" },
+  { name: "Slither", key: "slither", binary: "slither", hint: "pip install slither-analyzer" },
+  { name: "Mythril", key: "mythril", binary: "myth", hint: "pip install mythril" },
 ]
 
 const API_KEYS: ApiKeyDef[] = [
-  { name: "Anthropic", key: "anthropic", envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] },
-  { name: "OpenAI", key: "openai", envVars: ["OPENAI_API_KEY"] },
+  { name: "Anthropic", key: "anthropic", envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"], packages: ["@anthropic-ai/", "anthropic"] },
+  { name: "OpenAI", key: "openai", envVars: ["OPENAI_API_KEY"], packages: ["openai"] },
   { name: "OpenRouter", key: "openrouter", envVars: ["OPENROUTER_API_KEY"] },
-  { name: "Cloudflare", key: "cloudflare", envVars: ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"] },
-  { name: "GitHub Token", key: "github-token", envVars: ["GITHUB_TOKEN", "GH_TOKEN"] },
-  { name: "Sentry", key: "sentry", envVars: ["SENTRY_AUTH_TOKEN", "SENTRY_DSN"] },
-  { name: "Vercel", key: "vercel-token", envVars: ["VERCEL_TOKEN"] },
-  { name: "Netlify", key: "netlify-token", envVars: ["NETLIFY_AUTH_TOKEN"] },
-  { name: "AWS", key: "aws", envVars: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"] },
-  { name: "Google Cloud", key: "gcloud", envVars: ["GOOGLE_APPLICATION_CREDENTIALS", "GCLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT"] },
-  { name: "Stripe", key: "stripe", envVars: ["STRIPE_SECRET_KEY", "STRIPE_API_KEY"] },
-  { name: "Supabase", key: "supabase", envVars: ["SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"] },
-  { name: "Railway", key: "railway-token", envVars: ["RAILWAY_TOKEN"] },
-  { name: "Fly.io", key: "fly", envVars: ["FLY_API_TOKEN"] },
-  { name: "Resend", key: "resend", envVars: ["RESEND_API_KEY"] },
-  { name: "Postmark", key: "postmark", envVars: ["POSTMARK_API_TOKEN", "POSTMARK_SERVER_API_TOKEN"] },
-  { name: "SendGrid", key: "sendgrid", envVars: ["SENDGRID_API_KEY"] },
-  { name: "Twilio", key: "twilio", envVars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"] },
-  { name: "Database URL", key: "database-url", envVars: ["DATABASE_URL"] },
-  { name: "Redis", key: "redis", envVars: ["REDIS_URL"] },
-  { name: "Algolia", key: "algolia", envVars: ["ALGOLIA_ADMIN_API_KEY", "ALGOLIA_API_KEY"] },
+  { name: "Cloudflare", key: "cloudflare", envVars: ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"], packages: ["@cloudflare/"], configFiles: ["wrangler.toml", "wrangler.json", "wrangler.jsonc"] },
+  { name: "GitHub Token", key: "github-token", envVars: ["GITHUB_TOKEN", "GH_TOKEN"], configDirs: [".github"] },
+  { name: "Sentry", key: "sentry", envVars: ["SENTRY_AUTH_TOKEN", "SENTRY_DSN"], packages: ["@sentry/"], configFiles: [".sentryclirc"] },
+  { name: "Vercel", key: "vercel-token", envVars: ["VERCEL_TOKEN"], packages: ["@vercel/"], configFiles: ["vercel.json"] },
+  { name: "Netlify", key: "netlify-token", envVars: ["NETLIFY_AUTH_TOKEN"], configFiles: ["netlify.toml"] },
+  { name: "AWS", key: "aws", envVars: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"], packages: ["aws-sdk", "@aws-sdk/"] },
+  { name: "Google Cloud", key: "gcloud", envVars: ["GOOGLE_APPLICATION_CREDENTIALS", "GCLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT"], packages: ["@google-cloud/", "firebase", "firebase-admin"] },
+  { name: "Stripe", key: "stripe", envVars: ["STRIPE_SECRET_KEY", "STRIPE_API_KEY"], packages: ["stripe", "@stripe/"] },
+  { name: "Supabase", key: "supabase", envVars: ["SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"], packages: ["@supabase/"], configDirs: ["supabase"] },
+  { name: "Railway", key: "railway-token", envVars: ["RAILWAY_TOKEN"], configFiles: ["railway.json", "railway.toml"] },
+  { name: "Fly.io", key: "fly", envVars: ["FLY_API_TOKEN"], configFiles: ["fly.toml"] },
+  { name: "Resend", key: "resend", envVars: ["RESEND_API_KEY"], packages: ["resend"] },
+  { name: "Postmark", key: "postmark", envVars: ["POSTMARK_API_TOKEN", "POSTMARK_SERVER_API_TOKEN"], packages: ["postmark"] },
+  { name: "SendGrid", key: "sendgrid", envVars: ["SENDGRID_API_KEY"], packages: ["@sendgrid/"] },
+  { name: "Twilio", key: "twilio", envVars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"], packages: ["twilio"] },
+  { name: "Database URL", key: "database-url", envVars: ["DATABASE_URL"], packages: ["prisma", "@prisma/client", "drizzle-orm", "knex", "sequelize", "typeorm"], configFiles: ["prisma/schema.prisma"] },
+  { name: "Redis", key: "redis", envVars: ["REDIS_URL"], packages: ["redis", "ioredis", "bullmq"] },
+  { name: "Algolia", key: "algolia", envVars: ["ALGOLIA_ADMIN_API_KEY", "ALGOLIA_API_KEY"], packages: ["algoliasearch", "@algolia/"] },
+  { name: "Hardhat", key: "hardhat", envVars: ["HARDHAT_NETWORK"], packages: ["hardhat", "@nomicfoundation/hardhat-toolbox"], configFiles: ["hardhat.config.ts", "hardhat.config.js"] },
+  { name: "Foundry", key: "foundry", envVars: ["FOUNDRY_PROFILE"], configFiles: ["foundry.toml"], configDirs: ["lib/forge-std"] },
+  { name: "Alchemy", key: "alchemy", envVars: ["ALCHEMY_API_KEY", "ALCHEMY_URL"], packages: ["alchemy-sdk", "@alch/alchemy-sdk"] },
+  { name: "Infura", key: "infura", envVars: ["INFURA_API_KEY", "INFURA_PROJECT_ID"], packages: ["@infura/sdk"] },
+  { name: "Etherscan", key: "etherscan", envVars: ["ETHERSCAN_API_KEY"], packages: ["@nomicfoundation/hardhat-verify"] },
 ]
 
 // ---------------------------------------------------------------------------
@@ -124,6 +138,92 @@ function parseEnvFile(filePath: string): Set<string> {
   return keys
 }
 
+/**
+ * Detect which services a project uses by checking package.json deps,
+ * config files/dirs, and CLAUDE.md mentions.
+ */
+function detectProjectServices(projectPath: string): Set<string> {
+  const detected = new Set<string>()
+
+  // Read package.json dependencies
+  let allDeps: string[] = []
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(projectPath, "package.json"), "utf8"))
+    allDeps = Object.keys({
+      ...pkg.dependencies,
+      ...pkg.devDependencies,
+      ...pkg.peerDependencies,
+    })
+  } catch {
+    // No package.json or invalid — skip
+  }
+
+  // Read CLAUDE.md content for keyword matching
+  let claudeMd = ""
+  try {
+    claudeMd = fs.readFileSync(path.join(projectPath, "CLAUDE.md"), "utf8").toLowerCase()
+  } catch {
+    // No CLAUDE.md — skip
+  }
+
+  for (const apiKey of API_KEYS) {
+    // Check package.json dependencies
+    if (apiKey.packages?.length) {
+      const found = apiKey.packages.some((pkg) =>
+        pkg.endsWith("/")
+          ? allDeps.some((dep) => dep.startsWith(pkg) || dep === pkg.slice(0, -1))
+          : allDeps.includes(pkg)
+      )
+      if (found) {
+        detected.add(apiKey.key)
+        continue
+      }
+    }
+
+    // Check config files
+    if (apiKey.configFiles?.length) {
+      const found = apiKey.configFiles.some((f) => {
+        try {
+          fs.accessSync(path.join(projectPath, f), fs.constants.F_OK)
+          return true
+        } catch {
+          return false
+        }
+      })
+      if (found) {
+        detected.add(apiKey.key)
+        continue
+      }
+    }
+
+    // Check config directories
+    if (apiKey.configDirs?.length) {
+      const found = apiKey.configDirs.some((d) => {
+        try {
+          const stat = fs.statSync(path.join(projectPath, d))
+          return stat.isDirectory()
+        } catch {
+          return false
+        }
+      })
+      if (found) {
+        detected.add(apiKey.key)
+        continue
+      }
+    }
+
+    // Check CLAUDE.md mentions (case-insensitive, whole word-ish)
+    if (claudeMd) {
+      const name = apiKey.name.toLowerCase()
+      if (claudeMd.includes(name)) {
+        detected.add(apiKey.key)
+      }
+    }
+  }
+
+  return detected
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -160,6 +260,11 @@ export const envToolsRouter = router({
         }
       }
 
+      // Detect services used by the project (package.json, config files, CLAUDE.md)
+      const projectDetected = input.projectPath
+        ? detectProjectServices(input.projectPath)
+        : new Set<string>()
+
       // Check CLI tools (run in parallel, 1.5s timeout per binary)
       const cliTools = await Promise.all(
         CLI_TOOLS.map(async (tool) => ({
@@ -172,21 +277,23 @@ export const envToolsRouter = router({
 
       // Check API keys (synchronous env var lookups)
       const apiKeys = API_KEYS.map((apiKey) => {
+        const detected = projectDetected.has(apiKey.key)
+
         // Check shell env first
         const shellMatch = apiKey.envVars.find(
           (v) => shellEnv[v] && shellEnv[v].trim().length > 0
         )
         if (shellMatch) {
-          return { name: apiKey.name, key: apiKey.key, present: true, source: "shell" as const }
+          return { name: apiKey.name, key: apiKey.key, present: true, source: "shell" as const, detected }
         }
 
         // Check project .env files
         const projectMatch = apiKey.envVars.find((v) => projectEnvKeys.has(v))
         if (projectMatch) {
-          return { name: apiKey.name, key: apiKey.key, present: true, source: "project-env" as const }
+          return { name: apiKey.name, key: apiKey.key, present: true, source: "project-env" as const, detected }
         }
 
-        return { name: apiKey.name, key: apiKey.key, present: false, source: null }
+        return { name: apiKey.name, key: apiKey.key, present: false, source: null, detected }
       })
 
       return { cliTools, apiKeys }

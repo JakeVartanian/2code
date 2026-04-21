@@ -15,6 +15,7 @@ import {
   Eye,
   Zap,
   Brain,
+  RotateCcw,
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "../../../lib/utils"
@@ -411,6 +412,7 @@ export function AgentsMemoryTab() {
   const [categoryFilter, setCategoryFilter] = useState<MemoryCategory | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [showAddForm, setShowAddForm] = useState(false)
+  const [confirmRebuild, setConfirmRebuild] = useState(false)
 
   // Fetch memories
   const {
@@ -444,6 +446,15 @@ export function AgentsMemoryTab() {
   const deleteMutation = trpc.memory.delete.useMutation({
     onSuccess: () => {
       toast.success("Memory deleted")
+      setSelectedId(null)
+      refetch()
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
+  const deleteAllMutation = trpc.memory.deleteAllForProject.useMutation({
+    onSuccess: (result) => {
+      toast.success(`Cleared ${result.deleted} memories`)
       setSelectedId(null)
       refetch()
     },
@@ -553,24 +564,68 @@ export function AgentsMemoryTab() {
               </span>
             </div>
 
-            {brainStatus && brainStatus.memoryCount > 0 ? (
-              <div className="flex items-center gap-2">
-                <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-teal-500/60"
-                    style={{ width: `${Math.min(100, (brainStatus.memoryCount / 20) * 100)}%` }}
-                  />
+            {confirmRebuild ? (
+              <div className="space-y-2">
+                <p className="text-[11px] text-muted-foreground">
+                  This will delete all {brainStatus?.memoryCount ?? 0} memories and rebuild from scratch using Sonnet.
+                </p>
+                <div className="flex gap-1.5">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="h-6 px-2 text-[10px] flex-1"
+                    disabled={deleteAllMutation.isPending || buildBrainMutation.isPending}
+                    onClick={async () => {
+                      await deleteAllMutation.mutateAsync({ projectId: selectedProject!.id })
+                      buildBrainMutation.mutate({ projectId: selectedProject!.id, projectPath: selectedProject!.path })
+                      setConfirmRebuild(false)
+                    }}
+                  >
+                    <RotateCcw className={cn("h-3 w-3 mr-1", deleteAllMutation.isPending && "animate-spin")} />
+                    {deleteAllMutation.isPending ? "Clearing..." : "Confirm Rebuild"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={() => setConfirmRebuild(false)}
+                  >
+                    Cancel
+                  </Button>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => buildBrainMutation.mutate({ projectId: selectedProject!.id, projectPath: selectedProject!.path })}
-                  disabled={buildBrainMutation.isPending}
-                >
-                  <RefreshCw className={cn("h-3 w-3 mr-1", buildBrainMutation.isPending && "animate-spin")} />
-                  Refresh
-                </Button>
+              </div>
+            ) : brainStatus && brainStatus.memoryCount > 0 ? (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-teal-500/60"
+                      style={{ width: `${Math.min(100, (brainStatus.memoryCount / 20) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-[10px] flex-1"
+                    onClick={() => buildBrainMutation.mutate({ projectId: selectedProject!.id, projectPath: selectedProject!.path })}
+                    disabled={buildBrainMutation.isPending}
+                  >
+                    <RefreshCw className={cn("h-3 w-3 mr-1", buildBrainMutation.isPending && "animate-spin")} />
+                    {buildBrainMutation.isPending ? "Building..." : "Refresh"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-[10px] text-orange-400 hover:text-orange-300"
+                    onClick={() => setConfirmRebuild(true)}
+                    disabled={buildBrainMutation.isPending}
+                  >
+                    <RotateCcw className="h-3 w-3 mr-1" />
+                    Rebuild
+                  </Button>
+                </div>
               </div>
             ) : (
               <Button

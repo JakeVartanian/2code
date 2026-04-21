@@ -3,6 +3,7 @@
  * using a lightweight Claude call.
  */
 
+import { callAnthropic } from "../claude/api"
 import { getClaudeCodeTokenFresh } from "../trpc/routers/claude"
 import {
   AGGREGATION_SYSTEM_PROMPT,
@@ -34,40 +35,19 @@ export async function aggregateResults(
 
   const userPrompt = buildAggregationUserPrompt(input)
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30_000) // 30s timeout
-
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
-        system: AGGREGATION_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-      signal: controller.signal,
+    const { text } = await callAnthropic({
+      token,
+      model: "claude-haiku-4-5-20251001",
+      maxTokens: 1024,
+      system: AGGREGATION_SYSTEM_PROMPT,
+      userMessage: userPrompt,
+      timeoutMs: 30_000,
     })
-
-    if (!response.ok) {
-      console.error(`[aggregation] API error ${response.status}`)
-      return generateFallbackSummary(input)
-    }
-
-    const result = (await response.json()) as {
-      content?: Array<{ type: string; text?: string }>
-    }
-    return result.content?.[0]?.text ?? generateFallbackSummary(input)
+    return text || generateFallbackSummary(input)
   } catch (error) {
     console.error("[aggregation] Failed:", error)
     return generateFallbackSummary(input)
-  } finally {
-    clearTimeout(timeout)
   }
 }
 
