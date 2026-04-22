@@ -40,7 +40,14 @@ export const agentChatStore = {
 
   has: (id: string) => chats.has(id),
 
-  delete: (id: string) => {
+  delete: (id: string, force = false) => {
+    // Safety: refuse to delete actively streaming chats unless forced.
+    // Callers already check isStreaming() but this guards against races
+    // where status changes between the check and the delete.
+    if (!force && useStreamingStatusStore.getState().isStreaming(id)) {
+      console.warn(`[agentChatStore] Refused to delete streaming chat ${id.slice(-8)}`)
+      return
+    }
     const chat = chats.get(id) as any
     chat?.transport?.cleanup?.()
     chats.delete(id)

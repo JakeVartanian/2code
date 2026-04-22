@@ -3900,19 +3900,25 @@ export function ChatView({
 
   // Prune chat instances from previous workspace when switching parent chat.
   // Prevents cross-workspace memory accumulation.
+  // Delayed by 100ms to let React flush layout effects (ChatDataSync status sync).
+  // Without the delay, isStreaming() may return false for chats that are still active
+  // because their ChatDataSync hasn't synced streaming status yet.
   const previousParentChatIdRef = useRef<string | null>(chatId)
   useEffect(() => {
     const previousParentChatId = previousParentChatIdRef.current
-    if (previousParentChatId && previousParentChatId !== chatId) {
-      for (const subChatId of agentChatStore.keys()) {
-        if (agentChatStore.getParentChatId(subChatId) !== previousParentChatId) continue
-        if (useStreamingStatusStore.getState().isStreaming(subChatId)) continue
-        if ((useMessageQueueStore.getState().queues[subChatId]?.length ?? 0) > 0) continue
-        agentChatStore.delete(subChatId)
-        clearRuntimeCachesForSubChat(subChatId)
-      }
-    }
     previousParentChatIdRef.current = chatId
+    if (previousParentChatId && previousParentChatId !== chatId) {
+      const timeout = setTimeout(() => {
+        for (const subChatId of agentChatStore.keys()) {
+          if (agentChatStore.getParentChatId(subChatId) !== previousParentChatId) continue
+          if (useStreamingStatusStore.getState().isStreaming(subChatId)) continue
+          if ((useMessageQueueStore.getState().queues[subChatId]?.length ?? 0) > 0) continue
+          agentChatStore.delete(subChatId)
+          clearRuntimeCachesForSubChat(subChatId)
+        }
+      }, 100)
+      return () => clearTimeout(timeout)
+    }
   }, [chatId])
 
   // Bound resident chat instances in memory for current workspace.
@@ -4933,7 +4939,7 @@ Make sure to preserve all functionality from both branches when resolving confli
             : 0
 
         if (existingMessageCount > 0) return existing
-        agentChatStore.delete(subChatId)
+        agentChatStore.delete(subChatId, true)
       }
 
       // Find sub-chat data
@@ -4961,24 +4967,27 @@ Make sure to preserve all functionality from both branches when resolving confli
         if (!lazyLoadedMessages.current.has(subChatId) && !lazyLoadingInFlight.current.has(subChatId)) {
           lazyLoadingInFlight.current.add(subChatId)
           trpcClient.chats.getSubChatMessages.query({ id: subChatId }).then((result) => {
+            let parsed: any[] = []
             if (result?.messages) {
               try {
-                const parsed = JSON.parse(result.messages)
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                  lazyLoadedMessages.current.set(subChatId, parsed)
-                  // Force re-render so getOrCreateChat picks up the loaded messages
-                  forceUpdate({})
-                }
+                const p = JSON.parse(result.messages)
+                if (Array.isArray(p)) parsed = p
               } catch { /* ignore parse errors */ }
             }
+            // Cache even empty arrays — prevents infinite spinner
+            lazyLoadedMessages.current.set(subChatId, parsed)
+            forceUpdate({})
             lazyLoadingInFlight.current.delete(subChatId)
           }).catch(() => {
+            // Cache empty on error to prevent retry loop
+            lazyLoadedMessages.current.set(subChatId, [])
             lazyLoadingInFlight.current.delete(subChatId)
+            forceUpdate({})
           })
         }
         // Check if we have previously lazy-loaded messages
         const cached = lazyLoadedMessages.current.get(subChatId)
-        if (cached) {
+        if (cached !== undefined) {
           messages = cached
         } else {
           return null // Show spinner while loading
@@ -5155,7 +5164,7 @@ Make sure to preserve all functionality from both branches when resolving confli
       }))
 
       // Force transport recreation with the newly selected provider.
-      agentChatStore.delete(subChatId)
+      agentChatStore.delete(subChatId, true)
       forceUpdate({})
     },
     [agentSubChats],

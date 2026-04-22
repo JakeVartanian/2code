@@ -15,7 +15,6 @@
 import { readdirSync, existsSync } from "node:fs"
 import { execSync } from "node:child_process"
 import { join } from "node:path"
-import { app } from "electron"
 
 // --- Pressure levels ---
 // These are tuned for the macOS default 256 FD soft limit.
@@ -172,10 +171,18 @@ export function tryRaiseFdLimit(): number {
   if (process.platform !== "darwin" && process.platform !== "linux") return fdSoftLimit
 
   // Resolve addon path: dev vs production
-  const isDev = !app.isPackaged
-  const addonPath = isDev
-    ? join(app.getAppPath(), "resources", "native", "raise-fd-limit.node")
-    : join(process.resourcesPath, "native", "raise-fd-limit.node")
+  // Lazy-import electron so this module can be used in tests
+  let addonPath: string
+  try {
+    const { app } = require("electron")
+    const isDev = !app.isPackaged
+    addonPath = isDev
+      ? join(app.getAppPath(), "resources", "native", "raise-fd-limit.node")
+      : join(process.resourcesPath, "native", "raise-fd-limit.node")
+  } catch {
+    // Not in Electron (e.g., tests) — skip native addon
+    return fdSoftLimit
+  }
 
   // Strategy 1: Try loading our prebuilt native addon
   try {

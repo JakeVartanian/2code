@@ -253,15 +253,11 @@ class GitWatcherRegistry {
 			// Check FD headroom before creating new watcher (~2 FDs for .git/index + HEAD)
 			if (!hasFdHeadroom(4)) {
 				console.warn(`[GitWatcherRegistry] No FD headroom — skipping watcher for ${worktreePath}`);
-				// Create a dummy watcher that doesn't actually watch anything
-				// This prevents callers from retrying in a tight loop
-				watcher = new GitWatcher({
-					worktreePath,
-					debounceMs: 100,
-				});
-				// Don't init — just register it so getOrCreate doesn't retry
-				this.watchers.set(worktreePath, watcher);
-				return watcher;
+				// Don't register — let getOrCreate retry on next call when pressure drops.
+				// Create a temporary unregistered watcher so the caller gets a valid object,
+				// but it won't emit events since init() won't have FDs to open.
+				const tempWatcher = new GitWatcher({ worktreePath, debounceMs: 100 });
+				return tempWatcher;
 			}
 
 			watcher = new GitWatcher({

@@ -772,7 +772,6 @@ Look for connections between what's happening above and what you know. If there'
       if (suggestions.length === 0) return
 
       // --- Post-filter: reject narration, generic filler, and linter-style noise ---
-      const STOP_WORDS = new Set(["the", "a", "an", "in", "to", "and", "for", "of", "is", "it", "was", "this", "that", "on", "at", "by", "with", "from"])
       const NARRATION_OPENERS = /^(you |the session |consider |remember |successfully |completed |make sure |don't forget |the changes |the code |the developer |you should |you might |it would be |it('|')s worth |note that |be sure to )/i
       const GENERIC_FILLER = /the developer might not (realize|notice)|this could be important|it's worth noting|worth mentioning|good practice|best practice|you may want to|might want to consider/i
       const LINTER_NOISE = /console\.log|type assertion|as any|commented.out|dead code|unused (import|variable|function)|missing semicolon/i

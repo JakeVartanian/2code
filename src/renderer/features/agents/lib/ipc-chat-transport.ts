@@ -301,6 +301,11 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     // Extracted to support batch unwrapping — the onData handler calls this for each chunk.
     const processChunk = (chunk: UIMessageChunk, controller: ReadableStreamDefaultController<UIMessageChunk>) => {
               if (streamTerminated) return
+              // Guard: skip null/undefined chunks before any property access
+              if (!chunk || !chunk.type) {
+                console.warn(`[SD] R:SKIP_NULL sub=${subId} n=${chunkCount}`)
+                return
+              }
               chunkCount++
               lastChunkType = chunk.type
 
@@ -319,11 +324,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     }
 
     const processChunkInner = (chunk: UIMessageChunk, controller: ReadableStreamDefaultController<UIMessageChunk>) => {
-              // Guard: skip chunks with no type (malformed/empty batch items)
-              if (!chunk || !chunk.type) {
-                console.warn(`[SD] R:SKIP_MALFORMED sub=${subId} n=${chunkCount} chunk=${JSON.stringify(chunk)?.slice(0, 100)}`)
-                return
-              }
+              // Note: null/undefined guard is in processChunk (before lastChunkType assignment)
 
               // Handle AskUserQuestion - show question UI
               if (chunk.type === "ask-user-question") {

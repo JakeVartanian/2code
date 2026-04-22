@@ -748,12 +748,17 @@ function pruneMessageHistory(messages: any[], subChatId: string): any[] {
 
   // Size-based pruning — if JSON payload is still huge after count pruning,
   // aggressively drop to keep only the most recent messages.
-  const jsonSize = JSON.stringify(result).length
-  if (jsonSize > MAX_MESSAGES_JSON_BYTES) {
+  // Use lightweight estimation: sum individual message JSON sizes to avoid
+  // serializing the entire array (which allocates a multi-MB string).
+  let estimatedSize = 2 // for "[]"
+  for (const msg of result) {
+    estimatedSize += JSON.stringify(msg).length + 1 // +1 for comma
+  }
+  if (estimatedSize > MAX_MESSAGES_JSON_BYTES) {
     const before = result.length
     result = result.slice(-MAX_MESSAGES_SIZE_PRUNE_TARGET)
     console.log(
-      `[claude] Size-pruning sub-chat ${subChatId}: ${Math.round(jsonSize / 1024 / 1024)}MB exceeds ${MAX_MESSAGES_JSON_BYTES / 1024 / 1024}MB cap (${before} -> ${result.length} messages)`,
+      `[claude] Size-pruning sub-chat ${subChatId}: ~${Math.round(estimatedSize / 1024 / 1024)}MB exceeds ${MAX_MESSAGES_JSON_BYTES / 1024 / 1024}MB cap (${before} -> ${result.length} messages)`,
     )
   }
 
@@ -1727,7 +1732,7 @@ export const claudeRouter = router({
                   if (otherSubChatId !== input.subChatId && otherCwd === effectiveWorktreeCwd) {
                     const otherSession = activeSessions.get(otherSubChatId)
                     const isAborted = !otherSession || otherSession.abortController.signal.aborted
-                    const isZombie = otherSession && (Date.now() - otherSession.startedAt > 5 * 60 * 1000)
+                    const isZombie = otherSession && (Date.now() - otherSession.startedAt > 15 * 60 * 1000)
 
                     let isDbClean = false
                     try {
@@ -2016,6 +2021,7 @@ export const claudeRouter = router({
               console.log(
                 `[SD] M:END sub=${subId} reason=superseded_by_newer_session`,
               )
+              safeEmit({ type: "finish" } as UIMessageChunk)
               safeComplete()
               return
             }
@@ -3125,11 +3131,12 @@ ${prompt}
               currentText = ""
               stderrLines.length = 0
 
-              // Guard: if aborted during async setup (env build, symlinks, etc.) bail silently
+              // Guard: if aborted during async setup (env build, symlinks, etc.) bail cleanly
               if (abortController.signal.aborted) {
                 console.log(
                   `[SD] M:END sub=${subId} reason=aborted_before_query`,
                 )
+                safeEmit({ type: "finish" } as UIMessageChunk)
                 safeComplete()
                 return
               }
@@ -3146,6 +3153,7 @@ ${prompt}
                   console.log(
                     `[SD] M:END sub=${subId} reason=aborted_during_query_start`,
                   )
+                  safeEmit({ type: "finish" } as UIMessageChunk)
                   safeComplete()
                   return
                 }
@@ -4128,7 +4136,7 @@ ${prompt}
                 metadata,
               }
 
-              let finalMessages = pruneMessageHistory(
+              const finalMessages = pruneMessageHistory(
                 [...messagesToSave, assistantMessage],
                 input.subChatId,
               )
