@@ -1033,7 +1033,23 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
   // trying to stream to a dead frame.
   window.webContents.on("render-process-gone", (_event, details) => {
     const windowId = window.id
-    console.error("[Main] Renderer process gone in window", windowId, details)
+    console.error(`[Main] RENDERER CRASHED — window=${windowId} reason=${details.reason} exitCode=${details.exitCode}`)
+    // Write a crash dump so we can diagnose renderer deaths
+    try {
+      const { writeFileSync, mkdirSync } = require("fs")
+      const { join } = require("path")
+      const logDir = join(require("electron").app.getPath("home"), "Library/Logs/2code")
+      mkdirSync(logDir, { recursive: true })
+      const ts = new Date().toISOString().replace(/[:.]/g, "-")
+      writeFileSync(join(logDir, `renderer-crash-${ts}.log`), [
+        `[${new Date().toISOString()}] RENDERER CRASH`,
+        `Version: ${require("electron").app.getVersion()}`,
+        `Reason: ${details.reason}`,
+        `Exit code: ${details.exitCode}`,
+        `Window ID: ${windowId}`,
+        `---`,
+      ].join("\n"))
+    } catch { /* best effort */ }
     // Only abort sessions from the crashed window (not other windows)
     abortAllClaudeSessions(windowId).catch((err) => {
       console.error("[Main] Error aborting sessions after renderer crash:", err)

@@ -79,14 +79,13 @@ export function useFileContent(
   }, [projectPath, filePath])
 
   // Subscribe to file changes and refetch when the viewed file changes
+  // Pass filePath to watch only this single file (1 FD) instead of the entire project tree
   trpc.files.watchChanges.useSubscription(
-    { projectPath: projectPath || "" },
+    { projectPath: projectPath || "", filePath: relativePath || undefined },
     {
       enabled: !!projectPath && !!relativePath,
-      onData: (change) => {
-        if (change.filename === relativePath) {
-          refetchRef.current()
-        }
+      onData: () => {
+        refetchRef.current()
       },
     },
   )

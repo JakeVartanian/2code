@@ -243,7 +243,122 @@ body:has([data-agents-page]) .canvas-dialog,
 }
 
 /* ========================================
-   9. GIT DIFF VIEW STYLES
+   9. GAAD WATCHING EYES ANIMATIONS
+   ======================================== */
+
+/*
+  Blink: lids close to 8% height then reopen. Both eyes share this keyframe.
+  Runs every ~5.5s on the left eye, ~4.8s on the right (via delay offset).
+  Duration is short (120ms) — a quick blink, not a slow wink.
+*/
+@keyframes gaad-blink {
+  0%, 88%, 100% { transform: scaleY(1); }
+  92%            { transform: scaleY(0.08); }
+  96%            { transform: scaleY(0.08); }
+}
+
+/*
+  Pupil drift — pupils scan slowly left then right, independent timing per eye.
+  Max translation is ±2px — subtle enough to feel organic, not distracting.
+*/
+@keyframes gaad-look-left {
+  0%, 100% { transform: translateX(0); }
+  35%       { transform: translateX(-2px); }
+  65%       { transform: translateX(-2px); }
+}
+
+@keyframes gaad-look-right {
+  0%, 100% { transform: translateX(0); }
+  38%       { transform: translateX(1.5px); }
+  62%       { transform: translateX(1.5px); }
+}
+
+/*
+  Ambient breath — the whole SVG gently fades in/out to feel alive at rest.
+  Slow enough (5s) to be subconscious.
+*/
+@keyframes gaad-breathe {
+  0%, 100% { opacity: 0.65; }
+  50%       { opacity: 0.88; }
+}
+
+/*
+  Arrival shimmer — plays once when a suggestion card mounts.
+  A teal glow blooms briefly on the card border then dissolves.
+  animation-fill-mode: forwards keeps the shadow at 0 after completion.
+*/
+@keyframes gaad-arrival {
+  0%   { box-shadow: 0 0 0 0 rgba(94, 234, 212, 0); }
+  25%  {
+    box-shadow:
+      0 0 0 1px rgba(94, 234, 212, 0.30),
+      0 2px 10px rgba(94, 234, 212, 0.07);
+  }
+  100% { box-shadow: 0 0 0 0 rgba(94, 234, 212, 0); }
+}
+
+/* The SVG container breathes */
+.gaad-eyes {
+  animation: gaad-breathe 5s ease-in-out infinite;
+  display: block;
+}
+
+/* Lid blink — each eye gets a staggered delay so they always blink together
+   but the animation cycle is offset from the pupil drift */
+.gaad-lid-left {
+  animation: gaad-blink 5.5s ease-in-out infinite;
+  animation-delay: 1.2s;
+}
+.gaad-lid-right {
+  animation: gaad-blink 5.5s ease-in-out infinite;
+  animation-delay: 1.2s;
+}
+
+/* Pupil drift — different durations break the mechanical feel */
+.gaad-pupil-left {
+  animation: gaad-look-left 3.6s ease-in-out infinite;
+  animation-delay: 0.8s;
+}
+.gaad-pupil-right {
+  animation: gaad-look-right 4.2s ease-in-out infinite;
+  animation-delay: 0s;
+}
+
+/* "watching" label — no extra styles needed beyond Tailwind classes */
+.gaad-watching-label {
+  /* Reinforces the letter-spacing — Tailwind tracking-[0.12em] handles this */
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+  Arrival shimmer — one-shot animation on suggestion card mount.
+  The card's border-radius is rounded-md (~6px); box-shadow respects it.
+*/
+.gaad-arrival-shimmer {
+  animation: gaad-arrival 0.65s ease-out forwards;
+}
+
+/*
+  Respect reduced-motion preference — replace all GAAD animations with
+  simple opacity transitions. No movement, no pulsing.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .gaad-eyes,
+  .gaad-lid-left,
+  .gaad-lid-right,
+  .gaad-pupil-left,
+  .gaad-pupil-right {
+    animation: none;
+    opacity: 0.7;
+  }
+
+  .gaad-arrival-shimmer {
+    animation: none;
+  }
+}
+
+/* ========================================
+   10. GIT DIFF VIEW STYLES
    ======================================== */
 
 /* Git Diff View Customization - compact 12px font size for diffs */

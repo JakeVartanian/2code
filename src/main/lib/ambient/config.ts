@@ -10,14 +10,14 @@ const DEFAULT_CONFIG: AmbientConfig = {
   enabled: true,
   sensitivity: "medium",
   budget: {
-    dailyLimitCents: 50, // $0.50/day
-    haikuRateLimit: 20, // calls per hour
-    sonnetRateLimit: 5, // calls per hour
+    dailyLimitCents: 500, // $5.00/day — budget should never be the reason GAAD goes quiet
+    haikuRateLimit: 60, // calls per hour — no artificial bottleneck
+    sonnetRateLimit: 20, // calls per hour — Sonnet is where the real insights come from
   },
-  enabledCategories: ["bug", "security", "performance", "test-gap"],
+  enabledCategories: ["bug", "security", "performance", "test-gap", "blind-spot", "next-step", "risk"],
   ignorePatterns: [],
-  autoMemoryWrite: true,
-  triageThreshold: 0.7,
+  autoMemoryWrite: false, // Disabled — suggestions are in ambientSuggestions table, don't pollute project memories
+  triageThreshold: 0.65, // Lowered from 0.85 — let synthesis breathe, filter harder downstream
 }
 
 const VALID_CATEGORIES: SuggestionCategory[] = [
@@ -27,6 +27,7 @@ const VALID_CATEGORIES: SuggestionCategory[] = [
   "test-gap",
   "dead-code",
   "dependency",
+  "blind-spot",
 ]
 
 /**
@@ -128,8 +129,8 @@ export function isQuietHours(config: AmbientConfig): boolean {
  */
 export function getHeuristicThreshold(sensitivity: AmbientConfig["sensitivity"]): number {
   switch (sensitivity) {
-    case "low": return 70
-    case "medium": return 50
-    case "high": return 30
+    case "low": return 80
+    case "medium": return 65
+    case "high": return 50
   }
 }

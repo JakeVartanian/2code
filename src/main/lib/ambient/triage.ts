@@ -9,22 +9,28 @@ import { BudgetTracker } from "./budget"
 import type { HeuristicResult, TriageItem, TriageResult, SuggestionCategory } from "./types"
 
 const VALID_CATEGORIES: Set<string> = new Set([
-  "bug", "security", "performance", "test-gap", "dead-code", "dependency",
+  "bug", "security", "performance", "test-gap", "dead-code", "dependency", "blind-spot", "risk", "next-step",
 ])
 
-const TRIAGE_SYSTEM_PROMPT = `You are a code change triage system for a developer's local project. Given file changes and observations, rate each finding for actionability.
+const TRIAGE_SYSTEM_PROMPT = `You are a smart filter for a developer's ambient coding assistant. Your job: decide which findings deserve the developer's attention.
 
 For each item, output a JSON array with objects containing:
 - "index": the item number (0-based)
-- "relevance": 0.0-1.0 (should a developer see this?)
-- "category": the most accurate category (bug|security|performance|test-gap|dead-code|dependency)
+- "relevance": 0.0-1.0 (would a senior developer want to know about this?)
+- "category": the most accurate category (bug|security|performance|test-gap|dead-code|dependency|blind-spot)
 - "urgency": low|medium|high
 - "summary": <10 words if relevance > 0.5, empty string otherwise
 
 Output ONLY the JSON array, no other text. Example:
 [{"index":0,"relevance":0.8,"category":"bug","urgency":"high","summary":"Null deref when config missing"}]
 
-Be selective. Most code changes are fine. Only flag genuinely concerning patterns. A relevance of 0.7+ means "a developer should look at this." Below 0.5 means "normal code, ignore."`
+Calibration guide:
+- 0.9+: Security vulnerabilities, confirmed bugs that will hit production
+- 0.7-0.9: Real issues worth fixing — missed edge cases, integration risks, blind spots
+- 0.5-0.7: Legitimate observations a developer might appreciate knowing
+- Below 0.5: Normal code, stylistic preferences, things a linter handles — ignore these
+
+You are NOT a linter. Do not flag console.log, type assertions, or style issues. Focus on things the developer genuinely might not have noticed — connections between files, missing error handling for real scenarios, architectural implications.`
 
 /**
  * Run Haiku triage on a batch of heuristic candidates.

@@ -113,7 +113,8 @@ export function buildSessionSummary(subChatId: string): string {
   const meta = lastEvent?.sessionMeta
 
   const parts: string[] = []
-  parts.push(`Session: ${prompts.length} user messages, ${toolCalls.length} tool calls, ${errors.length} errors.`)
+  parts.push(`## CONTEXT THE DEVELOPER ALREADY KNOWS (do not repeat any of this):`)
+  parts.push(`Session stats: ${prompts.length} user messages, ${toolCalls.length} tool calls, ${errors.length} errors.`)
 
   if (meta?.durationSeconds) {
     parts.push(`Duration: ${Math.round(meta.durationSeconds / 60)}min. Model: ${meta.model ?? "unknown"}.`)
@@ -126,17 +127,13 @@ export function buildSessionSummary(subChatId: string): string {
     parts.push(`Files READ (${filesRead.size}): ${[...filesRead].slice(0, 10).join(", ")}`)
   }
 
-  // Tool call sequence (shows the working pattern)
-  if (toolCalls.length > 0) {
-    const sequence = toolCalls.slice(0, 30).map(e => e.toolName ?? "?").join(" → ")
-    parts.push(`Tool sequence: ${sequence}`)
-  }
+  // Tool sequence removed — gives the model too much narration material
 
   // All user prompts (not just 3 — the full conversation arc matters)
   if (prompts.length > 0) {
-    parts.push("\nUser messages:")
+    parts.push("\nDEVELOPER'S OWN WORDS (do not parrot back):")
     for (const p of prompts.slice(0, 10)) {
-      parts.push(`- ${p.summary.slice(0, 300)}`)
+      parts.push(`- ${p.summary.slice(0, 500)}`)
     }
   }
 
@@ -150,7 +147,7 @@ export function buildSessionSummary(subChatId: string): string {
 
   // Last assistant response excerpt (what Claude concluded)
   if (meta?.lastAssistantExcerpt) {
-    parts.push(`\nClaude's last response (excerpt): ${meta.lastAssistantExcerpt}`)
+    parts.push(`\nAssistant's last response (developer already read this): ${meta.lastAssistantExcerpt}`)
   }
 
   return parts.join("\n")

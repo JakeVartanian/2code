@@ -95,7 +95,7 @@ export const ambientRouter = router({
         haikuCalls: row?.haikuCalls ?? 0,
         sonnetCalls: row?.sonnetCalls ?? 0,
         totalCostCents: row?.totalCostCents ?? 0,
-        dailyLimitCents: 50,
+        dailyLimitCents: 500,
         percentUsed: row ? Math.round((row.totalCostCents / 50) * 100) : 0,
         isExhausted: row ? row.totalCostCents >= 50 : false,
         tier: "normal" as const,
@@ -116,6 +116,12 @@ export const ambientRouter = router({
           pendingSuggestions: 0,
           lastEventAt: null,
           lastAnalysisAt: null,
+          activity: {
+            sessionsAnalyzedToday: 0,
+            changesReviewedToday: 0,
+            suggestionsToday: 0,
+            lastInsightAt: null,
+          },
         }
       }
       return agent.getStatus()
@@ -133,7 +139,7 @@ export const ambientRouter = router({
       return {
         enabled: true,
         sensitivity: "medium" as const,
-        budget: { dailyLimitCents: 50, haikuRateLimit: 20, sonnetRateLimit: 5 },
+        budget: { dailyLimitCents: 500, haikuRateLimit: 60, sonnetRateLimit: 20 },
         enabledCategories: ["bug", "security", "performance", "test-gap"] as const,
         ignorePatterns: [] as string[],
         autoMemoryWrite: true,
@@ -334,17 +340,22 @@ export const ambientRouter = router({
 
       // Create a new sub-chat with the suggested prompt
       const subChatId = createId()
-      const initialMessages = suggestion.suggestedPrompt
-        ? JSON.stringify([{
-            role: "user",
-            content: suggestion.suggestedPrompt,
-          }])
-        : "[]"
+      const promptText = suggestion.suggestedPrompt || suggestion.description || suggestion.title
+      const initialMessages = JSON.stringify([{
+        id: `msg-${Date.now()}`,
+        role: "user",
+        parts: [{ type: "text", text: promptText }],
+      }])
+
+      // Truncate title for tab name (keep it readable)
+      const tabName = suggestion.title.length > 60
+        ? suggestion.title.slice(0, 57) + "..."
+        : suggestion.title
 
       db.insert(subChats)
         .values({
           id: subChatId,
-          name: suggestion.title,
+          name: tabName,
           chatId: input.chatId,
           mode: input.mode,
           messages: initialMessages,
@@ -678,9 +689,10 @@ export const ambientRouter = router({
           input.projectId,
           input.projectPath,
           provider,
-          (progress) => {
+          (progress, runId) => {
             ambientEvents.emit(`project:${input.projectId}`, {
               type: "audit-progress",
+              runId,
               progress,
             })
           },
@@ -867,14 +879,22 @@ export const ambientRouter = router({
       const finding = db.select().from(af).where(eq(af.id, input.findingId)).get()
       if (!finding) return { success: false, subChatId: null }
 
-      // Create sub-chat with suggestedPrompt pre-filled
+      // Create sub-chat with suggestedPrompt pre-filled (AI SDK message format)
       const subChatId = createId()
+      const findingPrompt = finding.suggestedPrompt || `Fix: ${finding.title}\n\n${finding.description}`
+      const findingTabName = finding.title.length > 60
+        ? finding.title.slice(0, 57) + "..."
+        : finding.title
       db.insert(subChats).values({
         id: subChatId,
-        name: finding.title,
+        name: findingTabName,
         chatId: input.chatId,
         mode: "agent",
-        messages: JSON.stringify([{ role: "user", content: finding.suggestedPrompt || `Fix: ${finding.title}\n\n${finding.description}` }]),
+        messages: JSON.stringify([{
+          id: `msg-${Date.now()}`,
+          role: "user",
+          parts: [{ type: "text", text: findingPrompt }],
+        }]),
       }).run()
 
       // Mark finding resolved
@@ -1105,6 +1125,14 @@ export const ambientRouter = router({
         type: string
         suggestionId?: string
         subChatId?: string
+        runId?: string
+        progress?: Array<{
+          zoneId: string
+          zoneName: string
+          status: "pending" | "profiling" | "auditing" | "done" | "error"
+          findings: number
+          errorMessage?: string
+        }>
         suggestion?: {
           id: string
           category: string

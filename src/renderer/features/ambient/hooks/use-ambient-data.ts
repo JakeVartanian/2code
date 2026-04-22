@@ -4,9 +4,11 @@
  */
 
 import { useEffect, useRef } from "react"
+import { useSetAtom } from "jotai"
 import { toast } from "sonner"
 import { trpc } from "../../../lib/trpc"
 import { useAmbientStore } from "../store"
+import { auditProgressAtom, auditProgressDefaultState } from "../audit-progress-atom"
 
 export function useAmbientData(
   projectId: string | null,
@@ -17,9 +19,11 @@ export function useAmbientData(
     removeSuggestion,
     setBudgetStatus,
     setAgentStatus,
+    setActivity,
   } = useAmbientStore()
 
   const utils = trpc.useUtils()
+  const setAuditProgress = useSetAtom(auditProgressAtom)
 
   // ─── Auto-start ambient agent on project load ───────────────────────
   const ensureRunning = trpc.ambient.ensureRunning.useMutation()
@@ -79,7 +83,10 @@ export function useAmbientData(
   }, [budget])
 
   useEffect(() => {
-    if (status) setAgentStatus(status.agentStatus)
+    if (status) {
+      setAgentStatus(status.agentStatus)
+      if (status.activity) setActivity(status.activity)
+    }
   }, [status])
 
   // ─── Real-time subscription with toast notifications ────────────────
@@ -90,17 +97,15 @@ export function useAmbientData(
       enabled: !!projectId,
       onData: (event) => {
         if (event.type === "new-suggestion") {
-          // Refetch suggestions immediately
           utils.ambient.listSuggestions.invalidate({ projectId: projectId! })
 
-          // Show toast so the user knows GAAD found something
+          // Toast for high-severity findings so users don't miss critical issues
           const s = event.suggestion
           if (s) {
             const label = s.category === "next-step" ? "Next step"
               : s.category === "risk" ? "Risk"
               : s.category === "bug" ? "Bug"
               : s.category === "test-gap" ? "Test gap"
-              : s.category === "memory" ? "Memory"
               : s.category
 
             if (s.severity === "error") {
@@ -113,13 +118,11 @@ export function useAmbientData(
                 description: `${label} — ${s.confidence}% confidence`,
                 duration: 6000,
               })
-            } else {
-              toast.info(s.title, {
-                description: `${label} — ${s.confidence}% confidence`,
-                duration: 5000,
-              })
             }
           }
+        }
+        if (event.type === "suggestion-expired" && event.suggestionId) {
+          removeSuggestion(event.suggestionId)
         }
         if (event.type === "suggestion-dismissed" && event.suggestionId) {
           removeSuggestion(event.suggestionId)
@@ -131,7 +134,24 @@ export function useAmbientData(
           // Refetch audit findings when a finding is resolved
           utils.ambient.listAuditFindings.invalidate({ projectId: projectId! })
         }
-        if (event.type === "audit-progress") {
+        if (event.type === "audit-progress" && event.progress) {
+          // Update live progress atom
+          const allDone = event.progress.every(
+            (p) => p.status === "done" || p.status === "error",
+          )
+          setAuditProgress((prev) => ({
+            isRunning: !allDone,
+            runId: event.runId ?? prev.runId,
+            startedAt: prev.startedAt ?? Date.now(),
+            zoneCount: event.progress!.length,
+            progress: event.progress!,
+          }))
+          if (allDone) {
+            // Reset after a short delay so the "done" state is visible
+            setTimeout(() => {
+              setAuditProgress(auditProgressDefaultState)
+            }, 3000)
+          }
           // Refetch audit runs for live progress in the dashboard
           utils.ambient.listAuditRuns.invalidate({ projectId: projectId! })
         }

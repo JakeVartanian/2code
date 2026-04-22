@@ -12,6 +12,7 @@ export type SuggestionCategory =
   | "dead-code"
   | "dependency"
   // GAAD partner categories
+  | "blind-spot"   // hidden consequence the developer didn't notice
   | "next-step"    // what to build/do next (includes ideas, momentum, tools)
   | "risk"         // something that might bite you (includes security, performance)
   | "memory"       // pattern worth remembering (auto-saved to project memory)
@@ -84,6 +85,7 @@ export interface ChatActivityEvent {
     filesModified?: string[]
     toolCallCount?: number
     errorCount?: number
+    promptCount?: number
     lastAssistantExcerpt?: string
   }
 }
@@ -179,6 +181,13 @@ export interface AmbientStatus {
   pendingSuggestions: number
   lastEventAt: number | null
   lastAnalysisAt: number | null
+  /** Activity counters for micro-status display */
+  activity: {
+    sessionsAnalyzedToday: number
+    changesReviewedToday: number
+    suggestionsToday: number
+    lastInsightAt: number | null // timestamp of last suggestion persisted
+  }
 }
 
 // ============ FEEDBACK ============

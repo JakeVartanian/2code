@@ -1006,7 +1006,10 @@ const DEFAULT_DIFF_STATS: DiffStatsCache = {
   hasChanges: false,
 }
 
-// Runtime cache for diff data per workspace (not persisted)
+// Runtime cache for diff data per workspace (not persisted).
+// Limited to MAX_CACHED_WORKSPACES to prevent OOM — each cache can hold
+// megabytes of parsed diffs + full file contents.
+const MAX_CACHED_WORKSPACES = 3
 const workspaceDiffCacheStorageAtom = atom<Record<string, WorkspaceDiffCache>>({})
 
 // Default cache value
@@ -1024,13 +1027,31 @@ export const workspaceDiffCacheAtomFamily = atomFamily((chatId: string) =>
       const current = get(workspaceDiffCacheStorageAtom)
       const prevCache = current[chatId] ?? DEFAULT_DIFF_CACHE
       const newCache = typeof update === 'function' ? update(prevCache) : update
-      set(workspaceDiffCacheStorageAtom, {
-        ...current,
-        [chatId]: newCache,
-      })
+      const updated = { ...current, [chatId]: newCache }
+
+      // Evict oldest caches to prevent OOM (each can hold MB of parsed diffs + file contents)
+      const keys = Object.keys(updated)
+      if (keys.length > MAX_CACHED_WORKSPACES) {
+        // Keep the current chatId + the N-1 most recently accessed (approximated by insertion order)
+        const toEvict = keys.filter(k => k !== chatId).slice(0, keys.length - MAX_CACHED_WORKSPACES)
+        for (const k of toEvict) {
+          delete updated[k]
+        }
+      }
+
+      set(workspaceDiffCacheStorageAtom, updated)
     },
   ),
 )
+
+/** Evict a specific chat's diff cache data from the storage atom (call on archive/delete) */
+export function evictWorkspaceDiffCache(chatId: string, store: { set: (atom: any, value: any) => void, get: (atom: any) => any }): void {
+  const current = store.get(workspaceDiffCacheStorageAtom)
+  if (chatId in current) {
+    const { [chatId]: _, ...rest } = current
+    store.set(workspaceDiffCacheStorageAtom, rest)
+  }
+}
 
 // Show raw JSON for each message in chat (dev only)
 export const showMessageJsonAtom = atomWithStorage<boolean>(

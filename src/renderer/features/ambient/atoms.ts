@@ -12,14 +12,11 @@ export const ambientPanelExpandedAtom = atomWithStorage<boolean>(
   true,
 )
 
-/** Which suggestion card is currently expanded (null = all collapsed) */
-export const expandedSuggestionIdAtom = atom<string | null>(null)
-
 /** Last-used implement mode — persisted so repeat users don't re-select */
 export const implementModeAtom = atomWithStorage<"plan" | "agent">(
   "ambient:implementMode",
   "plan",
 )
 
-/** Whether the suggestion history is expanded */
-export const suggestionHistoryExpandedAtom = atom<boolean>(false)
+/** The suggestion currently shown in the full assessment panel (null = list view) */
+export const assessmentPanelSuggestionIdAtom = atom<string | null>(null)

@@ -32,6 +32,13 @@ export interface AmbientBudgetStatus {
   tier: "normal" | "conserving" | "tier0-only" | "paused"
 }
 
+export interface AmbientActivity {
+  sessionsAnalyzedToday: number
+  changesReviewedToday: number
+  suggestionsToday: number
+  lastInsightAt: number | null
+}
+
 interface AmbientState {
   // Per-project state
   suggestions: AmbientSuggestion[]
@@ -39,6 +46,7 @@ interface AmbientState {
   agentStatus: "running" | "paused" | "stopped"
   enabled: boolean
   categoryWeights: Map<string, number>
+  activity: AmbientActivity | null
 
   // Actions
   setSuggestions: (suggestions: AmbientSuggestion[]) => void
@@ -48,6 +56,7 @@ interface AmbientState {
   setAgentStatus: (status: "running" | "paused" | "stopped") => void
   setEnabled: (enabled: boolean) => void
   setCategoryWeights: (weights: Map<string, number>) => void
+  setActivity: (activity: AmbientActivity) => void
   reset: () => void
 }
 
@@ -57,11 +66,15 @@ export const useAmbientStore = create<AmbientState>((set) => ({
   agentStatus: "stopped",
   enabled: true,
   categoryWeights: new Map(),
+  activity: null,
 
-  setSuggestions: (suggestions) => set({ suggestions }),
+  setSuggestions: (suggestions) => set({
+    suggestions: suggestions.filter(s => s.status === "pending")
+      .concat(suggestions.filter(s => s.status !== "pending")),
+  }),
 
   addSuggestion: (suggestion) => set((state) => ({
-    suggestions: [suggestion, ...state.suggestions].slice(0, 10), // Cap at 10
+    suggestions: [suggestion, ...state.suggestions],
   })),
 
   removeSuggestion: (id) => set((state) => ({
@@ -76,11 +89,14 @@ export const useAmbientStore = create<AmbientState>((set) => ({
 
   setCategoryWeights: (categoryWeights) => set({ categoryWeights }),
 
+  setActivity: (activity) => set({ activity }),
+
   reset: () => set({
     suggestions: [],
     budgetStatus: null,
     agentStatus: "stopped",
     enabled: true,
     categoryWeights: new Map(),
+    activity: null,
   }),
 }))

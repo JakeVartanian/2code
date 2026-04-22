@@ -4,8 +4,9 @@
  */
 
 import { memo, useMemo, useCallback, useRef, useState, useEffect } from "react"
-import { motion } from "motion/react"
-import { Network, RefreshCw, Sparkles, ShieldCheck } from "lucide-react"
+import { motion, AnimatePresence } from "motion/react"
+import { Network, RefreshCw, Sparkles, ShieldCheck, X, Info, Loader2, CheckCircle2, XCircle, Clock } from "lucide-react"
+import { useAtom } from "jotai"
 import { cn } from "../../../../../lib/utils"
 import { trpc } from "../../../../../lib/trpc"
 import { useArchitectureData } from "./use-architecture-data"
@@ -13,6 +14,7 @@ import { ZoneCard } from "./zone-card"
 import { ZoneConnections } from "./zone-connections"
 import { Legend } from "./legend"
 import { computeLayout, ZONE_WIDTH, ZONE_HEIGHT } from "./layout"
+import { auditProgressAtom, auditProgressDefaultState } from "../../../../ambient/audit-progress-atom"
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -68,6 +70,112 @@ function GeneratingState() {
   )
 }
 
+// ─── Audit Progress Panel ───────────────────────────────────────────────────
+
+function AuditProgressPanel({
+  progress,
+  onCancel,
+}: {
+  progress: import("../../../../ambient/audit-progress-atom").AuditProgressState
+  onCancel: () => void
+}) {
+  const completedCount = progress.progress.filter(p => p.status === "done" || p.status === "error").length
+  const percent = progress.zoneCount > 0 ? Math.round((completedCount / progress.zoneCount) * 100) : 0
+
+  // ETA: use actual elapsed time per zone if we have completed zones, else 45s fallback
+  const elapsedMs = Date.now() - (progress.startedAt ?? Date.now())
+  const avgMsPerZone = completedCount > 0 ? elapsedMs / completedCount : 45_000
+  const remainingCount = progress.zoneCount - completedCount
+  const etaMs = remainingCount * avgMsPerZone
+  const etaMin = Math.floor(etaMs / 60_000)
+  const etaSec = Math.ceil((etaMs % 60_000) / 1000)
+  const etaText = remainingCount === 0
+    ? "Finishing up..."
+    : etaMin > 0
+      ? `~${etaMin}:${String(etaSec).padStart(2, "0")} remaining`
+      : `~${etaSec}s remaining`
+
+  return (
+    <div className="px-4 py-3 space-y-3 bg-zinc-900/80">
+      {/* Header row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+          <span className="text-xs font-medium text-zinc-200">
+            Auditing {completedCount} of {progress.zoneCount} zones
+          </span>
+          <span className="text-[10px] text-zinc-500 font-mono">{etaText}</span>
+        </div>
+        <button
+          onClick={onCancel}
+          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-all duration-150"
+        >
+          <X className="w-3 h-3" />
+          Cancel
+        </button>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+        <motion.div
+          className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-cyan-400"
+          initial={{ width: 0 }}
+          animate={{ width: `${percent}%` }}
+          transition={{ duration: 0.3, ease: "easeOut" }}
+        />
+      </div>
+
+      {/* Zone status grid */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        {progress.progress.map((zone) => (
+          <div key={zone.zoneId} className="flex items-center justify-between gap-2 py-0.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              {zone.status === "done" ? (
+                <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />
+              ) : zone.status === "error" ? (
+                <XCircle className="w-3 h-3 text-red-400 shrink-0" />
+              ) : zone.status === "auditing" || zone.status === "profiling" ? (
+                <Loader2 className="w-3 h-3 text-cyan-400 animate-spin shrink-0" />
+              ) : (
+                <Clock className="w-3 h-3 text-zinc-600 shrink-0" />
+              )}
+              <span className={cn(
+                "text-[10px] font-mono truncate",
+                zone.status === "done" ? "text-green-400/80"
+                  : zone.status === "error" ? "text-red-400/80"
+                    : zone.status === "auditing" || zone.status === "profiling" ? "text-cyan-400"
+                      : "text-zinc-600",
+              )}>
+                {zone.zoneName}
+              </span>
+            </div>
+            <span className={cn(
+              "text-[9px] font-mono shrink-0",
+              zone.status === "done" ? "text-zinc-500"
+                : zone.status === "error" ? "text-red-400/60"
+                  : "text-zinc-700",
+            )}>
+              {zone.status === "done" ? `${zone.findings} finding${zone.findings !== 1 ? "s" : ""}`
+                : zone.status === "error" ? "failed"
+                  : zone.status === "profiling" ? "profiling"
+                    : zone.status === "auditing" ? "scanning"
+                      : "queued"}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Info line */}
+      <div className="flex items-start gap-1.5 pt-1">
+        <Info className="w-3 h-3 text-zinc-600 shrink-0 mt-0.5" />
+        <span className="text-[9px] text-zinc-600 leading-relaxed">
+          AI scans each zone for bugs, security vulnerabilities, performance issues, test gaps, dead code, and dependency risks.
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 interface ArchitectureMapProps {
@@ -115,6 +223,9 @@ export const ArchitectureMap = memo(function ArchitectureMap({
   const [isBuilding, setIsBuilding] = useState(false)
   // Track which zones are currently being audited
   const [auditingZones, setAuditingZones] = useState<Set<string>>(new Set())
+  // Live audit progress from subscription
+  const [auditProgress, setAuditProgress] = useAtom(auditProgressAtom)
+  const cancelAuditMutation = trpc.ambient.cancelAuditRun.useMutation()
 
   const handleBuildBrain = useCallback(async () => {
     if (!projectId || !projectPath) return
@@ -140,13 +251,29 @@ export const ArchitectureMap = memo(function ArchitectureMap({
 
   const handleAudit = useCallback(async () => {
     if (!projectId || !projectPath) return
+    // Set initial progress state immediately so the panel appears
+    setAuditProgress({
+      isRunning: true,
+      runId: null,
+      startedAt: Date.now(),
+      zoneCount: zones.length,
+      progress: zones.map(z => ({ zoneId: z.id, zoneName: z.name, status: "pending" as const, findings: 0 })),
+    })
     try {
       await auditMutation.mutateAsync({ projectId, projectPath })
       utils.ambient.listSuggestions.invalidate({ projectId })
     } catch (err) {
       console.error("[ArchitectureMap] Audit failed:", err)
+      setAuditProgress(auditProgressDefaultState)
     }
-  }, [projectId, projectPath, auditMutation, utils])
+  }, [projectId, projectPath, auditMutation, utils, zones, setAuditProgress])
+
+  const handleCancelAudit = useCallback(() => {
+    if (auditProgress.runId) {
+      cancelAuditMutation.mutate({ runId: auditProgress.runId })
+    }
+    setAuditProgress(auditProgressDefaultState)
+  }, [auditProgress.runId, cancelAuditMutation, setAuditProgress])
 
   const handleZoneAudit = useCallback(async (zoneId: string) => {
     if (!projectId || !projectPath) return
@@ -195,16 +322,17 @@ export const ArchitectureMap = memo(function ArchitectureMap({
             <div className="flex items-center gap-1">
               <button
                 onClick={handleAudit}
-                disabled={auditMutation.isPending}
+                disabled={auditProgress.isRunning || auditMutation.isPending}
                 className={cn(
                   "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-medium transition-all duration-150",
-                  auditMutation.isPending
+                  auditProgress.isRunning || auditMutation.isPending
                     ? "bg-cyan-500/10 text-cyan-400 cursor-wait"
                     : "text-zinc-500 hover:text-cyan-400 hover:bg-cyan-500/10",
                 )}
+                title="Scans each zone's source files with AI to find bugs, security issues, performance problems, test gaps, dead code, and dependency risks."
               >
-                <ShieldCheck className={cn("w-3 h-3", auditMutation.isPending && "animate-pulse")} />
-                {auditMutation.isPending ? "Auditing..." : "Audit All"}
+                <ShieldCheck className={cn("w-3 h-3", (auditProgress.isRunning || auditMutation.isPending) && "animate-pulse")} />
+                {auditProgress.isRunning ? `Auditing ${auditProgress.progress.filter(p => p.status === "done" || p.status === "error").length}/${auditProgress.zoneCount}` : "Audit All"}
               </button>
               <button
                 onClick={handleRegenerate}
@@ -219,6 +347,24 @@ export const ArchitectureMap = memo(function ArchitectureMap({
           )}
         </div>
       </div>
+
+      {/* Audit Progress Panel */}
+      <AnimatePresence>
+        {auditProgress.isRunning && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden border-b border-zinc-800/60"
+          >
+            <AuditProgressPanel
+              progress={auditProgress}
+              onCancel={handleCancelAudit}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Content */}
       <div ref={containerRef}>
@@ -302,6 +448,7 @@ export const ArchitectureMap = memo(function ArchitectureMap({
             {zones.map((zone, i) => {
               const pos = positions.get(zone.id)
               if (!pos) return null
+              const zoneProgress = auditProgress.progress.find(p => p.zoneId === zone.id)
               return (
                 <ZoneCard
                   key={zone.id}
@@ -309,7 +456,9 @@ export const ArchitectureMap = memo(function ArchitectureMap({
                   x={pos.x}
                   y={pos.y}
                   index={i}
-                  isAuditing={auditingZones.has(zone.id) || auditMutation.isPending}
+                  isAuditing={auditingZones.has(zone.id)}
+                  auditStatus={zoneProgress?.status}
+                  auditFindingCount={zoneProgress?.findings}
                   onAudit={handleZoneAudit}
                 />
               )

@@ -3,7 +3,7 @@ import { router, publicProcedure } from "../index"
 import { readdir, stat, readFile, writeFile, mkdir, rename as fsRename, rm } from "node:fs/promises"
 import { join, relative, basename, extname, dirname, resolve, isAbsolute } from "node:path"
 import { app, shell } from "electron"
-import { watch } from "node:fs"
+import { watchFile } from "../../files/watcher-pool"
 import { observable } from "@trpc/server/observable"
 import { homedir } from "node:os"
 import { getDatabase, projects, chats } from "../../db"
@@ -469,19 +469,30 @@ export const filesRouter = router({
   /**
    * Watch for file changes in a project directory
    * Emits events when files are modified
+   *
+   * When filePath is provided, watches only that single file (1 FD).
+   * Without filePath, falls back to recursive directory watching (expensive — avoid).
    */
   watchChanges: publicProcedure
-    .input(z.object({ projectPath: z.string() }))
+    .input(z.object({ projectPath: z.string(), filePath: z.string().optional() }))
     .subscription(({ input }) => {
       return observable<{ filename: string; eventType: string }>((emit) => {
-        const watcher = watch(input.projectPath, { recursive: true }, (eventType, filename) => {
-          if (filename) {
-            emit.next({ filename, eventType })
-          }
+        if (!input.filePath) {
+          // No file specified — return empty subscription instead of expensive recursive watch
+          return () => {}
+        }
+
+        const fullPath = isAbsolute(input.filePath)
+          ? input.filePath
+          : join(input.projectPath, input.filePath)
+
+        const unsubscribe = watchFile(fullPath, (eventType) => {
+          const rel = relative(input.projectPath, fullPath)
+          emit.next({ filename: rel, eventType })
         })
 
         return () => {
-          watcher.close()
+          unsubscribe()
         }
       })
     }),

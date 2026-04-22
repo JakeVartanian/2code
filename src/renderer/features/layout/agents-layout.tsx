@@ -244,17 +244,6 @@ export function AgentsLayout() {
       toast.error(title, {
         description: errorMessage || undefined,
         duration: 10000,
-        action: {
-          label: "Open settings",
-          onClick: () => {
-            const projectMatch = projects?.find((project) => project.id === payload.projectId)
-            if (projectMatch) {
-              setSelectedProject(projectMatch as any)
-            }
-            setSettingsActiveTab("projects")
-            setSettingsDialogOpen(true)
-          },
-        },
       })
     })
 

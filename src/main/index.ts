@@ -1,3 +1,18 @@
+// Raise UV threadpool size before any I/O — default is too small for Electron + watchers
+if (process.platform !== "win32") {
+  process.env.UV_THREADPOOL_SIZE = "16"
+}
+
+// macOS GUI apps inherit a 256 file descriptor soft limit from launchd.
+// Electron + Claude subprocesses + SQLite + git watchers + network easily exceed this.
+// Defense in depth:
+// 1. fd-pressure.ts: monitors FD count, auto-sheds load at 60%/80% thresholds
+// 2. native/raise-fd-limit: native addon to raise soft limit to 10240 (build with native/raise-fd-limit/build.sh)
+// 3. watcher-pool.ts: dynamic cap, LRU eviction under pressure
+// 4. git-watcher.ts: FD headroom check before creating watchers
+// 5. claude.ts: dynamic MAX_CONCURRENT_AGENTS, FD headroom check before spawning sessions
+// For dev: run `ulimit -n 4096` in your shell before `bun run dev` to avoid EMFILE entirely.
+
 import "./lib/logger"
 import { initCrashDump } from "./lib/crash-dump"
 import { app, BrowserWindow, dialog, Menu, nativeImage, session } from "electron"
@@ -21,6 +36,7 @@ import {
   parseLaunchDirectory,
 } from "./lib/cli"
 import { cleanupGitWatchers } from "./lib/git/watcher"
+import { startFdMonitor, stopFdMonitor, onFdPressureChange } from "./lib/fd-pressure"
 import { cancelAllPendingOAuth, handleMcpOAuthCallback } from "./lib/mcp-auth"
 import { handleClaudeCodeOAuthCallback } from "./lib/trpc/routers/claude-code"
 import { bringToFront } from "./lib/window"
@@ -617,6 +633,14 @@ if (gotTheLock) {
 
   // App ready
   app.whenReady().then(async () => {
+    // Start FD pressure monitor FIRST — raises FD limit and enables pressure-aware behavior
+    startFdMonitor()
+    onFdPressureChange((level, count, limit) => {
+      if (level === "critical") {
+        console.error(`[App] FD pressure CRITICAL: ${count}/${limit} — shedding load`)
+      }
+    })
+
     // Clean up any orphaned processes from a previous crash (non-blocking)
     cleanupOrphanedProcesses()
 
@@ -1100,6 +1124,9 @@ if (gotTheLock) {
       cancelAllPendingOAuth()
       await cleanupGitWatchers()
 
+      // Stop FD monitor
+      stopFdMonitor()
+
       // Flush all pending database writes synchronously before closing
       flushAllPendingWrites()
       await closeDatabase()
@@ -1114,6 +1141,11 @@ if (gotTheLock) {
 
   // Handle uncaught exceptions — flush pending DB writes so in-flight messages aren't lost
   process.on("uncaughtException", (error) => {
+    // EMFILE: out of file descriptors — suppress completely. Any console.error or
+    // disk I/O here will itself fail with EMFILE, causing a cascade that crashes
+    // the renderer. The crash-dump handler also suppresses this.
+    if ((error as NodeJS.ErrnoException).code === "EMFILE") return
+
     console.error("[App] Uncaught exception:", error)
     try { flushAllPendingWrites() } catch {}
 
@@ -1128,6 +1160,9 @@ if (gotTheLock) {
   })
 
   process.on("unhandledRejection", (reason, promise) => {
+    // EMFILE: suppress completely — see uncaughtException handler above.
+    if (reason && (reason as NodeJS.ErrnoException).code === "EMFILE") return
+
     console.error("[App] Unhandled rejection at:", promise, "reason:", reason)
     try { flushAllPendingWrites() } catch {}
 

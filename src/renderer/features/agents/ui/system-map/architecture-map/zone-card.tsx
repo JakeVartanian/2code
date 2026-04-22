@@ -10,7 +10,7 @@ import {
   Monitor, Server, Database, Shield, Brain, Package,
   Globe, Key, Cpu, HardDrive, Cloud, Code, GitBranch,
   Layout, Terminal, FileCode, Workflow, Zap, Settings, Layers,
-  ShieldCheck,
+  ShieldCheck, Loader2, CheckCircle2, XCircle, Clock,
   type LucideIcon,
 } from "lucide-react"
 import { cn } from "../../../../../lib/utils"
@@ -143,10 +143,12 @@ interface ZoneCardProps {
   y: number
   index: number
   isAuditing?: boolean
+  auditStatus?: "pending" | "profiling" | "auditing" | "done" | "error"
+  auditFindingCount?: number
   onAudit?: (zoneId: string) => void
 }
 
-export const ZoneCard = memo(function ZoneCard({ zone, x, y, index, isAuditing, onAudit }: ZoneCardProps) {
+export const ZoneCard = memo(function ZoneCard({ zone, x, y, index, isAuditing, auditStatus, auditFindingCount, onAudit }: ZoneCardProps) {
   const prefersReducedMotion = useReducedMotion()
   const tier = getColorTier(zone.confidence, zone.severity)
   const Icon = ICON_MAP[zone.icon] || Code
@@ -234,15 +236,45 @@ export const ZoneCard = memo(function ZoneCard({ zone, x, y, index, isAuditing, 
           {/* Footer */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className={cn("text-[9px] font-mono", tier.textColor)} style={{ opacity: 0.7 }}>
-                {isAuditing
-                  ? "Auditing..."
-                  : zone.lastAuditedAt
+              {auditStatus === "pending" ? (
+                <span className="flex items-center gap-1 text-[9px] font-mono text-zinc-600">
+                  <Clock className="w-2.5 h-2.5" />
+                  Queued...
+                </span>
+              ) : auditStatus === "profiling" ? (
+                <span className="flex items-center gap-1 text-[9px] font-mono text-cyan-400">
+                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                  Building profile...
+                </span>
+              ) : auditStatus === "auditing" ? (
+                <span className="flex items-center gap-1 text-[9px] font-mono text-cyan-400">
+                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                  Scanning...
+                </span>
+              ) : auditStatus === "done" ? (
+                <span className="flex items-center gap-1 text-[9px] font-mono text-green-400">
+                  <CheckCircle2 className="w-2.5 h-2.5" />
+                  {auditFindingCount ?? 0} finding{(auditFindingCount ?? 0) !== 1 ? "s" : ""}
+                </span>
+              ) : auditStatus === "error" ? (
+                <span className="flex items-center gap-1 text-[9px] font-mono text-red-400">
+                  <XCircle className="w-2.5 h-2.5" />
+                  Error
+                </span>
+              ) : isAuditing ? (
+                <span className="flex items-center gap-1 text-[9px] font-mono text-cyan-400">
+                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                  Auditing...
+                </span>
+              ) : (
+                <span className={cn("text-[9px] font-mono", tier.textColor)} style={{ opacity: 0.7 }}>
+                  {zone.lastAuditedAt
                     ? `Audited ${relativeTime(zone.lastAuditedAt)}`
                     : "Never audited"}
-              </span>
+                </span>
+              )}
               {/* Per-zone audit button */}
-              {onAudit && (
+              {onAudit && !auditStatus && (
                 <button
                   onClick={handleAudit}
                   disabled={isAuditing}
@@ -258,7 +290,7 @@ export const ZoneCard = memo(function ZoneCard({ zone, x, y, index, isAuditing, 
                 </button>
               )}
             </div>
-            {zone.issueCount > 0 && (
+            {!auditStatus && zone.issueCount > 0 && (
               <span className="text-[9px] font-mono text-amber-400/70">
                 {zone.issueCount} issue{zone.issueCount !== 1 ? "s" : ""}
               </span>

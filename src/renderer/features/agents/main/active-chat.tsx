@@ -2025,7 +2025,7 @@ const ChatViewInner = memo(function ChatViewInner({
     ) {
       hasTriggeredAutoGenerateRef.current = true
       // Trigger rename for pre-populated initial message (from createAgentChat)
-      if (!hasTriggeredRenameRef.current && isFirstSubChat) {
+      if (!hasTriggeredRenameRef.current && (!subChatNameRef.current || subChatNameRef.current === "New Chat")) {
         const firstMsg = msgs[0]
         if (firstMsg?.role === "user") {
           const textPart = (firstMsg as any).parts?.find((p: any) => p.type === "text")
@@ -2323,8 +2323,9 @@ const ChatViewInner = memo(function ChatViewInner({
       clearSubChatDraft(parentChatId, subChatId)
     }
 
-    // Trigger auto-rename on first message in a new sub-chat
-    if (messagesLengthRef.current === 0 && !hasTriggeredRenameRef.current) {
+    // Trigger auto-rename if sub-chat still has default/empty name
+    const currentName = subChatNameRef.current
+    if (!hasTriggeredRenameRef.current && (!currentName || currentName === "New Chat")) {
       hasTriggeredRenameRef.current = true
       onAutoRename(finalText || "Image message", subChatId)
     }
@@ -2634,6 +2635,13 @@ const ChatViewInner = memo(function ChatViewInner({
       clearSubChatDraft(parentChatId, subChatId)
     }
 
+    // Trigger auto-rename if sub-chat still has default/empty name
+    const forceSendName = subChatNameRef.current
+    if (!hasTriggeredRenameRef.current && (!forceSendName || forceSendName === "New Chat")) {
+      hasTriggeredRenameRef.current = true
+      onAutoRename(finalText || "Image message", subChatId)
+    }
+
     // Build message parts
     const parts: any[] = [
       ...currentImages
@@ -2689,6 +2697,7 @@ const ChatViewInner = memo(function ChatViewInner({
     subChatId,
     handleStop,
     clearAll,
+    onAutoRename,
   ])
 
   // NOTE: Auto-processing of queue is now handled globally by QueueProcessor
@@ -3239,6 +3248,11 @@ export function ChatView({
   const hasAnyUnseenChanges = unseenChanges.size > 0
   const [, forceUpdate] = useState({})
 
+  // Lazy message loading: chats.get strips messages for inactive sub-chats.
+  // When a tab is activated, messages are fetched lazily and cached here.
+  const lazyLoadedMessages = useRef(new Map<string, any[]>())
+  const lazyLoadingInFlight = useRef(new Set<string>())
+
   // Per-chat preview sidebar state - each chat remembers its own open/close state
   const previewSidebarAtom = useMemo(
     () => previewSidebarOpenAtomFamily(chatId),
@@ -3480,7 +3494,13 @@ export function ChatView({
   }, [setDiffCache])
 
   const setPrefetchedFileContents = useCallback((contents: Record<string, string>) => {
-    setDiffCache((prev) => ({ ...prev, prefetchedFileContents: contents }))
+    // Cap prefetched file contents to prevent OOM — keep only the 20 smallest files
+    const MAX_PREFETCHED_FILES = 20
+    const entries = Object.entries(contents)
+    const limited = entries.length > MAX_PREFETCHED_FILES
+      ? Object.fromEntries(entries.sort((a, b) => a[1].length - b[1].length).slice(0, MAX_PREFETCHED_FILES))
+      : contents
+    setDiffCache((prev) => ({ ...prev, prefetchedFileContents: limited }))
   }, [setDiffCache])
 
   const setDiffContent = useCallback((content: string | null) => {
@@ -3992,12 +4012,6 @@ export function ChatView({
           {
             position: "top-center",
             duration: 8000,
-            action: worktreePath ? {
-              label: "Sync with Main",
-              onClick: () => {
-                mergeFromDefaultMutation.mutate({ worktreePath, useRebase: false })
-              },
-            } : undefined,
           }
         )
       } else {
@@ -4921,8 +4935,8 @@ Make sure to preserve all functionality from both branches when resolving confli
 
       // Find sub-chat data
       const subChat = agentSubChats.find((sc) => sc.id === subChatId)
-      const rawMessages = subChat?.messages
-      const messages = Array.isArray(rawMessages)
+      let rawMessages = subChat?.messages
+      let messages = Array.isArray(rawMessages)
         ? rawMessages
         : typeof rawMessages === "string"
           ? (() => {
@@ -4934,6 +4948,39 @@ Make sure to preserve all functionality from both branches when resolving confli
               }
             })()
           : []
+
+      // Lazy message loading: chats.get strips messages for inactive sub-chats
+      // to avoid sending 50MB+ payloads. When we activate a tab with empty messages
+      // that should have content (has a sessionId), fetch them lazily.
+      if (messages.length === 0 && (subChat as any)?.sessionId) {
+        // Fire-and-forget fetch — when it returns, the data will be in the
+        // lazyLoadedMessages cache and the component will re-render
+        if (!lazyLoadedMessages.current.has(subChatId) && !lazyLoadingInFlight.current.has(subChatId)) {
+          lazyLoadingInFlight.current.add(subChatId)
+          trpcClient.chats.getSubChatMessages.query({ id: subChatId }).then((result) => {
+            if (result?.messages) {
+              try {
+                const parsed = JSON.parse(result.messages)
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  lazyLoadedMessages.current.set(subChatId, parsed)
+                  // Force re-render so getOrCreateChat picks up the loaded messages
+                  forceUpdate({})
+                }
+              } catch { /* ignore parse errors */ }
+            }
+            lazyLoadingInFlight.current.delete(subChatId)
+          }).catch(() => {
+            lazyLoadingInFlight.current.delete(subChatId)
+          })
+        }
+        // Check if we have previously lazy-loaded messages
+        const cached = lazyLoadedMessages.current.get(subChatId)
+        if (cached) {
+          messages = cached
+        } else {
+          return null // Show spinner while loading
+        }
+      }
 
       // Get mode from store metadata (falls back to currentMode)
       const subChatMeta = useAgentSubChatStore

@@ -17,6 +17,7 @@ import {
   type BatchedUIMessageChunk,
   type UIMessageChunk,
 } from "../../claude"
+import { getFdPressure, getEffectiveMaxSessions, hasFdHeadroom } from "../../fd-pressure"
 import {
   getMergedGlobalMcpServers,
   getMergedLocalProjectMcpServers,
@@ -621,12 +622,67 @@ const MAX_CONCURRENT_AGENTS = 5
 const activeSessionWorktrees = new Map<string, string>() // subChatId → effective cwd
 
 /** Maximum messages to keep per sub-chat (prevents memory bloat with long conversations) */
-const MAX_MESSAGES_PER_CHAT = 500
+/** Maximum messages to keep per sub-chat (prevents memory bloat).
+ *  Reduced from 500 — with tool results averaging 13-215KB per message,
+ *  500 messages can produce 60MB+ payloads that GC-thrash the renderer. */
+const MAX_MESSAGES_PER_CHAT = 200
 
 /**
- * Prune message history to prevent unbounded growth
- * Keeps only the latest MAX_MESSAGES_PER_CHAT messages
+ * Strip large tool output content from older messages to reduce DB bloat.
+ * Keeps full content for the last KEEP_FULL_COUNT messages so the Claude SDK
+ * has context for session resume. Older messages get tool outputs truncated.
+ *
+ * This runs AFTER session end and mutates the message array.
  */
+const KEEP_FULL_CONTENT_COUNT = 50
+const TOOL_OUTPUT_TRIM_THRESHOLD = 2048 // Only trim outputs > 2KB
+const TOOL_PART_TYPES_TO_STRIP = new Set([
+  "tool-Read", "tool-Edit", "tool-Bash", "tool-Write", "tool-Agent",
+  "tool-Grep", "tool-Glob",
+])
+
+function stripOldToolOutputs(messages: any[]): { messages: any[]; bytesSaved: number } {
+  if (messages.length <= KEEP_FULL_CONTENT_COUNT) {
+    return { messages, bytesSaved: 0 }
+  }
+
+  let bytesSaved = 0
+  const cutoff = messages.length - KEEP_FULL_CONTENT_COUNT
+
+  for (let i = 0; i < cutoff; i++) {
+    const msg = messages[i]
+    if (!msg.parts || !Array.isArray(msg.parts)) continue
+
+    for (const part of msg.parts) {
+      if (!part.type) continue
+      // Match known tool types or any MCP tool type
+      const isToolType = TOOL_PART_TYPES_TO_STRIP.has(part.type) || part.type.startsWith("tool-mcp_")
+      if (!isToolType) continue
+
+      // Strip large output/result fields
+      for (const field of ["output", "result"] as const) {
+        if (part[field] === undefined) continue
+        const json = JSON.stringify(part[field])
+        if (json.length > TOOL_OUTPUT_TRIM_THRESHOLD) {
+          bytesSaved += json.length
+          // Keep a small excerpt for context
+          const excerpt = typeof part[field] === "string"
+            ? part[field].slice(0, 200)
+            : JSON.stringify(part[field]).slice(0, 200)
+          part[field] = `[stripped ${Math.round(json.length / 1024)}KB — ${excerpt}…]`
+        }
+      }
+    }
+  }
+
+  return { messages, bytesSaved }
+}
+
+/** Maximum total JSON size for a sub-chat's messages (bytes).
+ *  If exceeded, aggressively prune to MAX_MESSAGES_SIZE_PRUNE_TARGET. */
+const MAX_MESSAGES_JSON_BYTES = 5 * 1024 * 1024 // 5 MB
+const MAX_MESSAGES_SIZE_PRUNE_TARGET = 100 // Keep last 100 when size cap hit
+
 /**
  * Extract file paths and keywords from session messages for memory feedback loop.
  * Looks at tool calls (file reads/writes) and conversation content.
@@ -673,14 +729,29 @@ function extractFilesFromMessages(messages: any[]): { read: string[]; modified: 
 }
 
 function pruneMessageHistory(messages: any[], subChatId: string): any[] {
-  if (messages.length <= MAX_MESSAGES_PER_CHAT) {
-    return messages
+  let result = messages
+
+  // Count-based pruning
+  if (result.length > MAX_MESSAGES_PER_CHAT) {
+    const pruneCount = result.length - MAX_MESSAGES_PER_CHAT
+    console.log(
+      `[claude] Pruning ${pruneCount} old messages from sub-chat ${subChatId} (${result.length} -> ${MAX_MESSAGES_PER_CHAT})`,
+    )
+    result = result.slice(-MAX_MESSAGES_PER_CHAT)
   }
-  const pruneCount = messages.length - MAX_MESSAGES_PER_CHAT
-  console.log(
-    `[claude] Pruning ${pruneCount} old messages from sub-chat ${subChatId} (${messages.length} -> ${MAX_MESSAGES_PER_CHAT})`,
-  )
-  return messages.slice(-MAX_MESSAGES_PER_CHAT)
+
+  // Size-based pruning — if JSON payload is still huge after count pruning,
+  // aggressively drop to keep only the most recent messages.
+  const jsonSize = JSON.stringify(result).length
+  if (jsonSize > MAX_MESSAGES_JSON_BYTES) {
+    const before = result.length
+    result = result.slice(-MAX_MESSAGES_SIZE_PRUNE_TARGET)
+    console.log(
+      `[claude] Size-pruning sub-chat ${subChatId}: ${Math.round(jsonSize / 1024 / 1024)}MB exceeds ${MAX_MESSAGES_JSON_BYTES / 1024 / 1024}MB cap (${before} -> ${result.length} messages)`,
+    )
+  }
+
+  return result
 }
 
 /** Check if there are any active Claude streaming sessions */
@@ -916,6 +987,18 @@ const clearPendingApprovals = (message: string, subChatId?: string) => {
     pendingToolApprovals.delete(toolUseId)
   }
 }
+
+// Periodic sweep: resolve orphaned approvals whose sessions are no longer active.
+// This catches cases where a session crashed before its cleanup handler ran.
+setInterval(() => {
+  for (const [toolUseId, pending] of pendingToolApprovals) {
+    if (!activeSessions.has(pending.subChatId)) {
+      console.log(`[claude] Cleaning up orphaned tool approval ${toolUseId} for dead session ${pending.subChatId}`)
+      pending.resolve({ approved: false, message: "Session ended." })
+      pendingToolApprovals.delete(toolUseId)
+    }
+  }
+}, 30_000) // every 30s
 
 // Image attachment schema
 const imageAttachmentSchema = z.object({
@@ -1372,6 +1455,98 @@ type UsageSuccess = {
 type UsageError = { error: "not_authenticated" | "rate_limited" | "fetch_failed" }
 type UsageResult = UsageSuccess | UsageError
 
+// ============ REAL-TIME RATE LIMIT FROM SDK STREAM ============
+// The SDK emits `rate_limit_event` messages during active sessions with
+// per-turn utilization data straight from API response headers.
+// This is far more accurate than the flaky /api/oauth/usage endpoint.
+
+interface RealTimeRateLimitEntry {
+  rateLimitType: string   // "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_sonnet" | "overage"
+  utilization: number     // 0-1 decimal (from response headers)
+  resetsAt?: number       // epoch ms
+  status: string          // "allowed" | "allowed_warning" | "rejected"
+  updatedAt: number       // when we received this
+}
+
+// Latest rate limit data from SDK stream events, keyed by rateLimitType
+const realTimeRateLimits = new Map<string, RealTimeRateLimitEntry>()
+const REALTIME_MAX_AGE_MS = 30 * 60 * 1000 // 30 min — after this, fall back to OAuth API
+
+/**
+ * Update real-time rate limit data from an SDK rate_limit_event message.
+ * Called from the streaming loop when we see type === "rate_limit_event".
+ */
+export function updateRealTimeRateLimit(rateLimitInfo: {
+  status: string
+  rateLimitType?: string
+  utilization?: number
+  resetsAt?: number
+}): void {
+  if (!rateLimitInfo.rateLimitType) return
+  // Prune stale entries on every update to prevent unbounded growth
+  const now = Date.now()
+  for (const [key, entry] of realTimeRateLimits) {
+    if (now - entry.updatedAt > REALTIME_MAX_AGE_MS) {
+      realTimeRateLimits.delete(key)
+    }
+  }
+  realTimeRateLimits.set(rateLimitInfo.rateLimitType, {
+    rateLimitType: rateLimitInfo.rateLimitType,
+    utilization: rateLimitInfo.utilization ?? 0,
+    resetsAt: rateLimitInfo.resetsAt,
+    status: rateLimitInfo.status,
+    updatedAt: now,
+  })
+}
+
+/**
+ * Get the soonest resetsAt timestamp from real-time rate limit data.
+ * Used to give markAccountRateLimited a proper expiry instead of the 5-min default.
+ */
+function getRealTimeResetsAt(): number | undefined {
+  const now = Date.now()
+  let soonest: number | undefined
+  for (const entry of realTimeRateLimits.values()) {
+    if (now - entry.updatedAt > REALTIME_MAX_AGE_MS) continue
+    if (entry.resetsAt && (!soonest || entry.resetsAt < soonest)) {
+      soonest = entry.resetsAt
+    }
+  }
+  return soonest
+}
+
+/**
+ * Build a UsageSuccess from real-time SDK data if fresh enough.
+ * Returns null if no real-time data or all entries are stale.
+ */
+function getRealTimeUsage(): UsageSuccess | null {
+  const now = Date.now()
+
+  // Find the best match for each window.
+  // five_hour is straightforward; seven_day could be "seven_day", "seven_day_opus", or "seven_day_sonnet".
+  const fiveHour = realTimeRateLimits.get("five_hour")
+  const sevenDay = realTimeRateLimits.get("seven_day")
+    ?? realTimeRateLimits.get("seven_day_opus")
+    ?? realTimeRateLimits.get("seven_day_sonnet")
+
+  const fiveHourFresh = fiveHour && (now - fiveHour.updatedAt < REALTIME_MAX_AGE_MS)
+  const sevenDayFresh = sevenDay && (now - sevenDay.updatedAt < REALTIME_MAX_AGE_MS)
+
+  if (!fiveHourFresh && !sevenDayFresh) return null
+
+  return {
+    fiveHour: fiveHourFresh ? {
+      // SDK utilization is 0-1, UI expects 0-100
+      utilization: Math.round(fiveHour!.utilization * 100),
+      resetsAt: fiveHour!.resetsAt ? new Date(fiveHour!.resetsAt).toISOString() : new Date(now + 5 * 60 * 60 * 1000).toISOString(),
+    } : null,
+    sevenDay: sevenDayFresh ? {
+      utilization: Math.round(sevenDay!.utilization * 100),
+      resetsAt: sevenDay!.resetsAt ? new Date(sevenDay!.resetsAt).toISOString() : new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    } : null,
+  }
+}
+
 async function callUsageApi(token: string): Promise<{ status: number; data?: unknown; errorBody?: string }> {
   const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
     method: "GET",
@@ -1483,15 +1658,31 @@ export const claudeRouter = router({
     )
     .subscription(({ input }) => {
       return observable<BatchedUIMessageChunk>((emit) => {
-        // Enforce concurrent agent cap (don't count re-sends for the same subChat)
+        // Enforce concurrent agent cap — dynamically reduced under FD pressure
+        const effectiveMax = getEffectiveMaxSessions(MAX_CONCURRENT_AGENTS)
         if (
           !activeSessions.has(input.subChatId) &&
-          activeSessions.size >= MAX_CONCURRENT_AGENTS
+          activeSessions.size >= effectiveMax
         ) {
+          const pressure = getFdPressure()
+          const reason = pressure !== "normal"
+            ? `System is under file descriptor pressure (${pressure}). Effective limit reduced to ${effectiveMax}.`
+            : `Too many concurrent agent sessions (max ${effectiveMax}).`
           emit.next({
             type: "error",
-            errorText: `Too many concurrent agent sessions (max ${MAX_CONCURRENT_AGENTS}). Please wait for an existing session to finish or cancel one.`,
+            errorText: `${reason} Please wait for an existing session to finish or cancel one.`,
             debugInfo: { category: "CONCURRENT_LIMIT" },
+          } as UIMessageChunk)
+          emit.complete()
+          return
+        }
+
+        // Check FD headroom before spawning a new subprocess (~4 FDs per session)
+        if (!activeSessions.has(input.subChatId) && !hasFdHeadroom(8)) {
+          emit.next({
+            type: "error",
+            errorText: "System is low on file descriptors. Close some tabs or workspaces and try again.",
+            debugInfo: { category: "FD_EXHAUSTION" },
           } as UIMessageChunk)
           emit.complete()
           return
@@ -1633,6 +1824,9 @@ export const claudeRouter = router({
 
           console.error(`[claude] ${context}:`, errorMessage)
           if (errorStack) console.error("[claude] Stack:", errorStack)
+
+          // Block auto-continue after errors
+          errorEmitted = true
 
           // Send detailed error to frontend (safely)
           safeEmit({
@@ -2898,6 +3092,11 @@ ${prompt}
             // Auto-retry on empty response (stream closed with no messages received)
             const MAX_EMPTY_RESPONSE_RETRIES = 2
             let emptyResponseRetryCount = 0
+            // Auto-continue when session ends with interrupted tools (model hit output limit mid-work)
+            const MAX_AUTO_CONTINUES = 3
+            let autoContinueCount = 0
+            let autoContinueNeeded = false
+            let errorEmitted = false // Set when error chunk sent — blocks auto-continue
             let messageCount = 0
             let pendingFinishChunk: UIMessageChunk | null = null
 
@@ -2907,6 +3106,8 @@ ${prompt}
               authRetryNeeded = false
               openRouterRateLimitRetryNeeded = false
               overloadedRetryNeeded = false
+              autoContinueNeeded = false
+              errorEmitted = false
               messageCount = 0
               pendingFinishChunk = null
               // Reset accumulated state on retry to prevent duplicate/corrupted messages
@@ -3033,8 +3234,16 @@ ${prompt}
                   // Log raw message for debugging
                   logRawClaudeMessage(input.chatId, msg)
 
-                  // Check for error messages from SDK (error can be embedded in message payload!)
+                  // Capture real-time rate limit data from SDK stream
                   const msgAny = msg as any
+                  if (msgAny.type === "rate_limit_event" && msgAny.rate_limit_info) {
+                    updateRealTimeRateLimit(msgAny.rate_limit_info)
+                    // Also invalidate the OAuth API cache so getUsage picks up real-time data
+                    usageCache.fetchedAt = 0
+                    continue // rate_limit_event is internal, don't pass to transform
+                  }
+
+                  // Check for error messages from SDK (error can be embedded in message payload!)
                   if (msgAny.type === "error" || msgAny.error) {
                     // Extract detailed error text from message content if available
                     // This is where the actual error description lives (e.g., "API Error: Claude Code is unable to respond...")
@@ -3173,8 +3382,8 @@ ${prompt}
                     ) {
                       const accountId = getCurrentActiveAccountId()
                       if (accountId) {
-                        markAccountRateLimited(accountId)
-                        console.log(`[claude] Marked account ${accountId} as rate-limited`)
+                        markAccountRateLimited(accountId, getRealTimeResetsAt())
+                        console.log(`[claude] Marked account ${accountId} as rate-limited (resetsAt=${getRealTimeResetsAt() || 'default'})`)
                       }
 
                       // Clear token cache so next request re-selects available account
@@ -3671,8 +3880,8 @@ ${prompt}
                   if (!catchIsOpenRouter && !hasExistingApiConfig) {
                     const accountId = getCurrentActiveAccountId()
                     if (accountId) {
-                      markAccountRateLimited(accountId)
-                      console.log(`[claude] Marked account ${accountId} as rate-limited (from catch block)`)
+                      markAccountRateLimited(accountId, getRealTimeResetsAt())
+                      console.log(`[claude] Marked account ${accountId} as rate-limited (from catch block, resetsAt=${getRealTimeResetsAt() || 'default'})`)
                     }
                   }
                 } else if (
@@ -3725,6 +3934,8 @@ ${prompt}
                       [...messagesToSave, assistantMessage],
                       input.subChatId,
                     )
+                    // Strip old tool outputs (same as success path)
+                    stripOldToolOutputs(finalMessages)
                     // Flush immediately: session is ending, data must be persisted now
                     flushPendingWrite(input.subChatId, {
                       messages: JSON.stringify(finalMessages),
@@ -3808,6 +4019,78 @@ ${prompt}
                 }
               }
 
+              // Auto-continue: detect when the model stopped mid-work and should be resumed.
+              // Triggers (in order of priority):
+              //   1. Interrupted tools (state === "call" with no result — model cut off mid-tool)
+              //   2. "max_tokens" stop reason (hard output limit hit)
+              // NOTE: "end_turn" is NEVER auto-continued — it means the model deliberately
+              // chose to stop (e.g., waiting for subagents, asking the user, etc.).
+              if (!abortController.signal.aborted && !errorEmitted && autoContinueCount < MAX_AUTO_CONTINUES && input.mode !== "plan") {
+                const interruptedTools = parts.filter(
+                  (p: any) => p.type?.startsWith("tool-") && p.state === "call"
+                )
+                const stopReason = metadata.stopReason
+
+                // Decide whether to auto-continue
+                const hasInterruptedTools = interruptedTools.length > 0
+                const hitMaxTokens = stopReason === "max_tokens"
+                const shouldAutoContinue = hasInterruptedTools || hitMaxTokens
+
+                if (shouldAutoContinue) {
+                  autoContinueCount++
+                  autoContinueNeeded = true
+                  const reason = hasInterruptedTools
+                    ? `${interruptedTools.length} interrupted tool(s)`
+                    : "output limit reached"
+                  console.log(
+                    `[claude] Auto-continue ${autoContinueCount}/${MAX_AUTO_CONTINUES} — ${reason} (stop=${stopReason})`,
+                  )
+                  safeEmit({
+                    type: "retry-notification",
+                    message: `Resuming automatically (${reason})...`,
+                  } as UIMessageChunk)
+
+                  // Save current progress before continuing
+                  if (currentText.trim()) {
+                    parts.push({ type: "text", text: currentText })
+                    currentText = ""
+                  }
+                  if (parts.length > 0) {
+                    const assistantMessage = {
+                      id: crypto.randomUUID(),
+                      role: "assistant",
+                      parts: [...parts],
+                      metadata,
+                    }
+                    const progressMessages = pruneMessageHistory(
+                      [...messagesToSave, assistantMessage],
+                      input.subChatId,
+                    )
+                    messagesToSave = progressMessages
+                    // Add a synthetic "Continue" user message for the resumed session
+                    messagesToSave.push({
+                      id: crypto.randomUUID(),
+                      role: "user",
+                      parts: [{ type: "text", text: "Continue" }],
+                    })
+                  }
+
+                  // Update queryOptions for continuation — only if we have a session to resume
+                  if (!metadata.sessionId) {
+                    console.warn(`[claude] Auto-continue skipped — no sessionId available`)
+                    break
+                  }
+                  queryOptions.prompt = "Continue"
+                  const opts = queryOptions.options as any
+                  opts.resume = metadata.sessionId
+                  opts.continue = true
+                  // Remove fork/rollback options on continuation
+                  delete opts.resumeSessionAt
+                  delete opts.forkSession
+                  continue // restart the while loop with "Continue" prompt
+                }
+              }
+
               break
             } // end policyRetryLoop
 
@@ -3832,10 +4115,18 @@ ${prompt}
                 metadata,
               }
 
-              const finalMessages = pruneMessageHistory(
+              let finalMessages = pruneMessageHistory(
                 [...messagesToSave, assistantMessage],
                 input.subChatId,
               )
+
+              // Strip large tool outputs from older messages to reduce DB size.
+              // The Claude SDK uses sessionId for resume, not full message replay,
+              // so stripping old tool outputs is safe.
+              const { bytesSaved } = stripOldToolOutputs(finalMessages)
+              if (bytesSaved > 0) {
+                console.log(`[claude] Stripped ${Math.round(bytesSaved / 1024)}KB of old tool outputs from sub-chat ${input.subChatId.slice(-8)}`)
+              }
 
               // Flush immediately: session is ending, data must be persisted now
               flushPendingWrite(input.subChatId, {
@@ -4471,7 +4762,16 @@ ${prompt}
    * creds have refresh tokens) since rate limits are per-access-token.
    */
   getUsage: publicProcedure.query(async () => {
-    // Return cached response if fresh (5 min TTL for success, 1 min for rate limits)
+    // Prefer real-time rate limit data from SDK stream events.
+    // This is updated on every API call during active sessions and is
+    // far more accurate than the /api/oauth/usage endpoint (which is
+    // aggressively rate-limited and often returns stale data).
+    const realTime = getRealTimeUsage()
+    if (realTime) {
+      return realTime
+    }
+
+    // Fall back to OAuth API with caching (5 min TTL for success, 1 min for rate limits)
     if (usageCache.data && Date.now() - usageCache.fetchedAt < USAGE_CACHE_TTL_MS) {
       return usageCache.data
     }

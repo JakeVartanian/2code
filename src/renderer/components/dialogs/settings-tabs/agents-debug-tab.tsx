@@ -370,10 +370,6 @@ export function AgentsDebugTab() {
             onClick={() =>
               toast.info("Cancelation sent", {
                 description: "Sent to John Smith",
-                action: {
-                  label: "Undo",
-                  onClick: () => toast("Undone!"),
-                },
               })
             }
           >

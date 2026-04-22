@@ -13,7 +13,7 @@ import type { GitEvent, FileBatch, FileChangeEvent } from "./types"
 
 const execAsync = promisify(exec)
 
-const DIFF_POLL_INTERVAL = 60_000 // Check for changed files every 60s
+const DIFF_POLL_INTERVAL = 30_000 // Check for changed files every 30s
 
 export class AmbientGitMonitor extends EventEmitter {
   private projectPath: string
@@ -103,7 +103,7 @@ export class AmbientGitMonitor extends EventEmitter {
       const path = await import("path")
       const batch: FileBatch = {
         files: newFiles.slice(0, 8).map((filePath): FileChangeEvent => ({
-          path: join(this.projectPath, filePath),
+          path: filePath,
           type: "change",
           ext: path.extname(filePath).toLowerCase(),
         })),

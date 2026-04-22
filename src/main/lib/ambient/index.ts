@@ -35,6 +35,12 @@ export class AmbientAgent {
   private lastAnalysisAt: number | null = null
   private schedulerTimers: ReturnType<typeof setInterval>[] = []
   private ambientProvider: AmbientProvider | null = null
+  // Activity counters — reset daily, used for micro-status display
+  private activityDate: string = new Date().toISOString().slice(0, 10)
+  private sessionsAnalyzedToday = 0
+  private changesReviewedToday = 0
+  private suggestionsToday = 0
+  private lastInsightAt: number | null = null
 
   constructor(projectId: string, projectPath: string) {
     this.projectId = projectId
@@ -42,6 +48,8 @@ export class AmbientAgent {
     this.config = loadAmbientConfig(projectPath)
     this.budget = new BudgetTracker(projectId, this.config.budget)
     this.pipeline = new AnalysisPipeline(projectId, projectPath, this.config, this.budget)
+    // Track suggestion events for micro-status
+    this.pipeline.setSuggestionHandler(() => this.trackActivity("suggestion"))
   }
 
   /**
@@ -155,7 +163,30 @@ export class AmbientAgent {
     }
   }
 
+  /** Reset daily counters if date has rolled over */
+  private ensureDailyCounters(): void {
+    const today = new Date().toISOString().slice(0, 10)
+    if (this.activityDate !== today) {
+      this.activityDate = today
+      this.sessionsAnalyzedToday = 0
+      this.changesReviewedToday = 0
+      this.suggestionsToday = 0
+    }
+  }
+
+  /** Track activity — called from handleEvent */
+  trackActivity(kind: "session" | "change" | "suggestion"): void {
+    this.ensureDailyCounters()
+    if (kind === "session") this.sessionsAnalyzedToday++
+    else if (kind === "change") this.changesReviewedToday++
+    else if (kind === "suggestion") {
+      this.suggestionsToday++
+      this.lastInsightAt = Date.now()
+    }
+  }
+
   getStatus(): AmbientStatus {
+    this.ensureDailyCounters()
     return {
       agentStatus: this.status,
       budget: this.budget.getStatus(),
@@ -173,6 +204,12 @@ export class AmbientAgent {
       })(),
       lastEventAt: this.lastEventAt,
       lastAnalysisAt: this.lastAnalysisAt,
+      activity: {
+        sessionsAnalyzedToday: this.sessionsAnalyzedToday,
+        changesReviewedToday: this.changesReviewedToday,
+        suggestionsToday: this.suggestionsToday,
+        lastInsightAt: this.lastInsightAt,
+      },
     }
   }
 
@@ -221,6 +258,10 @@ export class AmbientAgent {
       this.pause()
       return
     }
+
+    // Track activity for micro-status
+    if (event.kind === "file-batch") this.trackActivity("change")
+    if (event.kind === "chat" && (event.event.activityType === "session-complete")) this.trackActivity("session")
 
     // Forward to pipeline
     this.pipeline.processEvent(event).then(() => {

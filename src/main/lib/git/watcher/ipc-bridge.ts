@@ -11,6 +11,11 @@ import { gitCache } from "../cache";
 // This ensures events are sent to the window that subscribed, not the focused window
 const activeSubscriptions: Map<string, { windowId: number; unsubscribe: () => void }> = new Map();
 
+// Track in-flight subscription promises to prevent duplicate concurrent subscriptions.
+// Without this, rapid subscribe/unsubscribe cycles (e.g. workspace switches) can
+// create orphaned subscriptions that leak file watchers → EMFILE crash.
+const pendingSubscriptions: Map<string, Promise<void>> = new Map();
+
 /**
  * Register IPC handlers for git watcher.
  * Call this once during app initialization.
@@ -22,8 +27,8 @@ export function registerGitWatcherIPC(): void {
 		async (event, worktreePath: string) => {
 			if (!worktreePath) return;
 
-			// Already subscribed?
-			if (activeSubscriptions.has(worktreePath)) {
+			// Already subscribed or subscription in-flight?
+			if (activeSubscriptions.has(worktreePath) || pendingSubscriptions.has(worktreePath)) {
 				return;
 			}
 
@@ -33,39 +38,51 @@ export function registerGitWatcherIPC(): void {
 
 			const windowId = subscribingWindow.id;
 
-			// Subscribe to file changes (await to ensure watcher is ready)
-			const unsubscribe = await gitWatcherRegistry.subscribe(
-				worktreePath,
-				(watchEvent: GitWatchEvent) => {
-					// Send to the subscribing window, not the focused window
-					const subscription = activeSubscriptions.get(worktreePath);
-					if (!subscription) return;
+			// Mark as pending BEFORE the async call to prevent duplicate subscriptions
+			const subscribePromise = (async () => {
+				try {
+					// Subscribe to file changes (await to ensure watcher is ready)
+					const unsubscribe = await gitWatcherRegistry.subscribe(
+						worktreePath,
+						(watchEvent: GitWatchEvent) => {
+							// Send to the subscribing window, not the focused window
+							const subscription = activeSubscriptions.get(worktreePath);
+							if (!subscription) return;
 
-					const targetWindow = BrowserWindow.fromId(subscription.windowId);
-					if (!targetWindow || targetWindow.isDestroyed()) return;
+							const targetWindow = BrowserWindow.fromId(subscription.windowId);
+							if (!targetWindow || targetWindow.isDestroyed()) return;
 
-					// We're watching .git/index and .git/HEAD, so any event means a git operation occurred.
-					// Invalidate status and parsedDiff caches - these are always affected by git operations.
-					// File content cache is content-addressed and will update on next request if hash changed.
-					gitCache.invalidateStatus(worktreePath);
-					gitCache.invalidateParsedDiff(worktreePath);
+							gitCache.invalidateStatus(worktreePath);
+							gitCache.invalidateParsedDiff(worktreePath);
 
-					// Send event to renderer
-					try {
-						targetWindow.webContents.send("git:status-changed", {
-							worktreePath: watchEvent.worktreePath,
-							changes: watchEvent.changes,
-						});
-					} catch {
-						// Window may have been destroyed between check and send
+							try {
+								targetWindow.webContents.send("git:status-changed", {
+									worktreePath: watchEvent.worktreePath,
+									changes: watchEvent.changes,
+								});
+							} catch {
+								// Window may have been destroyed between check and send
+							}
+						},
+					);
+
+					// Check if unsubscribe was requested while we were awaiting
+					if (!pendingSubscriptions.has(worktreePath)) {
+						// Subscription was cancelled during await — clean up immediately
+						unsubscribe();
+						console.log(`[GitWatcher] Window ${windowId} subscription to ${worktreePath} cancelled during init — cleaned up`);
+						return;
 					}
-				},
-			);
 
-			activeSubscriptions.set(worktreePath, { windowId, unsubscribe });
-			console.log(
-				`[GitWatcher] Window ${windowId} subscribed to: ${worktreePath}`,
-			);
+					activeSubscriptions.set(worktreePath, { windowId, unsubscribe });
+					console.log(`[GitWatcher] Window ${windowId} subscribed to: ${worktreePath}`);
+				} finally {
+					pendingSubscriptions.delete(worktreePath);
+				}
+			})();
+
+			pendingSubscriptions.set(worktreePath, subscribePromise);
+			await subscribePromise;
 		},
 	);
 
@@ -74,6 +91,9 @@ export function registerGitWatcherIPC(): void {
 		"git:unsubscribe-watcher",
 		async (_event, worktreePath: string) => {
 			if (!worktreePath) return;
+
+			// Cancel any in-flight subscription so it cleans up when it resolves
+			pendingSubscriptions.delete(worktreePath);
 
 			const subscription = activeSubscriptions.get(worktreePath);
 			if (subscription) {

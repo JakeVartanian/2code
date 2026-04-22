@@ -38,7 +38,6 @@ const ERROR_TOAST_CONFIG: Record<
   {
     title: string
     description: string
-    action?: { label: string; onClick: () => void }
   }
 > = {
   AUTH_FAILED_SDK: {
@@ -55,28 +54,6 @@ const ERROR_TOAST_CONFIG: Record<
     title: "Invalid API key",
     description:
       "Your Claude API key is invalid. Check your CLI configuration.",
-  },
-  RATE_LIMIT_SDK: {
-    title: "Session limit reached",
-    description: "You've hit the Claude Code usage limit.",
-    action: {
-      label: "View usage",
-      onClick: () =>
-        trpcClient.external.openExternal.mutate(
-          "https://claude.ai/settings/usage",
-        ),
-    },
-  },
-  RATE_LIMIT: {
-    title: "Session limit reached",
-    description: "You've hit the Claude Code usage limit.",
-    action: {
-      label: "View usage",
-      onClick: () =>
-        trpcClient.external.openExternal.mutate(
-          "https://claude.ai/settings/usage",
-        ),
-    },
   },
   OVERLOADED_SDK: {
     title: "Claude is busy",
@@ -120,6 +97,14 @@ const ERROR_TOAST_CONFIG: Record<
     title: "OpenRouter model unavailable",
     description: "This model is currently unavailable or rate-limited. Try a different model in Settings → Models.",
   },
+  RATE_LIMIT_SDK: {
+    title: "Rate limit reached",
+    description: "You've hit your Claude usage limit. Wait a few minutes or start a new chat to continue.",
+  },
+  RATE_LIMIT: {
+    title: "Rate limit reached",
+    description: "You've hit your Claude usage limit. Wait a few minutes or start a new chat to continue.",
+  },
   // SDK_ERROR and other unknown errors use chunk.errorText for description
 }
 
@@ -134,6 +119,10 @@ const INLINE_ERROR_MESSAGES: Partial<Record<string, string>> = {
     "Connection was lost during the response. Send a follow-up to continue.",
   PROCESS_CRASH:
     "Claude crashed unexpectedly. Try sending your message again.",
+  RATE_LIMIT_SDK:
+    "Rate limit reached — your Claude usage limit has been hit. Wait a few minutes, then send your message again to continue.",
+  RATE_LIMIT:
+    "Rate limit reached — your Claude usage limit has been hit. Wait a few minutes, then send your message again to continue.",
 }
 
 type UIMessageChunk = any // Inferred from subscription
@@ -315,6 +304,21 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               chunkCount++
               lastChunkType = chunk.type
 
+              // CRITICAL: Wrap ALL side effects in try/catch. processChunk runs inside
+              // a ReadableStream onData callback — an unhandled throw here propagates to
+              // the stream consumer (AI SDK useChat), crashes the component tree, and
+              // kills the renderer. Every toast, atom write, and modal toggle must be
+              // isolated so a single failure can't take down the whole app.
+              try {
+                processChunkInner(chunk, controller)
+              } catch (e) {
+                console.error(`[SD] R:CHUNK_CRASH sub=${subId} type=${chunk.type} n=${chunkCount}`, e)
+                // Still try to enqueue the chunk so the stream doesn't lose data
+                try { controller.enqueue(chunk) } catch { /* stream dead */ }
+              }
+    }
+
+    const processChunkInner = (chunk: UIMessageChunk, controller: ReadableStreamDefaultController<UIMessageChunk>) => {
               // Handle AskUserQuestion - show question UI
               if (chunk.type === "ask-user-question") {
                 const currentMap = appStore.get(pendingUserQuestionsAtom)
@@ -519,13 +523,6 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 toast.error(title, {
                   description,
                   duration: 12000,
-                  action: {
-                    label: "Copy Error",
-                    onClick: () => {
-                      navigator.clipboard.writeText(errorDetails)
-                      toast.success("Error details copied to clipboard")
-                    },
-                  },
                 })
 
                 // Inject inline error text into the chat thread so the user sees
@@ -602,7 +599,12 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             onError: (err: Error) => {
               console.log(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
               clearCompacting()
-              controller.error(err)
+              streamTerminated = true
+              try {
+                controller.error(err)
+              } catch {
+                // Stream already closed/errored
+              }
             },
             onComplete: () => {
               console.log(`[SD] R:COMPLETE sub=${subId} n=${chunkCount} last=${lastChunkType}`)

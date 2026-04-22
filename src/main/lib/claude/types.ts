@@ -81,5 +81,8 @@ export type MessageMetadata = {
   durationMs?: number
   startedAt?: number
   resultSubtype?: string
+  stopReason?: string | null   // "end_turn", "max_tokens", etc.
+  resultText?: string          // SDK result text (e.g., "No response requested.")
+  numTurns?: number
   finalTextId?: string
 }

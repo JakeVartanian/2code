@@ -23,6 +23,81 @@ import { terminalManager } from "../../terminal/manager"
 import { ambientAgentRegistry } from "../../ambient"
 import { publicProcedure, router } from "../index"
 
+// --- Message trimming for renderer ---
+// Tool outputs (file contents, bash output, etc.) can be massive (200KB+ per part).
+// The renderer only needs a small excerpt for display — the full content lives in the
+// DB for Claude SDK session resume. This function strips large tool outputs before
+// sending messages to the renderer, dramatically reducing IPC payload and renderer memory.
+
+const TOOL_OUTPUT_MAX_BYTES = 1024 // Keep first 1KB of tool output for display
+const TOOL_TYPES_TO_TRIM = new Set([
+  "tool-Read", "tool-Edit", "tool-Bash", "tool-Write", "tool-Agent",
+  "tool-Grep", "tool-Glob", "tool-mcp_", // All MCP tool types start with tool-mcp_
+])
+
+function shouldTrimPart(partType: string): boolean {
+  if (TOOL_TYPES_TO_TRIM.has(partType)) return true
+  // Match tool-mcp__* patterns dynamically
+  if (partType.startsWith("tool-mcp_")) return true
+  return false
+}
+
+function trimToolOutput(value: unknown): unknown {
+  if (typeof value === "string" && value.length > TOOL_OUTPUT_MAX_BYTES) {
+    return value.slice(0, TOOL_OUTPUT_MAX_BYTES) + `\n\n[… trimmed ${Math.round(value.length / 1024)}KB for display]`
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>
+    const trimmed: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(obj)) {
+      trimmed[k] = trimToolOutput(v)
+    }
+    return trimmed
+  }
+  if (Array.isArray(value)) {
+    return value.map(trimToolOutput)
+  }
+  return value
+}
+
+/**
+ * Trim message parts for renderer display.
+ * Strips large tool output/result content, keeping metadata and small excerpts.
+ * Returns a new array (does NOT mutate the input).
+ */
+function trimMessagesForRenderer(messagesJson: string): string {
+  try {
+    const messages = JSON.parse(messagesJson)
+    if (!Array.isArray(messages)) return messagesJson
+
+    const trimmed = messages.map((msg: any) => {
+      if (!msg.parts || !Array.isArray(msg.parts)) return msg
+
+      const newParts = msg.parts.map((part: any) => {
+        if (!part.type || !shouldTrimPart(part.type)) return part
+
+        // Clone the part and trim output/result fields
+        const newPart = { ...part }
+        if (newPart.output !== undefined) {
+          newPart.output = trimToolOutput(newPart.output)
+        }
+        if (newPart.result !== undefined) {
+          newPart.result = trimToolOutput(newPart.result)
+        }
+        // Mark as trimmed so renderer can show "expand" UI if needed
+        newPart._trimmed = true
+        return newPart
+      })
+
+      return { ...msg, parts: newParts }
+    })
+
+    return JSON.stringify(trimmed)
+  } catch {
+    return messagesJson // Return original on parse error
+  }
+}
+
 /**
  * Stop the ambient agent for a project if no non-archived chats remain.
  */
@@ -77,51 +152,73 @@ function sendWorktreeSetupFailure(
  * Generate a chat name using a free OpenRouter model.
  * Fast, zero-cost title generation from the user's first message.
  */
+// Free models to try in order — OpenRouter rotates availability frequently
+const FREE_MODELS_FOR_NAMING = [
+  "meta-llama/llama-3.1-8b-instruct:free",
+  "meta-llama/llama-3-8b-instruct:free",
+  "qwen/qwen3-8b:free",
+  "mistralai/mistral-7b-instruct:free",
+  "google/gemma-2-9b-it:free",
+]
+
 async function generateChatNameWithOpenRouter(
   userMessage: string,
   apiKey: string,
 ): Promise<string | null> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 5000)
+  for (const model of FREE_MODELS_FOR_NAMING) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
 
-  try {
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "meta-llama/llama-3.1-8b-instruct:free",
-        messages: [
-          {
-            role: "system",
-            content: "Generate a concise 3-6 word title for this coding chat message. Return ONLY the title, no quotes, no punctuation, no explanation.",
-          },
-          {
-            role: "user",
-            content: userMessage.slice(0, 500),
-          },
-        ],
-        temperature: 0.3,
-        max_tokens: 20,
-      }),
-      signal: controller.signal,
-    })
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "system",
+              content: "Generate a concise 3-6 word title for this coding chat message. Return ONLY the title, no quotes, no punctuation, no explanation.",
+            },
+            {
+              role: "user",
+              content: userMessage.slice(0, 500),
+            },
+          ],
+          temperature: 0.3,
+          max_tokens: 20,
+        }),
+        signal: controller.signal,
+      })
 
-    if (!res.ok) return null
+      if (!res.ok) {
+        console.warn(`[generateChatNameWithOpenRouter] Model ${model} returned ${res.status}, trying next...`)
+        continue
+      }
 
-    const data = await res.json()
-    const name = data?.choices?.[0]?.message?.content?.trim()
-    if (!name || name.length < 2 || name.length > 60) return null
+      const data = await res.json()
+      const name = data?.choices?.[0]?.message?.content?.trim()
+      if (!name || name.length < 2 || name.length > 60) {
+        console.warn(`[generateChatNameWithOpenRouter] Model ${model} returned invalid name: "${name}"`)
+        continue
+      }
 
-    // Strip quotes if the model wrapped the title
-    return name.replace(/^["']|["']$/g, "").trim()
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timeout)
+      console.log(`[generateChatNameWithOpenRouter] Success with ${model}: "${name}"`)
+      // Strip quotes if the model wrapped the title
+      return name.replace(/^["']|["']$/g, "").trim()
+    } catch (error) {
+      console.warn(`[generateChatNameWithOpenRouter] Model ${model} failed:`, error instanceof Error ? error.message : error)
+      continue
+    } finally {
+      clearTimeout(timeout)
+    }
   }
+
+  console.error("[generateChatNameWithOpenRouter] All free models failed")
+  return null
 }
 
 // Fallback to truncated user message if AI generation fails
@@ -325,12 +422,33 @@ export const chatsRouter = router({
       const chat = db.select().from(chats).where(eq(chats.id, input.id)).get()
       if (!chat) return null
 
-      const chatSubChats = db
+      const rawSubChats = db
         .select()
         .from(subChats)
         .where(eq(subChats.chatId, input.id))
         .orderBy(subChats.createdAt)
         .all()
+
+      // Only include messages for the most recently updated sub-chat.
+      // Other sub-chats get messages stripped (loaded lazily via chats.getSubChatMessages).
+      // This prevents loading 50MB+ of message JSON for a workspace with many tabs.
+      let mostRecentIdx = 0
+      let mostRecentTime = 0
+      for (let i = 0; i < rawSubChats.length; i++) {
+        const t = rawSubChats[i].updatedAt?.getTime() ?? 0
+        if (t > mostRecentTime) {
+          mostRecentTime = t
+          mostRecentIdx = i
+        }
+      }
+
+      const chatSubChats = rawSubChats.map((sc, i) => ({
+        ...sc,
+        // Trim tool outputs for the active sub-chat, strip entirely for inactive ones
+        messages: i === mostRecentIdx && sc.messages
+          ? trimMessagesForRenderer(sc.messages)
+          : "[]",
+      }))
 
       const project = db
         .select()
@@ -782,6 +900,27 @@ export const chatsRouter = router({
   // ============ Sub-chat procedures ============
 
   /**
+   * Get messages for a specific sub-chat (lazy loading).
+   * chats.get only returns messages for the most recent sub-chat to avoid
+   * loading 50MB+ of JSON. Other tabs call this when activated.
+   */
+  getSubChatMessages: publicProcedure
+    .input(z.object({ id: z.string() }))
+    .query(({ input }) => {
+      const db = getDatabase()
+      const subChat = db
+        .select({ messages: subChats.messages })
+        .from(subChats)
+        .where(eq(subChats.id, input.id))
+        .get()
+      if (!subChat) return null
+      return {
+        id: input.id,
+        messages: subChat.messages ? trimMessagesForRenderer(subChat.messages) : "[]",
+      }
+    }),
+
+  /**
    * Get a single sub-chat
    */
   getSubChat: publicProcedure
@@ -810,7 +949,11 @@ export const chatsRouter = router({
             .get()
         : null
 
-      return { ...subChat, chat: chat ? { ...chat, project } : null }
+      return {
+        ...subChat,
+        messages: subChat.messages ? trimMessagesForRenderer(subChat.messages) : subChat.messages,
+        chat: chat ? { ...chat, project } : null,
+      }
     }),
 
   /**

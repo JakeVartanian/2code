@@ -75,11 +75,15 @@ export function useGitWatcher(
   useEffect(() => {
     if (!worktreePath) return
 
+    let cancelled = false
+
     // Subscribe to git watcher on main process
     const subscribe = async () => {
       try {
         await window.desktopApi?.subscribeToGitWatcher(worktreePath)
-        isSubscribedRef.current = true
+        if (!cancelled) {
+          isSubscribedRef.current = true
+        }
       } catch (error) {
         console.error("[useGitWatcher] Failed to subscribe:", error)
       }
@@ -131,6 +135,7 @@ export function useGitWatcher(
     })
 
     return () => {
+      cancelled = true
       cleanup?.()
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current)
@@ -138,13 +143,12 @@ export function useGitWatcher(
       }
       pendingEventRef.current = null
 
-      // Unsubscribe from git watcher
-      if (isSubscribedRef.current) {
-        window.desktopApi?.unsubscribeFromGitWatcher(worktreePath).catch((error) => {
-          console.error("[useGitWatcher] Failed to unsubscribe:", error)
-        })
-        isSubscribedRef.current = false
-      }
+      // Always unsubscribe — even if async subscribe hasn't resolved yet,
+      // the IPC bridge will cancel the pending subscription on the main process side.
+      window.desktopApi?.unsubscribeFromGitWatcher(worktreePath).catch((error) => {
+        console.error("[useGitWatcher] Failed to unsubscribe:", error)
+      })
+      isSubscribedRef.current = false
     }
   }, [worktreePath, queryClient])
 }

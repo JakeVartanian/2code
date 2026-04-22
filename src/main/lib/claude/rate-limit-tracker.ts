@@ -10,8 +10,11 @@ interface RateLimitEntry {
 
 const rateLimitedAccounts = new Map<string, RateLimitEntry>()
 
-// Default cooldown: 5 hours (matches Claude Pro Max 5-hour rate limit window)
-const DEFAULT_COOLDOWN_MS = 5 * 60 * 60 * 1000
+// Default cooldown: 5 minutes (conservative fallback when no reset time is known).
+// The actual reset time should be passed via resetsAt from the SDK's rate_limit_event data.
+// Using 5 min instead of 5 hours prevents locking users out for their entire session
+// from a single transient 429.
+const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000
 
 export function markAccountRateLimited(accountId: string, resetsAt?: number): void {
   rateLimitedAccounts.set(accountId, {
@@ -24,6 +27,7 @@ export function isAccountRateLimited(accountId: string): boolean {
   const entry = rateLimitedAccounts.get(accountId)
   if (!entry) return false
 
+  // Check if the rate limit has expired
   const expiresAt = entry.resetsAt ?? (entry.rateLimitedAt + DEFAULT_COOLDOWN_MS)
   if (Date.now() >= expiresAt) {
     rateLimitedAccounts.delete(accountId)

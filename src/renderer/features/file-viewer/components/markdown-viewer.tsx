@@ -88,14 +88,13 @@ export function MarkdownViewer({
     return filePath
   }, [projectPath, filePath])
 
+  // Watch only this specific file (1 FD) instead of the entire project tree
   trpc.files.watchChanges.useSubscription(
-    { projectPath },
+    { projectPath, filePath: relativePath || undefined },
     {
       enabled: !!projectPath && !!relativePath,
-      onData: (change) => {
-        if (change.filename === relativePath) {
-          refetchRef.current()
-        }
+      onData: () => {
+        refetchRef.current()
       },
     },
   )

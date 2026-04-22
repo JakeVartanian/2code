@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { hasFdHeadroom } from "../../fd-pressure";
 
 // Chokidar is ESM-only, so we need to dynamically import it
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -188,6 +189,10 @@ export class GitWatcher extends EventEmitter {
 				flushChanges();
 			})
 			.on("error", (error: Error) => {
+				if ((error as NodeJS.ErrnoException & { code?: string }).code === "EMFILE") {
+					console.error("[GitWatcher] EMFILE: too many open files — suppressing to avoid crash");
+					return;
+				}
 				console.error("[GitWatcher] Error:", error);
 				this.emit("error", error);
 			});
@@ -228,14 +233,37 @@ class GitWatcherRegistry {
 	private watchers: Map<string, GitWatcher> = new Map();
 	private listeners: Map<string, Set<(event: GitWatchEvent) => void>> =
 		new Map();
+	// Delayed disposal timers — lets watchers survive rapid subscribe/unsubscribe cycles
+	private disposeTimers: Map<string, NodeJS.Timeout> = new Map();
 
 	/**
 	 * Get or create a watcher for the given worktree path.
 	 * If a watcher already exists, returns the existing one.
 	 */
 	async getOrCreate(worktreePath: string): Promise<GitWatcher> {
+		// Cancel any pending delayed disposal — someone wants this watcher again
+		const pendingDispose = this.disposeTimers.get(worktreePath);
+		if (pendingDispose) {
+			clearTimeout(pendingDispose);
+			this.disposeTimers.delete(worktreePath);
+		}
+
 		let watcher = this.watchers.get(worktreePath);
 		if (!watcher) {
+			// Check FD headroom before creating new watcher (~2 FDs for .git/index + HEAD)
+			if (!hasFdHeadroom(4)) {
+				console.warn(`[GitWatcherRegistry] No FD headroom — skipping watcher for ${worktreePath}`);
+				// Create a dummy watcher that doesn't actually watch anything
+				// This prevents callers from retrying in a tight loop
+				watcher = new GitWatcher({
+					worktreePath,
+					debounceMs: 100,
+				});
+				// Don't init — just register it so getOrCreate doesn't retry
+				this.watchers.set(worktreePath, watcher);
+				return watcher;
+			}
+
 			watcher = new GitWatcher({
 				worktreePath,
 				debounceMs: 100,
@@ -297,7 +325,19 @@ class GitWatcherRegistry {
 		// Return unsubscribe function
 		return () => {
 			listeners?.delete(callback);
-			// Keep watcher alive for potential reuse (only 2 file descriptors)
+			// Schedule disposal when no listeners remain — frees 2 FDs per worktree.
+			// Delayed by 30s to survive rapid workspace switches without thrashing.
+			if (listeners && listeners.size === 0) {
+				const timer = setTimeout(() => {
+					this.disposeTimers.delete(worktreePath);
+					// Re-check: a new subscriber may have arrived during the delay
+					const currentListeners = this.listeners.get(worktreePath);
+					if (!currentListeners || currentListeners.size === 0) {
+						this.dispose(worktreePath).catch(() => {});
+					}
+				}, 30_000);
+				this.disposeTimers.set(worktreePath, timer);
+			}
 		};
 	}
 
@@ -324,6 +364,12 @@ class GitWatcherRegistry {
 	 * Dispose all watchers. Call this when the app is shutting down.
 	 */
 	async disposeAll(): Promise<void> {
+		// Clear any pending delayed disposals
+		for (const timer of this.disposeTimers.values()) {
+			clearTimeout(timer);
+		}
+		this.disposeTimers.clear();
+
 		const disposals = Array.from(this.watchers.values()).map((watcher) =>
 			watcher.dispose(),
 		);

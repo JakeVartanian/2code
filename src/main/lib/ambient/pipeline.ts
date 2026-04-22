@@ -45,8 +45,8 @@ function getAmbientEvents() {
 
 const RECENT_CACHE_TTL = 24 * 60 * 60 * 1000 // 24 hours
 const RECENT_CACHE_SWEEP_INTERVAL = 60 * 60 * 1000 // Sweep every hour
-const COLD_START_DURATION = 15 * 60 * 1000 // 15 minutes observation mode
 const SUGGESTION_EXPIRY_HOURS = 48 // Expire pending suggestions after 48h
+const MAX_PENDING_SUGGESTIONS = 8 // Raised from 3 — if GAAD has good things to say, let it say them
 
 export class AnalysisPipeline {
   private projectId: string
@@ -62,8 +62,6 @@ export class AnalysisPipeline {
   // Processing lock to prevent concurrent triage calls
   private isProcessing = false
   private pendingBatch: FileBatch | null = null
-  // Cold start: timestamp when pipeline was created
-  private createdAt = Date.now()
   // Abort controller for graceful dispose — signals all in-flight async work
   private disposeController = new AbortController()
   // Synthesis concurrency guard — only one synthesis at a time
@@ -152,14 +150,15 @@ export class AnalysisPipeline {
     // --- EXPIRE old pending suggestions (periodic, free) ---
     this.expireOldSuggestions()
 
-    // --- COLD START: only surface high-confidence findings in first 4 hours ---
-    const isColdStart = (Date.now() - this.createdAt) < COLD_START_DURATION
-
     // --- TIER 0: Local heuristics (free) ---
     const threshold = getHeuristicThreshold(this.config.sensitivity)
     const candidates = runHeuristics(batch, threshold)
 
-    if (candidates.length === 0) return
+    if (candidates.length === 0) {
+      // No heuristic matches — try direct AI analysis of the changes
+      await this.analyzeFileChangesDirectly(batch)
+      return
+    }
 
     // Filter by enabled categories
     const filtered = candidates.filter(c =>
@@ -183,15 +182,6 @@ export class AnalysisPipeline {
     const novel = weighted.filter(c => !this.isRecentDuplicate(c))
 
     if (novel.length === 0) return
-
-    // --- COLD START MODE: first 4 hours, only surface very high-confidence items ---
-    if (isColdStart) {
-      const veryHighConfidence = novel.filter(c => c.confidence >= 70)
-      for (const result of veryHighConfidence) {
-        this.persistSuggestion(result)
-      }
-      return // Skip API triage during cold start
-    }
 
     // --- TIER 1: Haiku triage ---
     if (this.provider && this.budget.getDegradationTier() === "normal") {
@@ -257,11 +247,104 @@ export class AnalysisPipeline {
       }
     } else {
       // No provider or budget conserving → use heuristic confidence directly
-      // Only persist high-confidence items (>= 60)
-      const highConfidence = novel.filter(c => c.confidence >= 60)
+      // Only persist high-confidence items (>= 75)
+      const highConfidence = novel.filter(c => c.confidence >= 75)
       for (const result of highConfidence) {
         this.persistSuggestion(result)
       }
+    }
+  }
+
+  /**
+   * Direct AI analysis of file changes — bypasses the heuristic gate.
+   * When no heuristic rules match (which is most of the time), this sends
+   * the actual git diff to Haiku for intelligent assessment.
+   */
+  private async analyzeFileChangesDirectly(batch: FileBatch): Promise<void> {
+    if (!this.provider || this.budget.getDegradationTier() !== "normal") return
+    if (this.disposeController.signal.aborted) return
+
+    const filePaths = batch.files.map(f => f.path)
+    if (filePaths.length === 0) return
+
+    // Budget check before calling
+    if (!this.budget.canSpend("haiku", 800, 400)) return
+
+    // Get actual diff content for changed files
+    let diffContent = ""
+    try {
+      const { stdout } = await execAsync(
+        "git diff --no-color -U2",
+        { cwd: this.projectPath, timeout: 5000, maxBuffer: 50_000 },
+      )
+      diffContent = stdout.slice(0, 4000)
+    } catch { /* non-critical */ }
+
+    // For new/untracked files, list them (AI can flag suspicious additions)
+    const newFiles = batch.files.filter(f => f.type === "add")
+    if (newFiles.length > 0) {
+      diffContent += "\n\nNew untracked files:\n" + newFiles.map(f => `- ${f.path}`).join("\n")
+    }
+
+    if (!diffContent || diffContent.length < 30) return
+
+    // Inject project memory context
+    let projectContext = ""
+    try {
+      const memoryResult = await getMemoriesForInjection(this.projectId, null, 800)
+      projectContext = memoryResult.markdown
+    } catch { /* non-critical */ }
+
+    const system = `You are GAAD, a developer's ambient coding assistant. You silently review code changes and only speak when you spot something genuinely valuable — a real bug, a risk they haven't considered, a blind spot, or a meaningful architectural concern.
+
+You are NOT a linter. Do NOT flag: console.log, style issues, missing types, unused variables, missing comments, or anything a linter handles. Focus on things that would make a senior developer stop and think.
+
+Respond with a JSON array (0-2 items, usually 0-1). Each:
+{"title":"concise finding","description":"2-3 sentences: what you found and why it matters","category":"bug"|"security"|"risk"|"blind-spot"|"performance"|"next-step","confidence":60-95,"files":["affected/file/paths"],"suggestedPrompt":"specific instructions for Claude to fix this"}
+
+Return [] if nothing is genuinely noteworthy. Most changes are fine — only flag real concerns.`
+
+    const user = `${projectContext ? `Project context:\n${projectContext}\n\n` : ""}Changed files: ${filePaths.join(", ")}\n\nDiff:\n${diffContent}`
+
+    try {
+      const result = await this.provider.callHaiku(system, user)
+      this.budget.recordSpend("haiku", result.inputTokens, result.outputTokens)
+
+      if (!result.text || this.disposeController.signal.aborted) return
+
+      const jsonMatch = result.text.match(/\[[\s\S]*\]/)
+      if (!jsonMatch) return
+
+      const suggestions = JSON.parse(jsonMatch[0]) as Array<{
+        title: string
+        description: string
+        category: string
+        confidence: number
+        files?: string[]
+        suggestedPrompt?: string
+      }>
+
+      if (!Array.isArray(suggestions)) return
+
+      for (const s of suggestions.slice(0, 2)) {
+        if (!s.title || !s.description || (s.confidence ?? 0) < 60) continue
+
+        const hResult: HeuristicResult = {
+          category: (s.category as SuggestionCategory) ?? "blind-spot",
+          severity: (s.confidence ?? 70) >= 80 ? "warning" : "info",
+          title: s.title,
+          description: s.description,
+          confidence: Math.min(95, Math.max(60, s.confidence ?? 70)),
+          triggerFiles: s.files ?? filePaths.slice(0, 5),
+          triggerEvent: "file-change",
+        }
+
+        if (!this.isRecentDuplicate(hResult)) {
+          this.persistSuggestion(hResult, s.suggestedPrompt, "haiku")
+        }
+      }
+    } catch (err) {
+      console.warn("[GAAD] Direct file analysis failed:", err)
     }
   }
 
@@ -298,9 +381,7 @@ export class AnalysisPipeline {
       commitInfo = stdout.trim()
     } catch { return }
 
-    // Skip trivial commits (< 3 files changed)
     const statLines = commitInfo.split("\n").filter(l => l.match(/\|/))
-    if (statLines.length < 3) return
 
     // Create a synthetic candidate and triage it
     const candidate: HeuristicResult = {
@@ -344,13 +425,13 @@ export class AnalysisPipeline {
   /** Batched non-urgent chat events waiting for Tier 1 triage */
   private chatEventBatch: ChatActivityEvent[] = []
   private chatBatchTimer: ReturnType<typeof setTimeout> | null = null
-  private readonly CHAT_BATCH_WINDOW = 30_000 // 30s
+  private readonly CHAT_BATCH_WINDOW = 60_000 // 60s
 
   /** Rolling prompt counter per sub-chat for continuous synthesis */
   private promptCounter = new Map<string, number>() // subChatId → count since last synthesis
-  private readonly SYNTHESIS_PROMPT_INTERVAL = 3 // Synthesize every N user prompts
+  private readonly SYNTHESIS_PROMPT_INTERVAL = 2 // Synthesize every N user prompts — synthesis is where the intelligence lives
   private lastSynthesisAt = 0
-  private readonly SYNTHESIS_COOLDOWN = 60_000 // Min 60s between syntheses
+  private readonly SYNTHESIS_COOLDOWN = 45_000 // 45s between syntheses — responsive but not spammy
 
   /**
    * Process a chat activity event from the chat bridge.
@@ -397,6 +478,10 @@ export class AnalysisPipeline {
     // Run chat-specific heuristics (Tier 0 — free, instant)
     const chatResults = runChatHeuristics(event)
     for (const result of chatResults) {
+      // Skip memory-conflict reminders — these are internal context, not actionable suggestions
+      if (result.triggerEvent === "memory-conflict") continue
+      // Require minimum confidence of 75 for chat heuristics (same bar as no-provider fallback)
+      if (result.confidence < 75) continue
       // Deduplicate and persist
       if (!this.isRecentDuplicate(result)) {
         this.persistSuggestion(result)
@@ -550,38 +635,65 @@ export class AnalysisPipeline {
       }
     }
 
+    // Detect discussion-heavy sessions (strategic planning, brainstorming)
+    const promptCount = event.activityType === "session-complete" && meta
+      ? (meta.promptCount ?? 0)
+      : getSessionEvents(event.subChatId).filter(e => e.activityType === "user-prompt").length
+    const toolCount = event.activityType === "session-complete" && meta
+      ? (meta.toolCallCount ?? 0)
+      : getSessionEvents(event.subChatId).filter(e => e.activityType === "tool-call").length
+    const isDiscussion = promptCount >= 2 && toolCount <= promptCount
+
+    // Skip trivial sessions — less than 2 tool calls isn't worth analyzing
+    if (isQuick && !hasErrors && !isDiscussion) {
+      console.log("[GAAD] Synthesis skipped: trivial session (< 3 tool calls, no errors)")
+      return
+    }
+
     // For session-complete: require meaningful activity
-    if (event.activityType === "session-complete" && !hasErrors && !hasModifications && !isExploring) {
+    if (event.activityType === "session-complete" && !hasErrors && !hasModifications && !isExploring && !isDiscussion) {
       console.log("[GAAD] Synthesis skipped: no meaningful activity in session")
       return
     }
 
     // Build dynamic emphasis based on session type
     let dynamicEmphasis = ""
-    if (hasErrors) dynamicEmphasis = "\nThis session had errors — what went wrong and how to prevent it next time?"
+    if (isDiscussion) dynamicEmphasis = "\nThis session was a STRATEGIC DISCUSSION — the developer is thinking at a high level. Do NOT focus on low-level code details. Instead, connect their ideas to concrete codebase actions: what existing code needs to change to support their vision? What technical decisions are implied by their plan that they may not have thought through? What infrastructure gaps exist between where the code is now and where they want it to go?"
+    else if (hasErrors) dynamicEmphasis = "\nThis session had errors — what went wrong and how to prevent it next time?"
     else if (isBroadChange) dynamicEmphasis = "\nBroad changes across many files — what should be tested, and are there integration risks?"
     else if (isExploring) dynamicEmphasis = "\nMostly reading/exploring — what was learned, and what's the next concrete step?"
 
-    const maxSuggestions = isQuick ? 1 : 3
+    const maxSuggestions = 3
 
-    const system = `You are GAAD — a sharp development partner who just watched this coding session. Your job: identify 1-${maxSuggestions} things the developer would NOT notice themselves.
+    const system = `You are GAAD — the developer's unfair advantage. You see what they can't. You've been silently watching this coding session, and now you get ONE shot to deliver a genuine insight that makes them stop and say "holy shit, I didn't think of that."
 
-Focus ONLY on what's genuinely useful:
-- NEXT STEP: The single most impactful thing to do next (feature, fix, optimization, tool to try)
-- RISK: Something that could break, conflict, or cause problems they haven't noticed
-- BUG: An actual defect or error pattern you spotted
-- TEST GAP: Missing test coverage for what was just changed
-- MEMORY: A pattern, gotcha, or convention worth saving for future sessions
+You are NOT a linter. You are NOT a code reviewer. You are NOT a narrator. You are the brilliant friend who sees the whole board while they're focused on one piece.
+
+THE ONLY REASON TO SPEAK: you spotted something that will genuinely make the code better, the architecture stronger, or save them from a real problem they're about to walk into. If you don't have that, say nothing. Silence is golden. Most sessions deserve [].
+
+WHAT MAKES YOU VALUABLE:
+- You see connections between files they touched and files they didn't — "you changed the API contract here but the mobile client still expects the old shape"
+- You see the hidden consequence of what they just decided — "this approach works now but creates a data migration nightmare when you hit 10K users"
+- You see the shortcut they're missing — "you're about to build this from scratch but there's already a utility in lib/helpers that does 90% of it"
+- You see the strategic gap — when they're planning at a high level, you connect their vision to what the codebase actually needs to support it
+- You see the thing that will bite them on Friday at 5pm — race conditions, missing error boundaries, unhandled edge cases in code they DIDN'T touch but that depends on code they DID
+
+WHAT MAKES YOU ANNOYING (never do these):
+- Restating what they just did — they were there, they know
+- Generic advice — "consider adding tests" is worthless without saying WHICH test for WHICH edge case
+- Narrating the session — "you modified 5 files" is not an insight
+- Flagging things they explicitly chose to do — if they ran an incomplete audit on purpose, don't tell them it's incomplete
+- Low-confidence noise — if you're not at least 70% sure this matters, keep it to yourself
 ${dynamicEmphasis}
 
-Respond with a JSON array (0-${maxSuggestions} items). Each item:
-{"title": "specific, actionable title", "description": "2-3 sentences: what, why, and what to do about it", "category": "next-step"|"risk"|"bug"|"test-gap"|"memory", "confidence": 50-95, "evidence": "cite a specific file path or tool call from the session", "files": ["affected/file/paths"], "suggestedPrompt": "A copy-pasteable prompt that references specific files and describes the exact task. No editing needed."}
+Respond with a JSON array (0-${maxSuggestions} items, usually 0). Each item:
+{"title": "punchy discovery under 10 words", "description": "MAX 2-3 SHORT sentences. What you found + why it matters. No preamble, no narration, no restating what happened. Get to the point.", "category": "blind-spot"|"risk"|"bug"|"test-gap"|"next-step", "confidence": 60-95, "whyNonObvious": "One sentence: why they wouldn't notice this. If you can't say it in one sentence, return [].", "evidence": "specific file or function name", "files": ["affected/file/paths"], "suggestedPrompt": "What you'd tell Claude to fix this. Be specific — file names, function names, the exact change."}
 
 Rules:
-- Every suggestion MUST cite a specific file or tool call from the session in "evidence"
-- suggestedPrompt must reference actual files and describe a concrete task
-- Only surface things the developer would genuinely benefit from hearing
-- If nothing notable happened, respond with: []`
+- [] is always the right answer unless you have something genuinely great
+- Your title should make them curious, not annoyed
+- description and suggestedPrompt must contain DIFFERENT information — one is the problem, the other is the fix
+- If you find yourself writing "consider" or "you should" or "remember to" — stop, delete it, return []`
 
     const user = `## Session Activity
 ${sessionSummary}
@@ -593,7 +705,8 @@ ${memoryContext || "(no project memories yet)"}`
     const score = (meta?.toolCallCount ?? 0)
                 + (meta?.errorCount ?? 0) * 3
                 + (meta?.filesModified?.length ?? 0) * 2
-    const useSonnet = score >= 12 && this.provider.info.supportsSonnet
+    // Force Sonnet for broad changes (5+ files) — these are where the real insights live
+    const useSonnet = (score >= 6 || isBroadChange) && this.provider.info.supportsSonnet
 
     try {
       const modelLabel = useSonnet ? "sonnet" : "haiku"
@@ -613,6 +726,7 @@ ${memoryContext || "(no project memories yet)"}`
         description: string
         category: string
         confidence: number
+        whyNonObvious?: string
         evidence?: string
         files?: string[]
         suggestedPrompt?: string
@@ -620,37 +734,68 @@ ${memoryContext || "(no project memories yet)"}`
 
       if (!Array.isArray(suggestions)) return
 
-      for (const s of suggestions.slice(0, maxSuggestions)) {
+      // --- Non-obvious filter: reject narration, generic filler, and linter-style noise ---
+      const STOP_WORDS = new Set(["the", "a", "an", "in", "to", "and", "for", "of", "is", "it", "was", "this", "that", "on", "at", "by", "with", "from"])
+      const NARRATION_OPENERS = /^(you |the session |consider |remember |successfully |completed |make sure |don't forget |the changes |the code |the developer |you should |you might |it would be |it('|')s worth |note that |be sure to )/i
+      const GENERIC_FILLER = /the developer might not (realize|notice)|this could be important|it's worth noting|worth mentioning|good practice|best practice|you may want to|might want to consider/i
+      const LINTER_NOISE = /console\.log|type assertion|as any|commented.out|dead code|unused (import|variable|function)|missing semicolon/i
+
+      const userMessages = sessionSummary
+        .split("\n")
+        .filter(l => l.startsWith("- "))
+        .map(l => l.slice(2).toLowerCase().replace(/[^a-z0-9\s]/g, ""))
+
+      const filtered = suggestions.filter(s => {
+        // Reject narration openers
+        if (NARRATION_OPENERS.test(s.title)) {
+          console.log(`[GAAD] Filtered narration-pattern: "${s.title}"`)
+          return false
+        }
+
+        // Reject linter-level noise — GAAD is not a linter
+        if (LINTER_NOISE.test(s.title) || LINTER_NOISE.test(s.description)) {
+          console.log(`[GAAD] Filtered linter noise: "${s.title}"`)
+          return false
+        }
+
+        // Reject missing/weak whyNonObvious
+        if (!s.whyNonObvious || s.whyNonObvious.trim().length < 20 || GENERIC_FILLER.test(s.whyNonObvious)) {
+          console.log(`[GAAD] Filtered weak non-obvious reasoning: "${s.title}"`)
+          return false
+        }
+
+        // Reject if title restates a user message (60%+ word overlap)
+        const titleWords = s.title.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w))
+        if (titleWords.length > 0) {
+          for (const msg of userMessages) {
+            const matchCount = titleWords.filter(w => msg.includes(w)).length
+            if (titleWords.length > 0 && matchCount / titleWords.length >= 0.6) {
+              console.log(`[GAAD] Filtered user-message echo: "${s.title}"`)
+              return false
+            }
+          }
+        }
+
+        return true
+      })
+
+      for (const s of filtered.slice(0, maxSuggestions)) {
         if (!s.title || !s.description) continue
         // Reject suggestions without evidence grounding
         if (!s.evidence || s.evidence.trim().length === 0) continue
 
         const result: HeuristicResult = {
-          category: (s.category as any) ?? "next-step",
+          category: (s.category as any) ?? "blind-spot",
           severity: s.confidence >= 75 ? "warning" : "info",
           title: s.title,
-          description: `${s.description}${s.evidence ? `\n\n_Evidence: ${s.evidence}_` : ""}`,
-          confidence: Math.min(95, Math.max(30, s.confidence ?? 50)),
+          description: s.description,
+          confidence: Math.min(95, Math.max(70, s.confidence ?? 50)), // Floor at 70 — fewer suggestions, each earns trust
           triggerFiles: s.files ?? [],
           triggerEvent: "session-synthesis",
         }
 
         if (!this.isRecentDuplicate(result)) {
           this.persistSuggestion(result, s.suggestedPrompt, modelLabel)
-
-          // Auto-save "memory" category suggestions to project memory
-          if (s.category === "memory" && s.confidence >= 90) {
-            this.writeToMemory({
-              title: s.title,
-              description: s.description,
-              category: "memory" as any,
-              severity: "info",
-              confidence: s.confidence,
-              triggerFiles: s.files ?? [],
-              suggestedPrompt: s.suggestedPrompt ?? "",
-              tokensUsed: { input: 0, output: 0 },
-            })
-          }
         }
       }
     } catch (err) {
@@ -669,16 +814,34 @@ ${memoryContext || "(no project memories yet)"}`
     // Mark as recent (expiry timestamp instead of setTimeout)
     this.recentSuggestions.set(key, Date.now() + RECENT_CACHE_TTL)
 
-    // Check max pending suggestions (cap at 10 per project)
-    const pendingCount = db.select({ id: ambientSuggestions.id })
+    // Enforce hard cap: expire oldest pending suggestions to make room
+    const pendingRows = db.select({ id: ambientSuggestions.id })
       .from(ambientSuggestions)
       .where(and(
         eq(ambientSuggestions.projectId, this.projectId),
         eq(ambientSuggestions.status, "pending"),
       ))
-      .all().length
+      .orderBy(ambientSuggestions.createdAt) // ASC — oldest first
+      .all()
 
-    if (pendingCount >= 10) return // Don't flood
+    if (pendingRows.length >= MAX_PENDING_SUGGESTIONS) {
+      // Expire enough to make room for the new one (keep MAX - 1, new one will be #MAX)
+      const toExpire = pendingRows.slice(0, pendingRows.length - (MAX_PENDING_SUGGESTIONS - 1))
+      for (const row of toExpire) {
+        db.update(ambientSuggestions)
+          .set({ status: "expired" })
+          .where(eq(ambientSuggestions.id, row.id))
+          .run()
+        // Emit so frontend removes it immediately
+        try {
+          const events = getAmbientEvents()
+          events?.emit(`project:${this.projectId}`, {
+            type: "suggestion-expired",
+            suggestionId: row.id,
+          })
+        } catch { /* non-critical */ }
+      }
+    }
 
     // Generate ID upfront so we can include it in the event
 
@@ -957,7 +1120,21 @@ ${memoryContext || "(no project memories yet)"}`
   }
 
   private suggestionKey(result: HeuristicResult): string {
-    return `${result.title}:${result.triggerFiles.sort().join(",")}`
+    // Normalize aggressively so near-identical suggestions produce the same key
+    // e.g. "AI budget guard fails OPEN — fix before ship" and
+    //      "AI budget guard fails OPEN — do not treat as hard kill-switch"
+    // should dedup to the same key
+    const normalizedTitle = result.title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .split(/\s+/)
+      .slice(0, 6) // First 6 words are enough to identify the topic
+      .join(" ")
+    const normalizedFiles = result.triggerFiles
+      .map(f => f.split("/").pop() ?? f) // Just basenames
+      .sort()
+      .join(",")
+    return `${normalizedTitle}:${normalizedFiles}`
   }
 
   private buildSuggestedPrompt(result: HeuristicResult): string {

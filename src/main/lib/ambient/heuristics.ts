@@ -24,49 +24,6 @@ interface HeuristicRule {
 }
 
 const RULES: HeuristicRule[] = [
-  // --- BUG DETECTION ---
-  {
-    id: "console-log-prod",
-    category: "bug",
-    severity: "info",
-    extensions: [".ts", ".tsx", ".js", ".jsx"],
-    pattern: /console\.(log|debug|info)\(/,
-    title: "console.log left in code",
-    description: "Debug logging found in non-test file. Consider removing before commit.",
-    confidence: 60,
-  },
-  {
-    id: "type-assertion-any",
-    category: "bug",
-    severity: "warning",
-    extensions: [".ts", ".tsx"],
-    pattern: /as\s+any/,
-    title: "Unsafe type assertion (as any)",
-    description: "Type assertion to 'any' bypasses TypeScript safety. Consider a proper type.",
-    confidence: 55,
-  },
-  {
-    id: "eslint-disable",
-    category: "bug",
-    severity: "info",
-    extensions: [".ts", ".tsx", ".js", ".jsx"],
-    pattern: /\/[/*]\s*eslint-disable/,
-    title: "ESLint rule disabled",
-    description: "A lint rule was disabled. Ensure this is intentional and not hiding a real issue.",
-    confidence: 45,
-  },
-  {
-    id: "todo-fixme-added",
-    category: "bug",
-    severity: "info",
-    extensions: [".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs"],
-    pattern: /\/\/\s*(TODO|FIXME|HACK|XXX|BUG):/i,
-    title: "TODO/FIXME comment added",
-    description: "New technical debt marker added. Track or resolve before shipping.",
-    confidence: 35,
-  },
-
-  // --- SECURITY ---
   {
     id: "hardcoded-secret",
     category: "security",
@@ -74,75 +31,36 @@ const RULES: HeuristicRule[] = [
     pattern: /(password|secret|api_?key|token)\s*[:=]\s*['"][^'"]{8,}['"]/i,
     title: "Possible hardcoded secret",
     description: "A string that looks like a secret or API key was found hardcoded. Use environment variables instead.",
-    confidence: 75,
+    confidence: 85,
   },
   {
-    id: "env-in-code",
+    id: "merge-conflict-marker",
+    category: "bug",
+    severity: "error",
+    pattern: /^[<>=]{7}\s/m,
+    title: "Merge conflict markers in source",
+    description: "Unresolved merge conflict markers (<<<<<<, =======, >>>>>>>) found in file. These will cause syntax errors.",
+    confidence: 95,
+  },
+  {
+    id: "env-file-tracked",
     category: "security",
+    severity: "error",
+    extensions: [".env"],
+    pattern: /\S/, // Any non-empty .env file
+    title: ".env file may be tracked by git",
+    description: "An .env file with content was detected in changes. Ensure it is in .gitignore to prevent secrets from being committed.",
+    confidence: 80,
+  },
+  {
+    id: "debugger-statement",
+    category: "bug",
     severity: "warning",
     extensions: [".ts", ".tsx", ".js", ".jsx"],
-    pattern: /process\.env\.\w+\s*\|\|\s*['"][^'"]+['"]/,
-    title: "Env variable with hardcoded fallback",
-    description: "Environment variable has a hardcoded fallback value that may leak in production.",
-    confidence: 50,
-  },
-
-  // --- PERFORMANCE ---
-  {
-    id: "n-plus-one-loop",
-    category: "performance",
-    severity: "warning",
-    extensions: [".ts", ".tsx", ".js", ".jsx"],
-    pattern: /for\s*\(.*\)\s*\{[^}]*await\s+/,
-    title: "Await inside loop (potential N+1)",
-    description: "Sequential await in a loop may cause performance issues. Consider Promise.all() or batching.",
-    confidence: 60,
-  },
-  {
-    id: "sync-fs-call",
-    category: "performance",
-    severity: "info",
-    extensions: [".ts", ".js"],
-    pattern: /(?:readFileSync|writeFileSync|existsSync|mkdirSync)\(/,
-    title: "Synchronous file system call",
-    description: "Synchronous FS operations block the event loop. Consider async alternatives for hot paths.",
-    confidence: 35,
-  },
-
-  // --- TEST GAPS ---
-  {
-    id: "export-no-test",
-    category: "test-gap",
-    severity: "info",
-    extensions: [".ts", ".tsx", ".js", ".jsx"],
-    pattern: /export\s+(async\s+)?function\s+\w+/,
-    title: "New exported function — test coverage?",
-    description: "A new exported function was added. Consider adding tests.",
-    confidence: 40,
-  },
-
-  // --- DEAD CODE ---
-  {
-    id: "commented-code-block",
-    category: "dead-code",
-    severity: "info",
-    extensions: [".ts", ".tsx", ".js", ".jsx"],
-    pattern: /\/\*[\s\S]{100,}?\*\//, // Non-greedy to prevent catastrophic backtracking
-    title: "Large commented-out code block",
-    description: "A large block of commented code was found. Remove if no longer needed.",
-    confidence: 50,
-  },
-
-  // --- DEPENDENCY ---
-  {
-    id: "package-json-no-lock",
-    category: "dependency",
-    severity: "warning",
-    extensions: [],
-    pattern: /./,  // Handled specially via file name check
-    title: "package.json changed without lockfile update",
-    description: "Dependencies were modified but the lockfile wasn't updated. Run install.",
-    confidence: 70,
+    pattern: /^\s*debugger\s*;?\s*$/m,
+    title: "Debugger statement left in code",
+    description: "A `debugger` statement was found. This will pause execution in browsers and should be removed before shipping.",
+    confidence: 90,
   },
 ]
 
@@ -176,23 +94,6 @@ export function runHeuristics(
   sensitivityThreshold: number,
 ): HeuristicResult[] {
   const results: HeuristicResult[] = []
-
-  // Special check: package.json changed without lockfile
-  const hasPackageJson = batch.files.some(f => f.path === "package.json" || f.path.endsWith("/package.json"))
-  const hasLockfile = batch.files.some(f =>
-    f.path.includes("lock") || f.path === "bun.lockb" || f.path === "yarn.lock"
-  )
-  if (hasPackageJson && !hasLockfile) {
-    results.push({
-      category: "dependency",
-      severity: "warning",
-      title: "package.json changed without lockfile update",
-      description: "Dependencies were modified but no lockfile was updated in the same batch.",
-      confidence: 70,
-      triggerFiles: batch.files.filter(f => f.path.includes("package.json")).map(f => f.path),
-      triggerEvent: "file-change",
-    })
-  }
 
   // Analyze each changed file
   for (const file of batch.files) {
@@ -230,9 +131,6 @@ function analyzeFile(
   if (content.length > 200_000) return results
 
   for (const rule of RULES) {
-    // Skip the package.json rule (handled separately above)
-    if (rule.id === "package-json-no-lock") continue
-
     // Check file extension match
     if (rule.extensions && rule.extensions.length > 0) {
       if (!rule.extensions.includes(file.ext)) continue

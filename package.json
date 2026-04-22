@@ -35,6 +35,8 @@
     "release:dev": "rm -rf release && bun run claude:download:all && bun run build && bun run package:mac && rm -rf node_modules && bun i",
     "sync:public": "./scripts/sync-to-public.sh",
     "icon:generate": "node scripts/generate-icon.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
@@ -141,7 +143,8 @@
     "postcss": "^8.5.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.4.5",
-    "vite": "^6.4.2"
+    "vite": "^6.4.2",
+    "vitest": "^4.1.5"
   },
   "build": {
     "appId": "dev.jakev.2code",
@@ -183,6 +186,13 @@
         "to": "cli",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "resources/native",
+        "to": "native",
+        "filter": [
+          "*.node"
         ]
       }
     ],
