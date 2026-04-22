@@ -72,6 +72,8 @@ export async function cleanupOrphanedProcesses(): Promise<void> {
       "2Code.app",         // Production app
       "2Code Dev",         // Dev mode
       "resources/bin/claude", // Bundled CLI
+      "electron-vite",     // Build processes spawned by Claude CLI Bash tool
+      "esbuild.*2code",    // esbuild service processes
     ]
 
     const killed = await findAndKillOrphans(appIdentifiers)

@@ -98,6 +98,10 @@ export function useGitWatcher(
         queryClient.invalidateQueries({
           queryKey: [["changes", "getStatus"]],
         })
+        // Branch may have changed (e.g. git checkout) — update live branch display
+        queryClient.invalidateQueries({
+          queryKey: [["changes", "getBranches"]],
+        })
 
         // Also invalidate parsed diff if files were modified
         const hasModifiedFiles = data.changes.some(

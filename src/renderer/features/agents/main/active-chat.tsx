@@ -74,7 +74,8 @@ import {
   detailsSidebarOpenAtom,
   unifiedSidebarEnabledAtom,
 } from "../../details-sidebar/atoms"
-import { DetailsSidebar } from "../../details-sidebar/details-sidebar"
+// Lazy-loaded: Details sidebar only loads when unified sidebar is open
+const DetailsSidebar = lazy(() => import("../../details-sidebar/details-sidebar").then(m => ({ default: m.DetailsSidebar })))
 // Lazy-loaded: Monaco editor (~2-3MB) only loads when file viewer opens
 const FileViewerSidebar = lazy(() => import("../../file-viewer/components/file-viewer-sidebar").then(m => ({ default: m.FileViewerSidebar })))
 import { FileSearchDialog } from "../../file-viewer/components/file-search-dialog"
@@ -191,8 +192,10 @@ import type { DiffViewMode, ParsedDiffFile } from "../ui/agent-diff-utils"
 import { diffViewModeAtom, splitUnifiedDiffByFile } from "../ui/agent-diff-utils"
 // Lazy-loaded: @pierre/diffs (~10MB) only loads when diff view opens
 const AgentDiffView = lazy(() => import("../ui/agent-diff-view").then(m => ({ default: m.AgentDiffView })))
-import { AgentPlanSidebar } from "../ui/agent-plan-sidebar"
-import { AgentPreview } from "../ui/agent-preview"
+// Lazy-loaded: Plan sidebar only loads when plan panel is open
+const AgentPlanSidebar = lazy(() => import("../ui/agent-plan-sidebar").then(m => ({ default: m.AgentPlanSidebar })))
+// Lazy-loaded: Preview iframe only loads when preview sidebar is open
+const AgentPreview = lazy(() => import("../ui/agent-preview").then(m => ({ default: m.AgentPreview })))
 import { AgentQueueIndicator } from "../ui/agent-queue-indicator"
 import { AgentToolCall } from "../ui/agent-tool-call"
 import { AgentToolRegistry } from "../ui/agent-tool-registry"
@@ -4192,7 +4195,7 @@ export function ChatView({
       if (worktreePath && chatId) {
         const result = await trpcClient.chats.getParsedDiff.query({ chatId })
 
-        if (result.files.length > 0) {
+        if (result?.files?.length > 0) {
           // Store parsed files directly (already parsed on server)
           setParsedFileDiffs(result.files)
 
@@ -5969,7 +5972,7 @@ Make sure to preserve all functionality from both branches when resolving confli
             key={chatId}
             chatId={chatId}
             worktreePath={worktreePath}
-            branch={(agentChat as any)?.branch ?? null}
+            branch={branchData?.current ?? (agentChat as any)?.branch ?? null}
             baseBranch={(agentChat as any)?.baseBranch ?? null}
             prNumber={agentChat?.prNumber ?? null}
             prUrl={agentChat?.prUrl ?? null}
@@ -6041,7 +6044,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                             isActive={paneId === activeSubChatId}
                             isSplitPane={true}
                             workspaceName={agentChat?.name ?? null}
-                            workspaceBranch={agentChat?.branch ?? null}
+                            workspaceBranch={branchData?.current ?? agentChat?.branch ?? null}
                             workspaceRepoName={(agentChat as any)?.project?.gitRepo || (agentChat as any)?.project?.name || null}
                           />
                           </ChatDataSync>
@@ -6175,7 +6178,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                         isActive={true}
                         isSplitPane={false}
                         workspaceName={agentChat?.name ?? null}
-                        workspaceBranch={agentChat?.branch ?? null}
+                        workspaceBranch={branchData?.current ?? agentChat?.branch ?? null}
                         workspaceRepoName={(agentChat as any)?.project?.gitRepo || (agentChat as any)?.project?.name || null}
                       />
                       </ChatDataSync>
@@ -6269,6 +6272,7 @@ Make sure to preserve all functionality from both branches when resolving confli
         {/* Plan Sidebar - shows plan files on the right (leftmost right sidebar) */}
         {/* Only show when we have an active sub-chat with a plan */}
         {!isMobileFullscreen && activeSubChatIdForPlan && (
+          <Suspense fallback={null}>
           <ResizableSidebar
             isOpen={isPlanSidebarOpen && !!currentPlanPath}
             onClose={() => setIsPlanSidebarOpen(false)}
@@ -6292,6 +6296,7 @@ Make sure to preserve all functionality from both branches when resolving confli
               mode={currentMode}
             />
           </ResizableSidebar>
+          </Suspense>
         )}
 
         {/* Diff View - hidden on mobile fullscreen and when diff is not available */}
@@ -6360,6 +6365,7 @@ Make sure to preserve all functionality from both branches when resolving confli
 
         {/* Preview Sidebar - hidden on mobile fullscreen and when preview is not available */}
         {canOpenPreview && !isMobileFullscreen && (
+          <Suspense fallback={null}>
           <ResizableSidebar
             isOpen={isPreviewSidebarOpen}
             onClose={() => setIsPreviewSidebarOpen(false)}
@@ -6426,6 +6432,7 @@ Make sure to preserve all functionality from both branches when resolving confli
               />
             )}
           </ResizableSidebar>
+          </Suspense>
         )}
 
         {/* File Viewer - opens when a file is clicked */}
@@ -6507,6 +6514,7 @@ Make sure to preserve all functionality from both branches when resolving confli
         {/* Unified Details Sidebar - combines all right sidebars into one (rightmost) */}
         {/* Show for both local (worktreePath) and remote (sandboxId) chats */}
         {isUnifiedSidebarEnabled && !isMobileFullscreen && (worktreePath || sandboxId) && (
+          <Suspense fallback={null}>
           <SectionErrorBoundary name="Details Sidebar">
             <DetailsSidebar
               chatId={chatId}
@@ -6546,6 +6554,7 @@ Make sure to preserve all functionality from both branches when resolving confli
               isRemoteChat={!!remoteInfo}
             />
           </SectionErrorBoundary>
+          </Suspense>
         )}
       </div>
 

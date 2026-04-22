@@ -410,12 +410,26 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
     )
 
     for (const item of triageResult.items) {
-      if (item.relevance >= 0.5) {
-        this.persistSuggestion({
-          ...candidate,
-          category: item.category,
-          confidence: Math.round(item.relevance * 100),
-        }, undefined, "haiku")
+      // Commit candidates need high relevance AND Sonnet analysis to produce
+      // useful suggestions. Raw commit info ("3 files changed") isn't actionable.
+      if (item.relevance >= 0.65 && this.provider?.info.supportsSonnet) {
+        const analysis = await analyzeWithSonnet(
+          { ...candidate, category: item.category, confidence: Math.round(item.relevance * 100) },
+          this.provider,
+          this.budget,
+          this.projectPath,
+          projectContext,
+        )
+        if (analysis && analysis.confidence >= 50) {
+          this.persistSuggestion({
+            ...candidate,
+            title: analysis.title,
+            description: analysis.description,
+            category: analysis.category as SuggestionCategory,
+            severity: analysis.severity,
+            confidence: analysis.confidence,
+          }, analysis.suggestedPrompt, "sonnet")
+        }
       }
     }
   }
@@ -551,13 +565,29 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
     )
 
     for (const item of triageResult.items) {
-      if (item.relevance >= 0.5) {
-        this.persistSuggestion({
-          ...candidate,
-          category: item.category,
-          confidence: Math.round(item.relevance * 100),
-        }, undefined, "haiku")
+      // Chat-batch candidates need HIGH triage relevance (≥0.75) because they're
+      // synthetic — the raw description is just file paths with no insight.
+      // If Haiku thinks it's genuinely interesting, promote to Sonnet for real analysis.
+      if (item.relevance >= 0.75 && this.provider?.info.supportsSonnet) {
+        const analysis = await analyzeWithSonnet(
+          { ...candidate, category: item.category, confidence: Math.round(item.relevance * 100) },
+          this.provider,
+          this.budget,
+          this.projectPath,
+          projectContext,
+        )
+        if (analysis && analysis.confidence >= 50) {
+          this.persistSuggestion({
+            ...candidate,
+            title: analysis.title,
+            description: analysis.description,
+            category: analysis.category as SuggestionCategory,
+            severity: analysis.severity,
+            confidence: analysis.confidence,
+          }, analysis.suggestedPrompt, "sonnet")
+        }
       }
+      // Otherwise: skip — raw file-path suggestions are useless noise
     }
   }
 
@@ -589,10 +619,11 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
       return
     }
 
-    // Get project memories for context (increased budget for synthesis)
+    // Get project memories relevant to what they're working on right now
     let memoryContext = ""
     try {
-      const memoryResult = await getMemoriesForInjection(this.projectId, null, 2500)
+      // Pass session summary as context hint so memory scoring boosts relevant memories
+      const memoryResult = await getMemoriesForInjection(this.projectId, sessionSummary, 5000)
       memoryContext = memoryResult.markdown
     } catch { /* non-critical */ }
 
@@ -628,11 +659,8 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
       isBroadChange = edits.length >= 5
       isQuick = toolCalls.length < 3
 
-      // For rolling synthesis, require at least some tool activity
-      if (toolCalls.length === 0) {
-        console.log("[GAAD] Rolling synthesis skipped: no tool calls yet")
-        return
-      }
+      // For rolling synthesis: allow pure discussion (no tool calls) — conversations
+      // about architecture, planning, and strategy are where the best connections happen
     }
 
     // Detect discussion-heavy sessions (strategic planning, brainstorming)
@@ -642,7 +670,7 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
     const toolCount = event.activityType === "session-complete" && meta
       ? (meta.toolCallCount ?? 0)
       : getSessionEvents(event.subChatId).filter(e => e.activityType === "tool-call").length
-    const isDiscussion = promptCount >= 2 && toolCount <= promptCount
+    const isDiscussion = promptCount >= 1 && toolCount <= promptCount * 2
 
     // Skip trivial sessions — less than 2 tool calls isn't worth analyzing
     if (isQuick && !hasErrors && !isDiscussion) {
@@ -665,41 +693,41 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
 
     const maxSuggestions = 3
 
-    const system = `You are GAAD — the developer's unfair advantage. You see what they can't. You've been silently watching this coding session, and now you get ONE shot to deliver a genuine insight that makes them stop and say "holy shit, I didn't think of that."
+    const system = `You are GAAD — a developer's strategic partner who knows the full history of this codebase, the product vision, and the broader landscape. You've watched every session, every decision, every pivot. You think like a CTO who also codes.
 
-You are NOT a linter. You are NOT a code reviewer. You are NOT a narrator. You are the brilliant friend who sees the whole board while they're focused on one piece.
+YOUR JOB: Look at what the developer is doing RIGHT NOW and surface the most valuable insight you can — whether that's a technical connection, a product idea, a strategic opportunity, or a risk they haven't considered. You're the colleague who sees the bigger picture.
 
-THE ONLY REASON TO SPEAK: you spotted something that will genuinely make the code better, the architecture stronger, or save them from a real problem they're about to walk into. If you don't have that, say nothing. Silence is golden. Most sessions deserve [].
+WHAT MAKES A GREAT SUGGESTION (in order of value):
+1. **Strategic insight**: "You just built X — this positions you to do Y, which competitors don't have yet. Here's the technical path."
+2. **Product opportunity**: "The infrastructure you're building could support [feature that users would love]. The hard part is already done in [file]."
+3. **Architecture evolution**: "This is the 3rd time this pattern appears — it's becoming a core abstraction. Consider promoting it to a shared module before it diverges."
+4. **Hidden connection**: "You're changing zone A, but zone B depends on the same interface. Also, this change enables [capability] you discussed 2 sessions ago."
+5. **Risk from history**: "Last time this pattern was changed, it caused Z. The current approach avoids that but introduces a new constraint on [thing]."
+6. **Go-to-market insight**: "This feature is demo-ready. Three things to polish for a launch: [specifics]."
+7. **Developer experience**: "Your onboarding flow / CLI / API surface could be smoother — here's what a new user would hit first."
 
-WHAT MAKES YOU VALUABLE:
-- You see connections between files they touched and files they didn't — "you changed the API contract here but the mobile client still expects the old shape"
-- You see the hidden consequence of what they just decided — "this approach works now but creates a data migration nightmare when you hit 10K users"
-- You see the shortcut they're missing — "you're about to build this from scratch but there's already a utility in lib/helpers that does 90% of it"
-- You see the strategic gap — when they're planning at a high level, you connect their vision to what the codebase actually needs to support it
-- You see the thing that will bite them on Friday at 5pm — race conditions, missing error boundaries, unhandled edge cases in code they DIDN'T touch but that depends on code they DID
-
-WHAT MAKES YOU ANNOYING (never do these):
-- Restating what they just did — they were there, they know
-- Generic advice — "consider adding tests" is worthless without saying WHICH test for WHICH edge case
-- Narrating the session — "you modified 5 files" is not an insight
-- Flagging things they explicitly chose to do — if they ran an incomplete audit on purpose, don't tell them it's incomplete
-- Low-confidence noise — if you're not at least 70% sure this matters, keep it to yourself
+WHAT TO AVOID:
+- Don't restate what they just did or narrate the session
+- Don't give generic advice ("add tests", "consider error handling", "document this")
+- Don't flag linter-level stuff (console.log, types, style)
+- Don't suggest things they already explicitly decided against
+- Don't be vague — every suggestion must name specific files, functions, or concrete next actions
 ${dynamicEmphasis}
 
-Respond with a JSON array (0-${maxSuggestions} items, usually 0). Each item:
-{"title": "punchy discovery under 10 words", "description": "MAX 2-3 SHORT sentences. What you found + why it matters. No preamble, no narration, no restating what happened. Get to the point.", "category": "blind-spot"|"risk"|"bug"|"test-gap"|"next-step", "confidence": 60-95, "whyNonObvious": "One sentence: why they wouldn't notice this. If you can't say it in one sentence, return [].", "evidence": "specific file or function name", "files": ["affected/file/paths"], "suggestedPrompt": "What you'd tell Claude to fix this. Be specific — file names, function names, the exact change."}
+USE THE PROJECT KNOWLEDGE SECTION ACTIVELY. Cross-reference current work with what you know about the project's history, goals, and architecture. The best insights connect code-level work to product-level outcomes.
 
-Rules:
-- [] is always the right answer unless you have something genuinely great
-- Your title should make them curious, not annoyed
-- description and suggestedPrompt must contain DIFFERENT information — one is the problem, the other is the fix
-- If you find yourself writing "consider" or "you should" or "remember to" — stop, delete it, return []`
+Respond with a JSON array (0-${maxSuggestions} items). Each item:
+{"title": "short, specific, intriguing — make them want to read more", "description": "2-3 sentences. What you noticed, why it matters for the product (not just the code), and a concrete action.", "category": "blind-spot"|"risk"|"bug"|"test-gap"|"next-step", "confidence": 60-95, "files": ["affected/file/paths"], "suggestedPrompt": "Specific instructions for Claude to act on this. File names, function names, the exact change or investigation."}
 
-    const user = `## Session Activity
+Think bigger than code. Think about the product, the users, the market, the developer experience. If you see something that could be a feature, a competitive advantage, or a growth opportunity — say it. But always ground it in the actual codebase.`
+
+    const user = `## What They're Doing Right Now
 ${sessionSummary}
 
-## Project Knowledge
-${memoryContext || "(no project memories yet)"}`
+## What You Know About This Project (your institutional memory)
+${memoryContext || "(no project memories yet — you're still building context)"}
+
+Look for connections between what's happening above and what you know. If there's a useful link, surface it. If not, return [].`
 
     // Weighted escalation: Sonnet for substantive sessions, Haiku for quick ones
     const score = (meta?.toolCallCount ?? 0)
@@ -718,8 +746,13 @@ ${memoryContext || "(no project memories yet)"}`
 
       if (!text || this.disposeController.signal.aborted) return
 
+      console.log(`[GAAD] Synthesis raw response (${text.length} chars): ${text.slice(0, 200)}...`)
+
       const jsonMatch = text.match(/\[[\s\S]*\]/)
-      if (!jsonMatch) return
+      if (!jsonMatch) {
+        console.log("[GAAD] Synthesis produced no JSON array")
+        return
+      }
 
       const suggestions = JSON.parse(jsonMatch[0]) as Array<{
         title: string
@@ -734,7 +767,11 @@ ${memoryContext || "(no project memories yet)"}`
 
       if (!Array.isArray(suggestions)) return
 
-      // --- Non-obvious filter: reject narration, generic filler, and linter-style noise ---
+      console.log(`[GAAD] Synthesis produced ${suggestions.length} suggestion(s)${suggestions.length > 0 ? ": " + suggestions.map(s => `"${s.title}"`).join(", ") : ""}`)
+
+      if (suggestions.length === 0) return
+
+      // --- Post-filter: reject narration, generic filler, and linter-style noise ---
       const STOP_WORDS = new Set(["the", "a", "an", "in", "to", "and", "for", "of", "is", "it", "was", "this", "that", "on", "at", "by", "with", "from"])
       const NARRATION_OPENERS = /^(you |the session |consider |remember |successfully |completed |make sure |don't forget |the changes |the code |the developer |you should |you might |it would be |it('|')s worth |note that |be sure to )/i
       const GENERIC_FILLER = /the developer might not (realize|notice)|this could be important|it's worth noting|worth mentioning|good practice|best practice|you may want to|might want to consider/i
@@ -758,31 +795,19 @@ ${memoryContext || "(no project memories yet)"}`
           return false
         }
 
-        // Reject missing/weak whyNonObvious
-        if (!s.whyNonObvious || s.whyNonObvious.trim().length < 20 || GENERIC_FILLER.test(s.whyNonObvious)) {
-          console.log(`[GAAD] Filtered weak non-obvious reasoning: "${s.title}"`)
+        // Reject generic filler in description
+        if (GENERIC_FILLER.test(s.description)) {
+          console.log(`[GAAD] Filtered generic filler: "${s.title}"`)
           return false
-        }
-
-        // Reject if title restates a user message (60%+ word overlap)
-        const titleWords = s.title.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w))
-        if (titleWords.length > 0) {
-          for (const msg of userMessages) {
-            const matchCount = titleWords.filter(w => msg.includes(w)).length
-            if (titleWords.length > 0 && matchCount / titleWords.length >= 0.6) {
-              console.log(`[GAAD] Filtered user-message echo: "${s.title}"`)
-              return false
-            }
-          }
         }
 
         return true
       })
 
+      console.log(`[GAAD] After filtering: ${filtered.length} of ${suggestions.length} survived`)
+
       for (const s of filtered.slice(0, maxSuggestions)) {
         if (!s.title || !s.description) continue
-        // Reject suggestions without evidence grounding
-        if (!s.evidence || s.evidence.trim().length === 0) continue
 
         const result: HeuristicResult = {
           category: (s.category as any) ?? "blind-spot",

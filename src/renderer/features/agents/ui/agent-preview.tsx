@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react"
+import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react"
 import { useAtom } from "jotai"
 import { Button } from "../../../components/ui/button"
 import { RotateCw, Terminal, SquareArrowOutUpRight, Pencil } from "lucide-react"
@@ -100,7 +100,7 @@ interface AgentPreviewProps {
   isMobile?: boolean
 }
 
-export function AgentPreview({
+export const AgentPreview = memo(function AgentPreview({
   chatId,
   sandboxId,
   port,
@@ -759,4 +759,4 @@ export function AgentPreview({
       </div>
     </div>
   )
-}
+})

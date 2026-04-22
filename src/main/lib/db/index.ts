@@ -1,6 +1,7 @@
 import Database from "better-sqlite3"
 import { drizzle } from "drizzle-orm/better-sqlite3"
 import { migrate } from "drizzle-orm/better-sqlite3/migrator"
+import { inArray } from "drizzle-orm"
 import { app } from "electron"
 import { join } from "path"
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "fs"
@@ -215,20 +216,26 @@ export async function cleanupOrphanedSessionDirs(): Promise<void> {
     if (!existsSync(sessionsDir)) return
 
     const database = getDatabase()
-    const allSubChatIds = new Set(
-      database.select({ id: schema.subChats.id }).from(schema.subChats).all().map((r) => r.id),
-    )
-    // Also include chatIds since Ollama sessions use chatId
-    const allChatIds = new Set(
-      database.select({ id: schema.chats.id }).from(schema.chats).all().map((r) => r.id),
-    )
 
     const entries = await readdirAsync(sessionsDir, { withFileTypes: true })
+    const dirNames = entries.filter((e) => e.isDirectory()).map((e) => e.name)
+    if (dirNames.length === 0) return
+
+    // Only query IDs that actually exist on disk, in batches of 200
+    const validIds = new Set<string>()
+    const BATCH = 200
+    for (let i = 0; i < dirNames.length; i += BATCH) {
+      const batch = dirNames.slice(i, i + BATCH)
+      const subChatHits = database.select({ id: schema.subChats.id }).from(schema.subChats).where(inArray(schema.subChats.id, batch)).all()
+      const chatHits = database.select({ id: schema.chats.id }).from(schema.chats).where(inArray(schema.chats.id, batch)).all()
+      for (const r of subChatHits) validIds.add(r.id)
+      for (const r of chatHits) validIds.add(r.id)
+    }
+
     let removed = 0
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      if (!allSubChatIds.has(entry.name) && !allChatIds.has(entry.name)) {
-        await rmAsync(join(sessionsDir, entry.name), { recursive: true, force: true })
+    for (const name of dirNames) {
+      if (!validIds.has(name)) {
+        await rmAsync(join(sessionsDir, name), { recursive: true, force: true })
         removed++
       }
     }

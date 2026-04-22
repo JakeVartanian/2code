@@ -16,3 +16,11 @@ export { checkOfflineFallback } from "./offline-handler"
 export type { OfflineCheckResult, CustomClaudeConfig } from "./offline-handler"
 export { ChunkBatcher } from "./chunk-batcher"
 export type { BatchedUIMessageChunk } from "./chunk-batcher"
+export {
+  createTrackedSpawn,
+  killSessionProcessTree,
+  killAllSessionProcessTrees,
+  startOrphanReaper,
+  stopOrphanReaper,
+  untrackSessionPid,
+} from "./process-tracker"

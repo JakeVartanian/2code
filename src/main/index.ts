@@ -41,6 +41,7 @@ import { cancelAllPendingOAuth, handleMcpOAuthCallback } from "./lib/mcp-auth"
 import { handleClaudeCodeOAuthCallback } from "./lib/trpc/routers/claude-code"
 import { bringToFront } from "./lib/window"
 import { getAllMcpConfigHandler, hasActiveClaudeSessions, abortAllClaudeSessions } from "./lib/trpc/routers/claude"
+import { startOrphanReaper, stopOrphanReaper, killAllSessionProcessTrees } from "./lib/claude/process-tracker"
 import { flushAllPendingWrites } from "./lib/db/debounced-writer"
 import { warmupShellEnvironment } from "./lib/claude/env"
 import { cleanupOrphanedProcesses, writePidFile } from "./lib/process-cleanup"
@@ -644,6 +645,10 @@ if (gotTheLock) {
     // Clean up any orphaned processes from a previous crash (non-blocking)
     cleanupOrphanedProcesses()
 
+    // Start periodic reaper for orphaned child processes (electron-vite, esbuild)
+    // spawned by Claude CLI sessions that weren't cleaned up properly
+    startOrphanReaper()
+
     // Write our PID so the next launch can detect if we crashed
     writePidFile()
 
@@ -1121,6 +1126,8 @@ if (gotTheLock) {
 
       // Abort all sessions and wait for their cleanup (flushPendingWrite) to complete
       await abortAllClaudeSessions()
+      killAllSessionProcessTrees() // Kill any remaining CLI child processes
+      stopOrphanReaper()
       cancelAllPendingOAuth()
       await cleanupGitWatchers()
 

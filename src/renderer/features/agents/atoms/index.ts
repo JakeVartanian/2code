@@ -156,28 +156,32 @@ export const isSubChatLoadingAtomFamily = atomFamily((subChatId: string) =>
   atom((get) => get(loadingSubChatsAtom).has(subChatId))
 )
 
+// Pre-computed loading state indexed by parent chat ID.
+// Single O(n) pass shared by all consumers, instead of O(n) per sidebar item.
+const loadingByChatAtom = atom((get) => {
+  const map = get(loadingSubChatsAtom)
+  const byParent = new Map<string, Set<string>>()
+  const parentSet = new Set<string>()
+  for (const [subChatId, parentId] of map) {
+    parentSet.add(parentId)
+    let set = byParent.get(parentId)
+    if (!set) { set = new Set(); byParent.set(parentId, set) }
+    set.add(subChatId)
+  }
+  return { byParent, parentSet }
+})
+
 // Per-parent-chat loading state: returns true if ANY sub-chat of this parent chat is loading
 // Used by the sidebar to show loading indicator on workspace items
 export const isChatLoadingAtomFamily = atomFamily((chatId: string) =>
-  atom((get) => {
-    const map = get(loadingSubChatsAtom)
-    for (const parentId of map.values()) {
-      if (parentId === chatId) return true
-    }
-    return false
-  })
+  atom((get) => get(loadingByChatAtom).parentSet.has(chatId))
 )
+
+const _emptySet = new Set<string>()
 
 // Set of loading subChat IDs for a given parent chat (for components that need the full set)
 export const loadingSubChatIdsForChatAtomFamily = atomFamily((chatId: string) =>
-  atom((get) => {
-    const map = get(loadingSubChatsAtom)
-    const ids = new Set<string>()
-    for (const [subChatId, parentId] of map) {
-      if (parentId === chatId) ids.add(subChatId)
-    }
-    return ids
-  })
+  atom((get) => get(loadingByChatAtom).byParent.get(chatId) ?? _emptySet)
 )
 
 // Helper to set loading state

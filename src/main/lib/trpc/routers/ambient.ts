@@ -7,7 +7,7 @@ import { z } from "zod"
 import { router, publicProcedure } from "../index"
 import { getDatabase } from "../../db"
 import { ambientSuggestions, ambientBudget, ambientFeedback, subChats, projects } from "../../db/schema"
-import { eq, and, desc, sql } from "drizzle-orm"
+import { eq, and, desc, sql, inArray } from "drizzle-orm"
 import { observable } from "@trpc/server/observable"
 import { EventEmitter } from "events"
 import { ambientAgentRegistry } from "../../ambient"
@@ -773,9 +773,21 @@ export const ambientRouter = router({
       const hasMore = runs.length > input.limit
       if (hasMore) runs = runs.slice(0, input.limit)
 
+      // Batch-fetch all zones for these runs in a single query (avoids N+1)
+      const runIds = runs.map((r: any) => r.id)
+      const allZones = runIds.length > 0
+        ? db.select().from(arz).where(inArray(arz.runId, runIds)).all()
+        : []
+      const zonesByRunId = new Map<string, any[]>()
+      for (const z of allZones) {
+        let arr = zonesByRunId.get(z.runId)
+        if (!arr) { arr = []; zonesByRunId.set(z.runId, arr) }
+        arr.push({ zoneId: z.zoneId, zoneName: z.zoneName, zoneScore: z.zoneScore })
+      }
+
       // Enrich with zone data
       const enriched = runs.map((run: any) => {
-        const zones = db.select().from(arz).where(eq(arz.runId, run.id)).all()
+        const zones = zonesByRunId.get(run.id) ?? []
 
         // Filter by zoneId if specified
         if (input.zoneId && !zones.some((z: any) => z.zoneId === input.zoneId)) return null
@@ -783,7 +795,7 @@ export const ambientRouter = router({
         return {
           ...run,
           partialErrors: run.partialErrors ? JSON.parse(run.partialErrors) : [],
-          zones: zones.map((z: any) => ({ zoneId: z.zoneId, zoneName: z.zoneName, zoneScore: z.zoneScore })),
+          zones,
         }
       }).filter(Boolean)
 
@@ -1141,14 +1153,27 @@ export const ambientRouter = router({
           confidence: number
         }
       }>((emit) => {
+        // Batch rapid-fire events into 50ms windows to reduce IPC overhead
+        let pending: any[] = []
+        let timer: ReturnType<typeof setTimeout> | null = null
+
+        const flush = () => {
+          timer = null
+          const batch = pending
+          pending = []
+          for (const item of batch) emit.next(item)
+        }
+
         const handler = (data: any) => {
-          emit.next(data)
+          pending.push(data)
+          if (!timer) timer = setTimeout(flush, 50)
         }
 
         ambientEvents.on(`project:${input.projectId}`, handler)
 
         return () => {
           ambientEvents.off(`project:${input.projectId}`, handler)
+          if (timer) { clearTimeout(timer); flush() }
         }
       })
     }),

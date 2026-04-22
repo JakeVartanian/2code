@@ -1,5 +1,5 @@
 import { cn } from "../lib/utils"
-import { memo, useState, useCallback, useEffect, useMemo, lazy, Suspense } from "react"
+import { memo, useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from "react"
 import { Streamdown, parseMarkdownIntoBlocks } from "streamdown"
 import remarkBreaks from "remark-breaks"
 import remarkGfm from "remark-gfm"
@@ -247,7 +247,9 @@ const sizeStyles: Record<
 }
 
 // Custom code component that uses our theme system
-function createCodeComponent(codeTheme: string, size: MarkdownSize, styles: typeof sizeStyles.md, isStreaming: boolean = false) {
+const falseRef = { current: false } as React.MutableRefObject<boolean>
+
+function createCodeComponent(codeTheme: string, size: MarkdownSize, styles: typeof sizeStyles.md, isStreamingRef: React.MutableRefObject<boolean> = falseRef) {
   return function CodeComponent({ className, children, node, ...props }: any) {
     const match = /language-(\w+)/.exec(className || "")
     const language = match ? match[1] : undefined
@@ -260,9 +262,8 @@ function createCodeComponent(codeTheme: string, size: MarkdownSize, styles: type
     if (isCodeBlock) {
       // Route mermaid blocks to MermaidBlock component
       if (language === "mermaid") {
-        // Pass isStreaming to MermaidBlock
-        // When streaming, MermaidBlock shows a placeholder instead of trying to render
-        return <Suspense fallback={<div className="rounded-[10px] bg-muted/50 px-4 py-3 text-sm text-muted-foreground">Loading diagram...</div>}><MermaidBlock code={codeContent.replace(/\n$/, "")} size={size} isStreaming={isStreaming} /></Suspense>
+        // Read ref at render time — always current, avoids breaking useMemo identity
+        return <Suspense fallback={<div className="rounded-[10px] bg-muted/50 px-4 py-3 text-sm text-muted-foreground">Loading diagram...</div>}><MermaidBlock code={codeContent.replace(/\n$/, "")} size={size} isStreaming={isStreamingRef.current} /></Suspense>
       }
 
       return (
@@ -289,6 +290,10 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
 }: ChatMarkdownRendererProps) {
   const codeTheme = useCodeTheme()
   const styles = sizeStyles[size]
+
+  // Ref for isStreaming — read inside createCodeComponent without breaking useMemo identity
+  const isStreamingRef = useRef(isStreaming)
+  isStreamingRef.current = isStreaming
 
   // Process content - strip emojis
   const processedContent = useMemo(() => stripEmojis(content), [content])
@@ -411,9 +416,9 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
         </td>
       ),
       pre: ({ children }: any) => <>{children}</>,
-      code: createCodeComponent(codeTheme, size, styles, isStreaming),
+      code: createCodeComponent(codeTheme, size, styles, isStreamingRef),
     }),
-    [styles, codeTheme, size, isStreaming],
+    [styles, codeTheme, size],
   )
 
   return (

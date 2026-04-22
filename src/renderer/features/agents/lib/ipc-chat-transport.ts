@@ -319,6 +319,12 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     }
 
     const processChunkInner = (chunk: UIMessageChunk, controller: ReadableStreamDefaultController<UIMessageChunk>) => {
+              // Guard: skip chunks with no type (malformed/empty batch items)
+              if (!chunk || !chunk.type) {
+                console.warn(`[SD] R:SKIP_MALFORMED sub=${subId} n=${chunkCount} chunk=${JSON.stringify(chunk)?.slice(0, 100)}`)
+                return
+              }
+
               // Handle AskUserQuestion - show question UI
               if (chunk.type === "ask-user-question") {
                 const currentMap = appStore.get(pendingUserQuestionsAtom)
@@ -598,8 +604,9 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             },
             onError: (err: Error) => {
               console.log(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
-              clearCompacting()
+              // Mark terminated BEFORE erroring — prevents late chunks from hitting a dead controller
               streamTerminated = true
+              clearCompacting()
               try {
                 controller.error(err)
               } catch {
@@ -608,6 +615,9 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             },
             onComplete: () => {
               console.log(`[SD] R:COMPLETE sub=${subId} n=${chunkCount} last=${lastChunkType}`)
+              // Mark terminated BEFORE closing — prevents late chunks from hitting
+              // a closed controller (causes "Cannot enqueue into closed stream" errors)
+              streamTerminated = true
               clearCompacting()
               // Note: Don't clear pending questions here - let active-chat.tsx handle it
               // via the stream stop detection effect. Clearing here causes race conditions

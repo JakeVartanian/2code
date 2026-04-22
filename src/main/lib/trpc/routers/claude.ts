@@ -10,10 +10,16 @@ import {
   buildClaudeEnv,
   checkOfflineFallback,
   ChunkBatcher,
+  createTrackedSpawn,
   createTransformer,
   getBundledClaudeBinaryPath,
+  killSessionProcessTree,
+  killAllSessionProcessTrees,
   logClaudeEnv,
   logRawClaudeMessage,
+  startOrphanReaper,
+  stopOrphanReaper,
+  untrackSessionPid,
   type BatchedUIMessageChunk,
   type UIMessageChunk,
 } from "../../claude"
@@ -777,6 +783,7 @@ export async function abortAllClaudeSessions(windowId?: number): Promise<void> {
       `[claude] Aborting session ${subChatId} from window ${session.windowId || "unknown"}`,
     )
     session.abortController.abort()
+    killSessionProcessTree(subChatId) // Kill CLI + all child processes
 
     // Capture the completion promise for this session
     const promise = sessionCompletionPromises.get(subChatId)
@@ -840,8 +847,10 @@ export function abortClaudeSession(subChatId: string): boolean {
 
   console.log(`[claude] Aborting session ${subChatId}`)
   session.abortController.abort()
+  killSessionProcessTree(subChatId) // Kill CLI + all child processes
   activeSessions.delete(subChatId)
   activeSessionWorktrees.delete(subChatId)
+  sessionInjectedMemories.delete(subChatId)
   return true
 }
 
@@ -3038,8 +3047,9 @@ ${prompt}
                     console.error("[claude stderr]", data)
                   }
                 },
-                // Use bundled binary
+                // Use bundled binary with process tree tracking
                 pathToClaudeCodeExecutable: claudeBinaryPath,
+                spawnClaudeCodeProcess: createTrackedSpawn(input.subChatId),
                 // Session handling: For Ollama, use resume with session ID to maintain history
                 // For Claude API, use resume with rollback/fork support
                 ...(resumeSessionId && {
@@ -3338,7 +3348,9 @@ ${prompt}
                         : sdkError
                     } else if (
                       rawErrorCode === "rate_limit_exceeded" ||
-                      sdkError.includes("rate")
+                      rawErrorCode === "rate_limit" ||
+                      sdkError.includes("rate") ||
+                      sdkError.includes("hit your limit")
                     ) {
                       errorCategory = "RATE_LIMIT_SDK"
                       errorContext = "Session limit reached"
@@ -4096,8 +4108,9 @@ ${prompt}
 
             // 7. Save final messages to DB
             // ALWAYS save accumulated parts, even on abort (so user sees partial responses after reload)
+            const stopReason = metadata.stopReason || "unknown"
             console.log(
-              `[SD] M:SAVE sub=${subId} aborted=${abortController.signal.aborted} parts=${parts.length}`,
+              `[SD] M:SAVE sub=${subId} aborted=${abortController.signal.aborted} parts=${parts.length} stop=${stopReason} errors=${errorEmitted} continues=${autoContinueCount}`,
             )
 
             // Flush any remaining text
@@ -4250,6 +4263,8 @@ ${prompt}
             activeSessionWorktrees.delete(input.subChatId)
             // Always clean up injected memories tracking (may not have been cleaned in success path)
             sessionInjectedMemories.delete(input.subChatId)
+            // Untrack PID (no-op if already cleaned up by abort or natural exit)
+            untrackSessionPid(input.subChatId)
           }
         })()
 
@@ -4264,6 +4279,7 @@ ${prompt}
           chunkBatcher.dispose() // Flush remaining batched chunks before teardown
           isObservableActive = false // Prevent emit after unsubscribe
           abortController.abort()
+          killSessionProcessTree(input.subChatId) // Kill CLI + all child processes
           activeSessions.delete(input.subChatId)
           activeSessionWorktrees.delete(input.subChatId)
           clearPendingApprovals("Session ended.", input.subChatId)

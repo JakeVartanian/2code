@@ -1,6 +1,6 @@
 import { useAtomValue } from "jotai"
 import { ListTree, MoreHorizontal } from "lucide-react"
-import { memo, useCallback, useContext, useMemo, useState } from "react"
+import { memo, useCallback, useContext, useMemo, useRef, useState } from "react"
 
 import {
   DropdownMenu,
@@ -319,7 +319,7 @@ function areMessagePropsEqual(
     // Track ALL part states - critical for detecting Edit plan file streaming!
     partStates: nextParts.map((p: any) => p.state),
     // Track tool input changes - this is critical for tool streaming!
-    lastPartInputJson: lastPart?.input ? JSON.stringify(lastPart.input) : undefined,
+    lastPartInputJson: lastPart?.input ? JSON.stringify(lastPart.input).slice(0, 2048) : undefined,
   }
 
   // Get cached state from previous render
@@ -373,6 +373,10 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
   chatId,
   sandboxSetupStatus = "ready",
 }: AssistantMessageItemProps) {
+  // Ref for isStreaming — used inside renderPart to avoid breaking useCallback identity
+  const isStreamingRef = useRef(isStreaming)
+  isStreamingRef.current = isStreaming
+
   const showMessageJson = useAtomValue(showMessageJsonAtom)
   const selectedProject = useAtomValue(selectedProjectAtom)
   const projectPath = selectedProject?.path
@@ -536,7 +540,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     if (part.type === "text") {
       if (!part.text?.trim()) return null
       const isFinalText = isFinal && idx === collapseBeforeIndex
-      const isTextStreaming = isLastMessage && isStreaming
+      const isTextStreaming = isLastMessage && isStreamingRef.current
       return (
         <MemoizedTextPart
           key={partKey}
@@ -594,7 +598,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
         if (showMiniIndicator) {
           const isWrite = part.type === "tool-Write"
           const { isPending } = getToolStatus(part, status)
-          const isOpStreaming = isPending || (part.state === "input-streaming" && isStreaming && isLastMessage)
+          const isOpStreaming = isPending || (part.state === "input-streaming" && isStreamingRef.current && isLastMessage)
 
           return (
             <div key={partKey} className="flex items-center gap-1.5 px-2 py-0.5">
@@ -649,7 +653,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
           errorText={(part as any).errorText || (part as any).error}
           state={isPending ? "call" : "result"}
           isError={isError}
-          isStreaming={isStreaming && isLastMessage}
+          isStreaming={isStreamingRef.current && isLastMessage}
           toolCallId={part.toolCallId}
         />
       )
@@ -698,7 +702,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     }
 
     return null
-  }, [nestedToolsMap, nestedToolIds, collapseBeforeIndex, visibleStepsCount, status, isLastMessage, isStreaming, subChatId, message.id, planOpsSummary, shouldCollapse, lastCollapsedPlanOp])
+  }, [nestedToolsMap, nestedToolIds, collapseBeforeIndex, visibleStepsCount, status, isLastMessage, subChatId, message.id, planOpsSummary, shouldCollapse, lastCollapsedPlanOp])
 
   if (!message) return null
 
