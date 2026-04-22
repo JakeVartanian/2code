@@ -5638,11 +5638,15 @@ Make sure to preserve all functionality from both branches when resolving confli
       const firstSubChatId = getFirstSubChatId(agentSubChats)
       const isFirst = firstSubChatId === subChatId
 
+      // Capture the current chat name so we can detect manual renames later
+      const chatNameAtTrigger = agentChat?.name ?? null
+
       autoRenameAgentChat({
         subChatId,
         parentChatId: chatId,
         userMessage,
         isFirstSubChat: isFirst,
+        originalChatName: chatNameAtTrigger,
         generateName: async (msg) => {
           return generateSubChatNameMutation.mutateAsync({ userMessage: msg, ollamaModel: selectedOllamaModel, openRouterApiKey: openRouterApiKey || undefined })
         },
@@ -5711,11 +5715,17 @@ Make sure to preserve all functionality from both branches when resolving confli
             },
           )
         },
+        getCurrentChatName: () => {
+          // Read latest name from query cache to detect manual renames
+          const cached = utils.chats.get.getData({ id: chatId })
+          return cached?.name ?? null
+        },
       })
     },
     [
       chatId,
       agentSubChats,
+      agentChat?.name,
       generateSubChatNameMutation,
       renameSubChatMutation,
       renameChatMutation,

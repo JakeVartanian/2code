@@ -6,11 +6,15 @@ interface AutoRenameParams {
   parentChatId: string
   userMessage: string
   isFirstSubChat: boolean
+  /** The name of the parent chat at the time auto-rename was triggered */
+  originalChatName: string | null
   generateName: (userMessage: string) => Promise<{ name: string }>
   renameSubChat: (input: { id: string; name: string }) => Promise<void>
   renameChat: (input: { id: string; name: string }) => Promise<void>
   updateSubChatName: (subChatId: string, name: string) => void
   updateChatName: (chatId: string, name: string) => void
+  /** Returns the current chat name from the store/cache (to detect manual renames) */
+  getCurrentChatName?: () => string | null
 }
 
 /**
@@ -23,11 +27,13 @@ export async function autoRenameAgentChat({
   parentChatId,
   userMessage,
   isFirstSubChat,
+  originalChatName,
   generateName,
   renameSubChat,
   renameChat,
   updateSubChatName,
   updateChatName,
+  getCurrentChatName,
 }: AutoRenameParams) {
   console.log("[auto-rename] Called with:", { subChatId, parentChatId, userMessage: userMessage.slice(0, 50), isFirstSubChat })
 
@@ -55,10 +61,20 @@ export async function autoRenameAgentChat({
         await renameSubChat({ id: subChatId, name })
         updateSubChatName(subChatId, name)
 
-        // Also rename parent chat if this is the first sub-chat
+        // Also rename parent chat if this is the first sub-chat,
+        // BUT only if the user hasn't manually renamed it since auto-rename was triggered
         if (isFirstSubChat) {
-          await renameChat({ id: parentChatId, name })
-          updateChatName(parentChatId, name)
+          const currentName = getCurrentChatName?.()
+          const wasManuallyRenamed = currentName != null
+            && currentName !== originalChatName
+            && currentName !== "New Chat"
+            && currentName !== ""
+          if (!wasManuallyRenamed) {
+            await renameChat({ id: parentChatId, name })
+            updateChatName(parentChatId, name)
+          } else {
+            console.log("[auto-rename] Skipping parent chat rename — user manually renamed to:", currentName)
+          }
         }
 
         return // Success!
