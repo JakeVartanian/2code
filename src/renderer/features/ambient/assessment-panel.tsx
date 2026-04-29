@@ -1,34 +1,22 @@
 /**
- * Full assessment panel — conversational format.
- * Tells the user what was noticed, why it matters, and offers one clear action.
- * No section headers, no confidence scores, no raw file paths.
+ * Assessment panel — compact centered prompt.
+ * One finding, one question, yes or no or custom. Then it's gone.
  */
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAtom, useSetAtom } from "jotai"
-import { motion } from "motion/react"
-import {
-  ArrowLeft,
-  X,
-  ChevronDown,
-  Loader2,
-} from "lucide-react"
+import { motion, AnimatePresence } from "motion/react"
+import { ChevronRight, Loader2, Send } from "lucide-react"
 import { toast } from "sonner"
 import { assessmentPanelSuggestionIdAtom, implementModeAtom } from "./atoms"
 import { useAmbientStore, type AmbientSuggestion } from "./store"
-import { formatTrigger } from "./lib/format-trigger"
 import { trpc } from "../../lib/trpc"
 import { useAgentSubChatStore, type SubChatMeta } from "../agents/stores/sub-chat-store"
+import { useMessageQueueStore } from "../agents/stores/message-queue-store"
+import { createQueueItem, generateQueueId } from "../agents/lib/queue-utils"
 import { cn } from "../../lib/utils"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../../components/ui/dropdown-menu"
-import { PlanIcon, AgentIcon } from "../../components/ui/icons"
 
-const CATEGORY_COLORS: Record<string, string> = {
+const CATEGORY_DOT: Record<string, string> = {
   bug: "bg-rose-400",
   security: "bg-amber-400",
   performance: "bg-blue-400",
@@ -39,6 +27,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   "next-step": "bg-teal-400",
   risk: "bg-orange-400",
   memory: "bg-cyan-400",
+  design: "bg-yellow-400",
 }
 
 export const AssessmentPanel = memo(function AssessmentPanel({
@@ -54,195 +43,154 @@ export const AssessmentPanel = memo(function AssessmentPanel({
     [suggestions, suggestionId],
   )
 
-  const handleBack = useCallback(() => {
-    setSuggestionId(null)
-  }, [setSuggestionId])
-
-  // If the suggestion expires/is dismissed while panel is open, close via effect (not during render)
   useEffect(() => {
     if (suggestionId && !suggestions.find(s => s.id === suggestionId)) {
       setSuggestionId(null)
     }
   }, [suggestions, suggestionId, setSuggestionId])
 
-  if (!suggestion) {
-    return null
-  }
+  if (!suggestion) return null
 
-  // Parse trigger files
-  let triggerFiles: string[] = []
-  try {
-    triggerFiles = Array.isArray(suggestion.triggerFiles)
-      ? suggestion.triggerFiles
-      : typeof suggestion.triggerFiles === "string"
-        ? JSON.parse(suggestion.triggerFiles as string)
-        : []
-  } catch { /* ignore */ }
-
-  // Split description into the consequence text and evidence (evidence is discarded from UI)
-  const { mainText } = parseDescription(suggestion.description)
-
-  // Clean up the title — strip imperative prefixes that feel like commands, not observations
-  const cleanTitle = suggestion.title
-    .replace(/^Remember:\s*/i, "")
-    .replace(/^Note:\s*/i, "")
-    .replace(/^Warning:\s*/i, "")
-
-  // Primary filename — just the basename, no path
-  const primaryFile = triggerFiles[0]?.split("/").pop() ?? null
-
-  // Trigger context phrase — human-readable, from existing formatter
-  const triggerPhrase = formatTrigger(suggestion.triggerEvent, triggerFiles)
-
-  // Only show "I'd fix it by" if suggestedPrompt is meaningfully different from description
-  const showFixSuggestion = suggestion.suggestedPrompt
-    && !isTooSimilar(suggestion.suggestedPrompt, suggestion.description)
-
-  const dotColor = CATEGORY_COLORS[suggestion.category] ?? "bg-slate-400"
+  const title = cleanTitle(suggestion.title)
+  const prompt = suggestion.suggestedPrompt ? cleanPrompt(suggestion.suggestedPrompt) : null
+  const dotColor = CATEGORY_DOT[suggestion.category] ?? "bg-slate-400"
 
   return (
-    <motion.div
-      initial={{ x: 16, opacity: 0 }}
-      animate={{ x: 0, opacity: 1, transition: { duration: 0.18, ease: "easeOut" } }}
-      exit={{ x: 16, opacity: 0, transition: { duration: 0.12, ease: "easeIn" } }}
-      className="flex flex-col h-full"
-      onKeyDown={(e) => { if (e.key === "Escape") handleBack() }}
+    <div
+      className="pt-1.5"
+      onKeyDown={(e) => { if (e.key === "Escape") setSuggestionId(null) }}
       tabIndex={-1}
     >
-      {/* ── Navigation strip ── */}
-      <div className="sticky top-0 z-10 flex items-center justify-between px-3 h-8 border-b border-border/20 bg-background shrink-0">
-        <button
-          onClick={handleBack}
-          autoFocus
-          className="flex items-center gap-1.5 text-muted-foreground/60 hover:text-foreground transition-colors text-[11px]"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Suggestions
-        </button>
-        <AssessmentDismissButton suggestion={suggestion} />
-      </div>
-
-      {/* ── Scrollable content ── */}
-      <div className="flex-1 overflow-y-auto min-h-0">
-
-        {/* Anchor: category dot + filename + trigger context */}
-        <div className="px-3 pt-4 flex items-center gap-1.5">
-          <span className={cn("h-2 w-2 rounded-full shrink-0 opacity-70", dotColor)} />
-          {primaryFile && (
-            <>
-              <span className="text-[11px] font-medium text-foreground/55 font-mono">
-                {primaryFile}
-              </span>
-              {triggerPhrase && (
-                <span className="text-muted-foreground/25">·</span>
-              )}
-            </>
-          )}
-          {triggerPhrase && (
-            <span className="text-[11px] text-muted-foreground/45">
-              {triggerPhrase}
+      <div className="w-full rounded-xl border border-border/20 bg-muted/30 backdrop-blur-sm overflow-hidden">
+        <div className="px-4 pt-4 pb-3 space-y-2.5">
+          {/* Category */}
+          <div className="flex items-center gap-1.5">
+            <span className={cn("h-1.5 w-1.5 rounded-full", dotColor)} />
+            <span className="text-[10px] text-muted-foreground/40 font-mono uppercase tracking-wider">
+              {suggestion.category}
             </span>
-          )}
-        </div>
+          </div>
 
-        {/* What I noticed + why it matters */}
-        <div className="px-3 pt-3">
-          {/* Title — what was observed */}
-          <p className="text-[13px] font-semibold text-foreground/90 leading-snug">
-            {cleanTitle}
+          {/* Title */}
+          <p className="text-[13px] font-medium text-foreground/90 leading-snug">
+            {title}
           </p>
 
-          {/* Consequence — why this matters to the user, in plain language */}
-          {mainText && (
-            <p className="text-[12px] text-foreground/60 leading-relaxed mt-2">
-              {mainText}
-            </p>
-          )}
+          {/* Solution toggle */}
+          {prompt && <ExpandablePrompt fullPrompt={prompt} />}
         </div>
 
-        {/* Fix suggestion — only shown when it adds new info beyond the description */}
-        {showFixSuggestion && (
-          <div className="mx-3 mt-4 px-3 py-2.5 rounded-lg bg-foreground/[0.03] border border-border/20">
-            <p className="text-[10px] text-muted-foreground/40 mb-1.5">
-              I'd fix it by
-            </p>
-            <p className="text-[12px] text-foreground/60 leading-relaxed">
-              {suggestion.suggestedPrompt}
-            </p>
-          </div>
-        )}
+        {/* Divider */}
+        <div className="mx-4 border-t border-border/10" />
 
-        {/* Bottom spacer so content doesn't hide under action bar */}
-        <div className="h-20" />
-      </div>
-
-      {/* ── Sticky action area ── */}
-      <div className="sticky bottom-0 z-10 border-t border-border/20 bg-background px-3 pt-3 pb-5 space-y-2.5 shrink-0">
-        {/* Primary CTA */}
-        <AssessmentImplementButton suggestion={suggestion} chatId={chatId} />
-
-        {/* Escape hatch — not a button shape, just text */}
-        <div className="flex justify-center">
-          <AssessmentSnoozeButton suggestion={suggestion} />
+        {/* Actions */}
+        <div className="px-4 py-4">
+          <PromptActions suggestion={suggestion} chatId={chatId} />
         </div>
       </div>
-    </motion.div>
+    </div>
   )
 })
 
-// ── Helpers ──
+// ── Expandable solution ──
 
-function parseDescription(description: string): { mainText: string; evidence: string | null } {
-  if (!description) return { mainText: "", evidence: null }
+function ExpandablePrompt({ fullPrompt }: { fullPrompt: string }) {
+  const [expanded, setExpanded] = useState(false)
 
-  // Strip metadata suffixes that pipeline appends (non-obvious reasoning, evidence)
-  let text = description
-    .replace(/\n\n_Why non-obvious:.*?_/gs, "")
-    .replace(/\n\n_Evidence:.*?_/gs, "")
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 py-1.5 group"
+      >
+        <ChevronRight
+          className={cn(
+            "h-3.5 w-3.5 text-foreground/30 shrink-0 transition-transform duration-150",
+            expanded && "rotate-90",
+          )}
+        />
+        <span className="text-[11px] text-foreground/45 font-mono group-hover:text-foreground/60 transition-colors">
+          view solution
+        </span>
+      </button>
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1, transition: { duration: 0.15, ease: "easeOut" } }}
+            exit={{ height: 0, opacity: 0, transition: { duration: 0.1, ease: "easeIn" } }}
+            className="overflow-hidden"
+          >
+            <p className="text-[11px] text-foreground/60 leading-relaxed font-mono pt-1.5 pb-1">
+              {fullPrompt}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+// ── Text cleanup ──
+
+function cleanTitle(title: string): string {
+  return title
+    .replace(/^(Remember|Note|Warning|Important):\s*/i, "")
     .trim()
-
-  // Cap at ~3 sentences to keep it scannable
-  const sentences = text.match(/[^.!?]+[.!?]+/g)
-  if (sentences && sentences.length > 3) {
-    text = sentences.slice(0, 3).join("").trim()
-  }
-
-  return { mainText: text, evidence: null }
 }
 
-/** Returns true if two strings share >60% of their content — prevents showing the same text twice */
-function isTooSimilar(a: string, b: string): boolean {
-  if (!a || !b) return false
-  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim()
-  const na = normalize(a)
-  const nb = normalize(b)
-  // Check if one contains most of the other
-  if (na.length < 20 || nb.length < 20) return na === nb
-  const shorter = na.length < nb.length ? na : nb
-  const longer = na.length < nb.length ? nb : na
-  return longer.includes(shorter.slice(0, Math.floor(shorter.length * 0.6)))
+function cleanPrompt(text: string): string {
+  return text
+    .replace(/^Before continuing[^.]*\.\s*/i, "")
+    .replace(/Confirm the test environment\.\s*/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim()
 }
 
-// ── Action components ──
+// ── Tab naming ──
 
-function AssessmentImplementButton({
+function shortTabName(title: string, category: string): string {
+  const prefix = category === "bug" ? "Fix: "
+    : category === "security" ? "Sec: "
+    : category === "performance" ? "Perf: "
+    : category === "test-gap" ? "Test: "
+    : category === "dead-code" ? "Clean: "
+    : category === "dependency" ? "Dep: "
+    : category === "blind-spot" ? "Check: "
+    : category === "next-step" ? "Next: "
+    : category === "risk" ? "Risk: "
+    : category === "design" ? "Design: "
+    : ""
+
+  const cleaned = title
+    .replace(/^(Remember|Note|Warning|Important):\s*/i, "")
+    .replace(/\s*[-—–]\s*.+$/, "")
+  const maxBody = 30 - prefix.length
+  if (cleaned.length <= maxBody) return prefix + cleaned
+  return prefix + cleaned.slice(0, maxBody - 1).trimEnd() + "…"
+}
+
+// ── Actions ──
+
+function PromptActions({
   suggestion,
   chatId,
 }: {
   suggestion: AmbientSuggestion
   chatId: string | null
 }) {
-  const [lastMode, setLastMode] = useAtom(implementModeAtom)
+  const [lastMode] = useAtom(implementModeAtom)
   const setSuggestionId = useSetAtom(assessmentPanelSuggestionIdAtom)
   const [isApproving, setIsApproving] = useState(false)
+  const [showCustom, setShowCustom] = useState(false)
+  const [customMessage, setCustomMessage] = useState("")
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const approveMutation = trpc.ambient.approve.useMutation({
     onSuccess: (result) => {
       if (result.success && result.subChatId) {
         const store = useAgentSubChatStore.getState()
-        const tabName = suggestion.title.length > 60
-          ? suggestion.title.slice(0, 57) + "..."
-          : suggestion.title
+        const tabName = shortTabName(suggestion.title, suggestion.category)
         const newMeta: SubChatMeta = {
           id: result.subChatId,
           name: tabName,
@@ -254,8 +202,16 @@ function AssessmentImplementButton({
           store.addToOpenSubChats(result.subChatId)
         }
         store.setActiveSubChat(result.subChatId)
-        // Brief delay so the tab opens before the panel exits — prevents flicker
-        setTimeout(() => setSuggestionId(null), 150)
+
+        // Queue the prompt so it actually gets sent to Claude
+        const promptText = suggestion.suggestedPrompt || suggestion.description || suggestion.title
+        const fullMessage = customMessage.trim()
+          ? `${promptText}\n\nAdditional context: ${customMessage.trim()}`
+          : promptText
+        const queueItem = createQueueItem(generateQueueId(), fullMessage)
+        useMessageQueueStore.getState().addToQueue(result.subChatId, queueItem)
+
+        advanceToNext(suggestion.id, setSuggestionId)
       }
       setIsApproving(false)
     },
@@ -265,117 +221,152 @@ function AssessmentImplementButton({
     },
   })
 
-  const handleImplement = useCallback((mode: "plan" | "agent") => {
+  const dismissMutation = trpc.ambient.dismiss.useMutation({
+    onSuccess: () => {
+      advanceToNext(suggestion.id, setSuggestionId)
+    },
+  })
+
+  const handleApprove = useCallback(() => {
     if (!chatId) return
-    setLastMode(mode)
     setIsApproving(true)
-    approveMutation.mutate({ suggestionId: suggestion.id, chatId, mode })
-  }, [chatId, suggestion.id, approveMutation, setLastMode])
+    approveMutation.mutate({ suggestionId: suggestion.id, chatId, mode: lastMode })
+  }, [chatId, suggestion.id, approveMutation, lastMode])
 
-  if (!chatId) return null
+  const handleNo = useCallback(() => {
+    dismissMutation.mutate({ suggestionId: suggestion.id })
+  }, [suggestion.id, dismissMutation])
 
-  const primaryLabel = lastMode === "plan" ? "Plan this out" : "Start working on this"
+  const handleCustomToggle = useCallback(() => {
+    setShowCustom(prev => {
+      if (!prev) setTimeout(() => inputRef.current?.focus(), 50)
+      return !prev
+    })
+  }, [])
+
+  const handleCustomSend = useCallback(() => {
+    if (!customMessage.trim()) return
+    handleApprove()
+  }, [customMessage, handleApprove])
 
   return (
-    <div className="flex items-stretch rounded-md overflow-hidden">
-      {/* Main action button */}
+    <div className="space-y-2.5">
+      {/* Main buttons */}
+      <div className="flex gap-2">
+        <button
+          onClick={handleApprove}
+          disabled={isApproving || !chatId}
+          className={cn(
+            "flex-1 h-8 rounded-lg text-[11px] font-medium",
+            "bg-violet-600 hover:bg-violet-500 text-white",
+            "transition-all duration-150 active:scale-[0.97]",
+            "disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100",
+            "flex items-center justify-center gap-1.5",
+          )}
+        >
+          {isApproving && !showCustom ? (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Opening...
+            </>
+          ) : (
+            "Yes"
+          )}
+        </button>
+        <button
+          onClick={handleNo}
+          disabled={dismissMutation.isPending}
+          className={cn(
+            "flex-1 h-8 rounded-lg text-[11px] font-medium font-mono",
+            "text-foreground/40 hover:text-foreground/60",
+            "bg-foreground/[0.04] hover:bg-foreground/[0.08]",
+            "border border-border/10",
+            "transition-all duration-150 active:scale-[0.97]",
+            "disabled:opacity-50 disabled:cursor-not-allowed",
+          )}
+        >
+          No
+        </button>
+      </div>
+
+      {/* Custom message toggle */}
       <button
-        onClick={() => handleImplement(lastMode)}
-        disabled={isApproving}
+        onClick={handleCustomToggle}
         className={cn(
-          "flex-1 flex items-center justify-center gap-1.5",
-          "text-[12px] font-medium text-white",
-          "h-[34px] px-3",
-          "bg-violet-600 hover:bg-violet-500",
-          "transition-all duration-150 active:scale-[0.98]",
-          "disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100",
+          "w-full h-7 rounded-lg text-[10px] font-mono",
+          "text-foreground/30 hover:text-foreground/50",
+          "hover:bg-foreground/[0.04]",
+          "transition-colors duration-150",
+          showCustom && "text-foreground/50 bg-foreground/[0.04]",
         )}
       >
-        {isApproving ? (
-          <>
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Opening...
-          </>
-        ) : (
-          primaryLabel
-        )}
+        custom message
       </button>
 
-      {/* Mode selector chevron — thin divider, same height */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            disabled={isApproving}
-            className={cn(
-              "flex items-center justify-center",
-              "w-8 h-[34px]",
-              "bg-violet-600 hover:bg-violet-500",
-              "border-l border-violet-700/50",
-              "transition-colors duration-150",
-              "disabled:opacity-60 disabled:cursor-not-allowed",
-            )}
-            aria-label="Choose mode"
+      {/* Custom message input */}
+      <AnimatePresence>
+        {showCustom && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1, transition: { duration: 0.15, ease: "easeOut" } }}
+            exit={{ height: 0, opacity: 0, transition: { duration: 0.1, ease: "easeIn" } }}
+            className="overflow-hidden"
           >
-            <ChevronDown className="h-3.5 w-3.5 text-white/80" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" side="top" className="w-36">
-          <DropdownMenuItem onClick={() => handleImplement("agent")}>
-            <AgentIcon className="h-3.5 w-3.5 mr-1.5" />
-            Agent mode
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => handleImplement("plan")}>
-            <PlanIcon className="h-3.5 w-3.5 mr-1.5" />
-            Plan mode
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+            <div className="flex gap-1.5">
+              <textarea
+                ref={inputRef}
+                value={customMessage}
+                onChange={(e) => setCustomMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault()
+                    handleCustomSend()
+                  }
+                }}
+                placeholder="Add context for the fix..."
+                rows={2}
+                className={cn(
+                  "flex-1 resize-none rounded-lg px-2.5 py-2",
+                  "text-[11px] font-mono text-foreground/70 placeholder:text-foreground/20",
+                  "bg-foreground/[0.03] border border-border/15",
+                  "focus:outline-none focus:border-violet-500/30",
+                  "transition-colors duration-150",
+                )}
+              />
+              <button
+                onClick={handleCustomSend}
+                disabled={!customMessage.trim() || isApproving || !chatId}
+                className={cn(
+                  "self-end h-8 w-8 rounded-lg shrink-0",
+                  "bg-violet-600 hover:bg-violet-500 text-white",
+                  "flex items-center justify-center",
+                  "transition-all duration-150 active:scale-[0.95]",
+                  "disabled:opacity-30 disabled:cursor-not-allowed disabled:active:scale-100",
+                )}
+              >
+                {isApproving ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Send className="h-3 w-3" />
+                )}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
 
-// "Not now" — snooze, presented as plain text (not a button shape)
-function AssessmentSnoozeButton({ suggestion }: { suggestion: AmbientSuggestion }) {
-  const setSuggestionId = useSetAtom(assessmentPanelSuggestionIdAtom)
-  const snoozeMutation = trpc.ambient.snooze.useMutation({
-    onSuccess: () => setSuggestionId(null),
-  })
+// ── Advance to next pending suggestion or close panel ──
 
-  return (
-    <button
-      onClick={() => snoozeMutation.mutate({ suggestionId: suggestion.id })}
-      disabled={snoozeMutation.isPending}
-      className={cn(
-        "text-[11px] text-muted-foreground/40 hover:text-muted-foreground/70",
-        "transition-colors duration-150",
-        "disabled:opacity-40 disabled:cursor-not-allowed",
-      )}
-    >
-      Not now
-    </button>
-  )
-}
-
-// Dismiss — icon in the nav strip, intentional action
-function AssessmentDismissButton({ suggestion }: { suggestion: AmbientSuggestion }) {
-  const setSuggestionId = useSetAtom(assessmentPanelSuggestionIdAtom)
-  const dismissMutation = trpc.ambient.dismiss.useMutation({
-    onSuccess: () => setSuggestionId(null),
-  })
-
-  return (
-    <button
-      onClick={() => dismissMutation.mutate({ suggestionId: suggestion.id })}
-      disabled={dismissMutation.isPending}
-      aria-label="Dismiss suggestion"
-      className={cn(
-        "flex items-center justify-center w-6 h-6 rounded",
-        "text-muted-foreground/40 hover:text-foreground hover:bg-foreground/8",
-        "transition-colors duration-150",
-        "disabled:opacity-40 disabled:cursor-not-allowed",
-      )}
-    >
-      <X className="h-3.5 w-3.5" />
-    </button>
-  )
+function advanceToNext(
+  currentId: string,
+  setSuggestionId: (id: string | null) => void,
+) {
+  setTimeout(() => {
+    const { suggestions } = useAmbientStore.getState()
+    const next = suggestions.find(s => s.id !== currentId && s.status === "pending")
+    setSuggestionId(next?.id ?? null)
+  }, 150)
 }

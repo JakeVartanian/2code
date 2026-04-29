@@ -177,33 +177,66 @@ function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: 
   const encryptedToken = encryptToken(oauthToken)
   const encryptedRefresh = refreshToken ? encryptToken(refreshToken) : null
   const db = getDatabase()
-  const newId = createId()
 
-  // Store in new multi-account table
-  db.insert(anthropicAccounts)
-    .values({
-      id: newId,
-      oauthToken: encryptedToken,
-      refreshToken: encryptedRefresh,
-      tokenExpiresAt: expiresAt ?? null,
-      displayName: displayName || "Anthropic Account",
-      connectedAt: new Date(),
-      desktopUserId: user?.id ?? null,
-    })
-    .run()
+  // Deduplicate: check if an existing account has the same OAuth token
+  const allAccounts = db.select().from(anthropicAccounts).all()
+  let existingId: string | null = null
+  for (const acct of allAccounts) {
+    if (acct.oauthToken) {
+      const existingToken = decryptToken(acct.oauthToken)
+      if (!existingToken) {
+        // Clean up undecryptable accounts (from different unsigned builds)
+        console.log(`[ClaudeCode] Deleting undecryptable old account ${acct.id}`)
+        db.delete(anthropicAccounts).where(eq(anthropicAccounts.id, acct.id)).run()
+        continue
+      }
+      if (existingToken === oauthToken) {
+        existingId = acct.id
+        // Update the existing account's tokens instead of creating a duplicate
+        db.update(anthropicAccounts)
+          .set({
+            oauthToken: encryptedToken,
+            refreshToken: encryptedRefresh,
+            tokenExpiresAt: expiresAt ?? null,
+            desktopUserId: user?.id ?? null,
+          })
+          .where(eq(anthropicAccounts.id, acct.id))
+          .run()
+        console.log(`[ClaudeCode] Updated existing account ${acct.id} (dedup)`)
+        break
+      }
+    }
+  }
+
+  const accountId = existingId ?? createId()
+
+  if (!existingId) {
+    // New account — insert
+    db.insert(anthropicAccounts)
+      .values({
+        id: accountId,
+        oauthToken: encryptedToken,
+        refreshToken: encryptedRefresh,
+        tokenExpiresAt: expiresAt ?? null,
+        displayName: displayName || "Anthropic Account",
+        connectedAt: new Date(),
+        desktopUserId: user?.id ?? null,
+      })
+      .run()
+  }
 
   if (setAsActive) {
     // Set as active account
     db.insert(anthropicSettings)
       .values({
         id: "singleton",
-        activeAccountId: newId,
+        activeAccountId: accountId,
         updatedAt: new Date(),
       })
       .onConflictDoUpdate({
         target: anthropicSettings.id,
         set: {
-          activeAccountId: newId,
+          activeAccountId: accountId,
           updatedAt: new Date(),
         },
       })
@@ -224,22 +257,10 @@ function storeOAuthToken(oauthToken: string, setAsActive = true, refreshToken?: 
     })
     .run()
 
-  // Clean up old accounts whose tokens can't be decrypted (from different unsigned builds)
-  const allAccounts = db.select().from(anthropicAccounts).all()
-  for (const acct of allAccounts) {
-    if (acct.id !== newId && acct.oauthToken) {
-      const token = decryptToken(acct.oauthToken)
-      if (!token) {
-        console.log(`[ClaudeCode] Deleting undecryptable old account ${acct.id}`)
-        db.delete(anthropicAccounts).where(eq(anthropicAccounts.id, acct.id)).run()
-      }
-    }
-  }
-
   // Clear cached tokens so next Claude session picks up the new token
   clearClaudeCaches()
 
-  return newId
+  return accountId
 }
 
 /**

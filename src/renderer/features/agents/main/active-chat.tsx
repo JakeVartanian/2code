@@ -43,6 +43,7 @@ import {
   useState
 } from "react"
 import { toast } from "sonner"
+import { BtwPopover } from "../ui/btw-popover"
 import { useShallow } from "zustand/react/shallow"
 import { getQueryClient } from "../../../contexts/TRPCProvider"
 import {
@@ -94,6 +95,7 @@ import {
   agentsUnseenChangesAtom,
   clearLoading,
   compactingSubChatsAtom,
+  pendingTasksAtom,
   currentPlanPathAtomFamily,
   diffSidebarOpenAtomFamily,
   diffViewDisplayModeAtom,
@@ -208,6 +210,7 @@ import { MobileChatHeader } from "../ui/mobile-chat-header"
 import { QuickCommentInput } from "../ui/quick-comment-input"
 import { GitWorkflowPanel } from "../ui/git-workflow/git-workflow-panel"
 import { SubChatSelector } from "../ui/sub-chat-selector"
+import { PendingTaskBanner } from "../ui/pending-task-banner"
 import { SubChatStatusCard } from "../ui/sub-chat-status-card"
 import { SplitViewContainer } from "../ui/split-view-container"
 import { TextSelectionPopover } from "../ui/text-selection-popover"
@@ -240,11 +243,88 @@ import { utf8ToBase64, base64ToUtf8 } from "../utils/base64"
 const OrchestratorView = lazy(() => import("../ui/orchestrator/orchestrator-view").then(m => ({ default: m.OrchestratorView })))
 // Lazy-loaded: System Map view only loads when system-map tab is active
 const SystemMapView = lazy(() => import("../ui/system-map/system-map-view").then(m => ({ default: m.SystemMapView })))
+const PencilDesignView = lazy(() => import("../ui/pencil/pencil-design-view"))
 
 // Guard against double orchestrator tab creation (React strict mode / effect re-runs)
 const orchestratorCreatingSet = new Set<string>()
 // Guard against double system-map tab creation (React strict mode / effect re-runs)
 const systemMapCreatingSet = new Set<string>()
+// Guard against double design tab creation (React strict mode / effect re-runs)
+const designCreatingSet = new Set<string>()
+
+// Parse "check back at HH:MM" / "check in N min" / "wakeup in ~10 min" from text.
+// Returns { delayMs, description } or null.
+function parseCheckBackTime(text: string): { delayMs: number; description: string } | null {
+  // "check back at HH:MM" / "check at HH:MM"
+  const atTimeMatch = text.match(
+    /(?:check\s+(?:back\s+)?(?:at|around)\s+)(\d{1,2}):(\d{2})(?:\s*(am|pm))?/i
+  )
+  if (atTimeMatch) {
+    let hours = parseInt(atTimeMatch[1]!, 10)
+    const minutes = parseInt(atTimeMatch[2]!, 10)
+    const ampm = atTimeMatch[3]?.toLowerCase()
+    if (ampm === "pm" && hours < 12) hours += 12
+    if (ampm === "am" && hours === 12) hours = 0
+    const now = new Date()
+    const target = new Date(now)
+    target.setHours(hours, minutes, 0, 0)
+    let delayMs = target.getTime() - now.getTime()
+    if (delayMs <= 0) delayMs += 24 * 60 * 60 * 1000
+    return { delayMs, description: `Check back at ${atTimeMatch[1]}:${atTimeMatch[2]}${ampm ? ` ${ampm}` : ""}` }
+  }
+  // "in ~N min" / "in N minutes" / "wakeup in ~10 min"
+  const inMinMatch = text.match(
+    /(?:in\s+~?\s*)(\d+)\s*(?:minute|min)/i
+  )
+  if (inMinMatch) {
+    const mins = parseInt(inMinMatch[1]!, 10)
+    return { delayMs: mins * 60_000, description: `Check back in ~${mins} min` }
+  }
+  return null
+}
+
+// Module-level timers for scheduled check-backs — survives component unmount/remount.
+// Keyed by subChatId. Each entry holds the timer ID and the send callback.
+const scheduledCheckBacks = new Map<string, {
+  timerId: ReturnType<typeof setTimeout>
+  fireAt: number
+}>()
+// Track which sub-chats have already used their one-time check-back.
+// Prevents infinite loops where auto-continue responses trigger new timers.
+// Only cleared when the sub-chat is deleted.
+const checkBackUsedForChat = new Set<string>()
+
+function scheduleCheckBack(
+  subChatId: string,
+  delayMs: number,
+  sendFn: () => void,
+) {
+  // Clear any existing timer for this chat
+  cancelCheckBack(subChatId)
+
+  const fireAt = Date.now() + delayMs
+  const timerId = setTimeout(() => {
+    scheduledCheckBacks.delete(subChatId)
+    // Clear the pending task atom
+    const cur = appStore.get(pendingTasksAtom)
+    if (cur.has(subChatId)) {
+      const n = new Map(cur)
+      n.delete(subChatId)
+      appStore.set(pendingTasksAtom, n)
+    }
+    sendFn()
+  }, delayMs)
+
+  scheduledCheckBacks.set(subChatId, { timerId, fireAt })
+}
+
+function cancelCheckBack(subChatId: string) {
+  const existing = scheduledCheckBacks.get(subChatId)
+  if (existing) {
+    clearTimeout(existing.timerId)
+    scheduledCheckBacks.delete(subChatId)
+  }
+}
 
 // Inner chat component - only rendered when chat object is ready
 // Memoized to prevent re-renders when parent state changes (e.g., selectedFilePath)
@@ -306,6 +386,7 @@ const ChatViewInner = memo(function ChatViewInner({
 }) {
   const hasTriggeredRenameRef = useRef(false)
   const hasTriggeredAutoGenerateRef = useRef(false)
+  const autoGenerateRetryCountRef = useRef(0)
   const isVisiblePane = isActive || isSplitPane
 
   // Keep isActive in ref for use in callbacks (avoid stale closures)
@@ -326,6 +407,42 @@ const ChatViewInner = memo(function ChatViewInner({
     return () => {
       isAutoScrollingRef.current = false
     }
+  }, [])
+
+  // /btw ephemeral side question state
+  const [btwEntries, setBtwEntries] = useState<Array<{
+    id: string
+    question: string
+    answer: string | null
+    isLoading: boolean
+    error?: string
+  }>>([])
+  const btwMutation = trpc.claude.btw.useMutation()
+
+  const handleBtw = useCallback((question: string) => {
+    const id = `btw-${Date.now()}`
+    setBtwEntries((prev) => [...prev, { id, question, answer: null, isLoading: true }])
+
+    btwMutation.mutateAsync({ subChatId, question }).then(
+      (result) => {
+        setBtwEntries((prev) =>
+          prev.map((e) => e.id === id ? { ...e, answer: result.answer, isLoading: false } : e)
+        )
+      },
+      (err) => {
+        setBtwEntries((prev) =>
+          prev.map((e) => e.id === id ? { ...e, error: err.message || "Failed", isLoading: false } : e)
+        )
+      }
+    )
+  }, [subChatId, btwMutation])
+
+  const handleBtwDismiss = useCallback((id: string) => {
+    setBtwEntries((prev) => prev.filter((e) => e.id !== id))
+  }, [])
+
+  const handleBtwDismissAll = useCallback(() => {
+    setBtwEntries([])
   }, [])
 
   const saveScrollPosition = useCallback(() => {
@@ -747,6 +864,7 @@ const ChatViewInner = memo(function ChatViewInner({
   if (prevSubChatIdRef.current !== subChatId) {
     hasTriggeredRenameRef.current = false // Reset on sub-chat change
     hasTriggeredAutoGenerateRef.current = false // Reset auto-generate on sub-chat change
+    autoGenerateRetryCountRef.current = 0
     prevSubChatIdRef.current = subChatId
   }
   // chat ref sync removed — Chat instance now lives in ChatDataSync wrapper
@@ -810,15 +928,55 @@ const ChatViewInner = memo(function ChatViewInner({
   const chatActions = useChatActions()
   const { messagesRef } = chatActions
 
-  // Refs for useChat functions to keep callbacks stable across renders
-  const sendMessageRef = useRef(chatActions.sendMessage)
-  sendMessageRef.current = chatActions.sendMessage
+  // Refs for useChat functions to keep callbacks stable across renders.
+  // Wrapped with try-catch to guard against @ai-sdk/react Chat.makeRequest bug:
+  // the SDK's finally block reads `this.activeResponse.state.message` without
+  // null-checking activeResponse, crashing if the subprocess dies mid-request.
+  const safeSendMessage = useCallback(async (...args: Parameters<typeof chatActions.sendMessage>) => {
+    try {
+      return await chatActions.sendMessage(...args)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      if (msg.includes("Cannot read properties of undefined") && msg.includes("state")) {
+        console.warn("[active-chat] Suppressed SDK activeResponse.state crash in sendMessage")
+        return
+      }
+      // "Duplicate id" means the AI SDK's internal message state has stale IDs from a
+      // previous session that was interrupted. Delete and recreate the Chat instance so
+      // the next send starts with a clean slate (session resume via sessionId still works).
+      if (msg.includes("Duplicate id")) {
+        console.warn("[active-chat] Duplicate id detected — recreating Chat instance to clear stale state")
+        agentChatStore.delete(subChatId)
+        return
+      }
+      throw error
+    }
+  }, [chatActions.sendMessage, subChatId]) as typeof chatActions.sendMessage
+  const sendMessageRef = useRef(safeSendMessage)
+  sendMessageRef.current = safeSendMessage
   const stopRef = useRef(chatActions.stop)
   stopRef.current = chatActions.stop
   const setMessagesRef = useRef(chatActions.setMessages)
   setMessagesRef.current = chatActions.setMessages
-  const regenerateRef = useRef(chatActions.regenerate)
-  regenerateRef.current = chatActions.regenerate
+  const safeRegenerate = useCallback(async (...args: Parameters<typeof chatActions.regenerate>) => {
+    try {
+      return await chatActions.regenerate(...args)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      if (msg.includes("Cannot read properties of undefined") && msg.includes("state")) {
+        console.warn("[active-chat] Suppressed SDK activeResponse.state crash in regenerate")
+        return
+      }
+      if (msg.includes("Duplicate id")) {
+        console.warn("[active-chat] Duplicate id detected in regenerate — recreating Chat instance")
+        agentChatStore.delete(subChatId)
+        return
+      }
+      throw error
+    }
+  }, [chatActions.regenerate, subChatId]) as typeof chatActions.regenerate
+  const regenerateRef = useRef(safeRegenerate)
+  regenerateRef.current = safeRegenerate
 
   // Reactive streaming status from Zustand store (only re-renders on status CHANGE,
   // not on every streaming chunk). ChatDataSync syncs useChat status → store.
@@ -838,6 +996,10 @@ const ChatViewInner = memo(function ChatViewInner({
   // Track compacting status from SDK
   const compactingSubChats = useAtomValue(compactingSubChatsAtom)
   const isCompacting = compactingSubChats.has(subChatId)
+
+  // Track pending CLI background tasks (e.g., "check CI in 10 min")
+  const pendingTasks = useAtomValue(pendingTasksAtom)
+  const hasPendingTask = pendingTasks.has(subChatId)
 
   // Desktop/fullscreen state for window drag region
   const isDesktop = useAtomValue(isDesktopAtom)
@@ -1194,6 +1356,66 @@ const ChatViewInner = memo(function ChatViewInner({
       parts: [{ type: "text", text: "Continue." }],
     })
   }, [isCompacting, isStreaming, messageIds.length])
+
+  // Fallback check-back detection: when the CLI doesn't use the task system but the
+  // model's response text promises to check back (e.g., "Will check back at 13:39"),
+  // parse the time and create a pending task so the countdown banner appears.
+  // IMPORTANT: Only fires ONCE per sub-chat. After the auto-continue fires (or is
+  // dismissed), no more check-backs are scheduled until the user sends a genuinely
+  // new message that isn't "Continue" / auto-continue text.
+  const prevIsStreamingForCheckBackRef = useRef(isStreaming)
+  useEffect(() => {
+    const wasStreaming = prevIsStreamingForCheckBackRef.current
+    prevIsStreamingForCheckBackRef.current = isStreaming
+
+    if (!wasStreaming || isStreaming) return
+    if (isArchived || messageIds.length === 0) return
+    // Only allow one check-back per sub-chat ever (until cleared by checkBackUsedForChat)
+    if (checkBackUsedForChat.has(subChatId)) return
+    // Skip if already scheduled (CLI task system or previous fallback)
+    if (appStore.get(pendingTasksAtom).has(subChatId)) return
+    if (scheduledCheckBacks.has(subChatId)) return
+
+    const textParts = lastAssistantMessage?.parts?.filter((p: any) => p.type === "text") || []
+    const fullText = textParts.map((p: any) => p.text || "").join(" ")
+    if (!fullText) return
+
+    const parsed = parseCheckBackTime(fullText)
+    if (!parsed || parsed.delayMs < 30_000) return // Ignore anything under 30s
+
+    // Mark this sub-chat as having used its one check-back
+    checkBackUsedForChat.add(subChatId)
+
+    // Cap at 60 minutes
+    const cappedDelay = Math.min(parsed.delayMs, 60 * 60 * 1000)
+
+    // Anchor to when the response started, not when streaming ended
+    const msgMeta = lastAssistantMessage?.metadata
+    const anchorTime = msgMeta?.startedAt ?? Date.now()
+    const elapsedSinceAnchor = Date.now() - anchorTime
+    const remainingDelay = Math.max(cappedDelay - elapsedSinceAnchor, 5_000)
+
+    // Set the pending task atom so the banner appears
+    const current = appStore.get(pendingTasksAtom)
+    const next = new Map(current)
+    next.set(subChatId, {
+      taskId: `fallback-${Date.now()}`,
+      description: parsed.description,
+      scheduledAt: anchorTime,
+      estimatedMs: cappedDelay,
+    })
+    appStore.set(pendingTasksAtom, next)
+
+    // Schedule auto-continue at module level (survives unmount/re-render)
+    scheduleCheckBack(subChatId, remainingDelay, () => {
+      if (isStreamingRef.current) return
+      sendMessageRef.current({
+        role: "user",
+        parts: [{ type: "text", text: "Continue — check back as scheduled." }],
+      })
+    })
+    // No cleanup — timer is module-level and must survive effect re-runs
+  }, [isStreaming, isArchived, messageIds.length, lastAssistantMessage, subChatId])
 
   // Sync pending questions with messages state
   // This handles: 1) restoring on chat switch, 2) clearing when question is answered/timed out
@@ -2038,21 +2260,58 @@ const ChatViewInner = memo(function ChatViewInner({
           }
         }
       }
-      // Validate Chat object is ready before calling regenerate.
-      // @ai-sdk/react's Chat.makeRequest accesses internal store state that may be
-      // undefined if the Chat hasn't fully initialized. The SDK can throw synchronously
-      // (accessing undefined .state) so we need both try-catch AND .catch().
-      const chat = agentChatStore.get(subChatId)
-      if (chat) {
-        try {
-          regenerateRef.current().catch((error: unknown) => {
-            console.error("[active-chat] Auto-regenerate failed:", error)
-            hasTriggeredAutoGenerateRef.current = false
-          })
-        } catch (error) {
-          console.error("[active-chat] Auto-regenerate threw sync error:", error)
+      // Guard: cap retries to prevent infinite loops.
+      // When a SIGTERM kills the subprocess, onError sets status back to "ready",
+      // regenerate fails (transport dead), the catch resets the flag, and the effect
+      // re-fires — creating an infinite crash loop. Cap at 2 retries.
+      if (autoGenerateRetryCountRef.current >= 2) {
+        console.warn("[active-chat] Auto-regenerate exhausted retries, giving up")
+        return
+      }
+      autoGenerateRetryCountRef.current++
+
+      // Validate Chat object and its internal state before calling regenerate.
+      // @ai-sdk/react's Chat.makeRequest accesses this.activeResponse.state in its
+      // finally block WITHOUT optional chaining. If makeRequest throws before
+      // activeResponse is assigned (e.g., dead transport from SIGTERM), the finally
+      // block crashes with "Cannot read properties of undefined (reading 'state')".
+      const chat = agentChatStore.get(subChatId) as any
+      if (chat && chat.state?.messages) {
+        // Double-check the Chat's own status — the Zustand store status may lag behind
+        // the SDK's internal status. If the Chat is already submitted/streaming
+        // (e.g., from a resume or concurrent send), calling regenerate would abort it.
+        if (chat.status && chat.status !== "ready" && chat.status !== "error") {
+          console.log(`[active-chat] Chat already active (status=${chat.status}), skipping auto-regenerate`)
           hasTriggeredAutoGenerateRef.current = false
+          return
         }
+        // Defer to next tick so the Chat's useChat hook has fully synced internal state
+        setTimeout(() => {
+          // Re-check Chat status inside timeout — it may have changed since the effect ran
+          const freshChat = agentChatStore.get(subChatId) as any
+          if (freshChat?.status && freshChat.status !== "ready" && freshChat.status !== "error") {
+            console.log(`[active-chat] Chat became active during defer (status=${freshChat.status}), skipping`)
+            hasTriggeredAutoGenerateRef.current = false
+            return
+          }
+          try {
+            regenerateRef.current().catch((error: unknown) => {
+              console.error("[active-chat] Auto-regenerate failed:", error)
+              // Only retry if it's a recoverable error (Chat not ready yet).
+              // Transport/state errors (SIGTERM, closed stream) are not recoverable.
+              const msg = error instanceof Error ? error.message : String(error)
+              if (msg.includes("state") || msg.includes("SIGTERM") || msg.includes("closed")) {
+                // Non-recoverable: don't reset flag, let retry count cap it
+                console.warn("[active-chat] Non-recoverable regenerate error, not retrying")
+              } else {
+                hasTriggeredAutoGenerateRef.current = false
+              }
+            })
+          } catch (error) {
+            // Sync throw from SDK (the activeResponse.state bug) — non-recoverable
+            console.error("[active-chat] Auto-regenerate threw sync error:", error)
+          }
+        }, 0)
       } else {
         // Chat not ready yet, will retry on next effect
         hasTriggeredAutoGenerateRef.current = false
@@ -2103,38 +2362,43 @@ const ChatViewInner = memo(function ChatViewInner({
     // ResizeObserver on content wrapper to detect any height change
     // (markdown rendering, syntax highlighting, image loads, content-visibility reflows, etc.)
     // This is more reliable than MutationObserver which only catches childList changes.
+    //
+    // PERF: Uses scrollHeight (cheap) instead of getBoundingClientRect (forces layout recalc).
+    // Coalesces rapid resize events via a single rAF to avoid layout thrashing during
+    // streaming where markdown chunks arrive at ~20Hz.
     const contentWrapper = contentWrapperRef.current
-    let lastContentHeight = contentWrapper?.getBoundingClientRect().height ?? 0
-    // Track the previous scrollHeight so we can adjust restored positions proportionally
     let prevScrollHeight = container.scrollHeight
+    let rafPending = false
 
     const resizeObserver = new ResizeObserver(() => {
       // Skip if not active (keep-alive: don't scroll hidden tabs)
       if (!isVisiblePaneRef.current) return
+      // Coalesce rapid resize events into a single rAF
+      if (rafPending) return
+      rafPending = true
 
-      const newContentHeight = contentWrapper?.getBoundingClientRect().height ?? 0
-      if (newContentHeight === lastContentHeight) return
-      lastContentHeight = newContentHeight
+      requestAnimationFrame(() => {
+        rafPending = false
+        const newScrollHeight = container.scrollHeight
+        if (newScrollHeight === prevScrollHeight) return
 
-      if (shouldAutoScrollRef.current) {
-        // Auto-scroll to bottom as content grows
-        requestAnimationFrame(() => {
+        if (shouldAutoScrollRef.current) {
+          // Auto-scroll to bottom as content grows
           isAutoScrollingRef.current = true
-          container.scrollTop = container.scrollHeight
+          container.scrollTop = newScrollHeight
           requestAnimationFrame(() => {
             isAutoScrollingRef.current = false
           })
-        })
-      } else {
-        // User is scrolled up — maintain their relative position as content height changes
-        // (e.g., syntax highlighting expanding code blocks above the viewport)
-        const newScrollHeight = container.scrollHeight
-        if (newScrollHeight !== prevScrollHeight && prevScrollHeight > 0) {
-          const delta = newScrollHeight - prevScrollHeight
-          container.scrollTop = container.scrollTop + delta
+        } else {
+          // User is scrolled up — maintain their relative position as content height changes
+          // (e.g., syntax highlighting expanding code blocks above the viewport)
+          if (prevScrollHeight > 0) {
+            const delta = newScrollHeight - prevScrollHeight
+            container.scrollTop = container.scrollTop + delta
+          }
         }
-      }
-      prevScrollHeight = container.scrollHeight
+        prevScrollHeight = newScrollHeight
+      })
     })
 
     if (contentWrapper) {
@@ -2235,6 +2499,17 @@ const ChatViewInner = memo(function ChatViewInner({
 
     // Get value from uncontrolled editor
     const inputValue = editorRef.current?.getValue() || ""
+
+    // /btw interception — handle side questions without interrupting the stream
+    if (inputValue.trim().startsWith("/btw ")) {
+      const question = inputValue.trim().slice(5).trim()
+      if (question) {
+        editorRef.current?.setValue("")
+        handleBtw(question)
+        return
+      }
+    }
+
     const hasText = inputValue.trim().length > 0
     const currentImages = imagesRef.current
     const currentFiles = filesRef.current
@@ -2900,7 +3175,7 @@ const ChatViewInner = memo(function ChatViewInner({
   const shouldShowStatusCard =
     isStreaming || isCompacting || changedFilesForSubChat.length > 0
   const shouldShowStackedCards =
-    !displayQuestions && (queue.length > 0 || shouldShowStatusCard)
+    !displayQuestions && (queue.length > 0 || shouldShowStatusCard || hasPendingTask)
   const handleInputProviderChange = useCallback(
     (nextProvider: "claude-code") => {
       onProviderChange?.(subChatId, nextProvider)
@@ -3108,7 +3383,7 @@ const ChatViewInner = memo(function ChatViewInner({
                   hasStatusCardBelow={shouldShowStatusCard}
                 />
               )}
-              {/* Status card - bottom card */}
+              {/* Status card */}
               {shouldShowStatusCard && (
                 <SubChatStatusCard
                   chatId={parentChatId}
@@ -3120,6 +3395,10 @@ const ChatViewInner = memo(function ChatViewInner({
                   onStop={handleStop}
                   hasQueueCardAbove={queue.length > 0}
                 />
+              )}
+              {/* Pending task countdown — shows when CLI has a background task running */}
+              {hasPendingTask && !isStreaming && (
+                <PendingTaskBanner subChatId={subChatId} />
               )}
             </div>
           </div>
@@ -3170,6 +3449,13 @@ const ChatViewInner = memo(function ChatViewInner({
         onProviderChange={handleInputProviderChange}
         onContinueWithProvider={handleContinueWithProvider}
         isActive={isActive}
+      />
+
+      {/* /btw ephemeral side question popover */}
+      <BtwPopover
+        entries={btwEntries}
+        onDismiss={handleBtwDismiss}
+        onDismissAll={handleBtwDismissAll}
       />
 
         {/* Scroll to bottom button - isolated component to avoid re-renders during streaming */}
@@ -3900,9 +4186,10 @@ export function ChatView({
 
   // Prune chat instances from previous workspace when switching parent chat.
   // Prevents cross-workspace memory accumulation.
-  // Delayed by 100ms to let React flush layout effects (ChatDataSync status sync).
-  // Without the delay, isStreaming() may return false for chats that are still active
-  // because their ChatDataSync hasn't synced streaming status yet.
+  // Delayed by 500ms to let StreamingKeepAlive detect orphaned streaming sub-chats
+  // and render headless ChatDataSync instances for them. The previous 100ms was too
+  // short — StreamingKeepAlive hadn't reacted yet, causing active sessions to be
+  // evicted and their backend processes killed.
   const previousParentChatIdRef = useRef<string | null>(chatId)
   useEffect(() => {
     const previousParentChatId = previousParentChatIdRef.current
@@ -3916,7 +4203,7 @@ export function ChatView({
           agentChatStore.delete(subChatId)
           clearRuntimeCachesForSubChat(subChatId)
         }
-      }, 100)
+      }, 500)
       return () => clearTimeout(timeout)
     }
   }, [chatId])
@@ -3942,7 +4229,7 @@ export function ChatView({
   }, [activeSubChatId, chatId, chatSourceMode, tabsToRender])
 
   // Periodic LRU eviction of stale Chat instances across all workspaces.
-  // Runs every 60 seconds and removes instances idle for >5 minutes that are
+  // Runs every 30 seconds and removes instances idle for >2 minutes that are
   // not in the current tab set and not streaming. This prevents unbounded
   // memory growth when users switch between many workspaces over time.
   useEffect(() => {
@@ -3958,7 +4245,7 @@ export function ChatView({
       for (const id of evicted) {
         clearRuntimeCachesForSubChat(id)
       }
-    }, 60_000)
+    }, 30_000)
 
     return () => clearInterval(interval)
   }, [tabsToRender, activeSubChatId, splitPaneIds])
@@ -4713,14 +5000,18 @@ Make sure to preserve all functionality from both branches when resolving confli
     const allSubChats: SubChatMeta[] = [...dbSubChats]
 
     // For each open tab ID that's NOT in DB, add placeholder (like Canvas)
-    // This prevents losing tabs during race conditions
+    // This prevents losing tabs during race conditions.
+    // Preserve existing name from store if available (e.g., GAAD-created tabs
+    // may have a name set before the DB query refreshes).
     const currentOpenIds = freshState.openSubChatIds
     currentOpenIds.forEach((id) => {
       if (!dbSubChatIds.has(id)) {
+        const existing = freshState.allSubChats.find((sc) => sc.id === id)
         allSubChats.push({
           id,
-          name: "New Chat",
-          created_at: new Date().toISOString(),
+          name: existing?.name || "New Chat",
+          created_at: existing?.created_at || new Date().toISOString(),
+          mode: existing?.mode,
         })
       }
     })
@@ -4808,6 +5099,35 @@ Make sure to preserve all functionality from both branches when resolving confli
       }).catch(() => {
         // Silently fail — system-map tab creation is non-critical
         systemMapCreatingSet.delete(chatId!)
+      })
+    }
+
+    // Auto-create design (Pencil) tab if none exists for this workspace
+    const hasDesign = allSubChats.some(sc => sc.mode === "design")
+    if (!hasDesign && chatId && !designCreatingSet.has(chatId)) {
+      designCreatingSet.add(chatId)
+      trpcClient.chats.createSubChat.mutate({
+        chatId,
+        name: "Design",
+        mode: "design",
+      }).then((newSc) => {
+        designCreatingSet.delete(chatId!)
+        const store = useAgentSubChatStore.getState()
+        const designMeta: SubChatMeta = {
+          id: newSc.id,
+          name: "Design",
+          mode: "design",
+          created_at: new Date().toISOString(),
+        }
+        store.addToAllSubChats(designMeta)
+        const currentOpen = store.openSubChatIds
+        if (!currentOpen.includes(newSc.id)) {
+          store.setOpenSubChats([newSc.id, ...currentOpen])
+        }
+        appStore.set(subChatModeAtomFamily(newSc.id), "design" as AgentMode)
+      }).catch(() => {
+        // Silently fail — design tab creation is non-critical
+        designCreatingSet.delete(chatId!)
       })
     }
   }, [agentChat, chatId])
@@ -5039,7 +5359,10 @@ Make sure to preserve all functionality from both branches when resolving confli
           // Sync status to global store on error (allows queue to continue)
           useStreamingStatusStore.getState().setStatus(subChatId, "ready")
           syncFinishedMessagesToChatCache(subChatId, newChat)
-          pruneIfDetachedAndIdle(subChatId, chatId)
+          // Delay prune so the backend has time to retry (e.g., overloaded/auth refresh).
+          // Immediate prune would delete the Chat instance, triggering tRPC unsubscribe,
+          // which aborts the backend session before it can recover.
+          setTimeout(() => pruneIfDetachedAndIdle(subChatId, chatId), 2000)
         },
         // Clear loading when streaming completes (works even if component unmounted)
         onFinish: () => {
@@ -6141,6 +6464,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                 const subChatMeta = allSubChats.find(sc => sc.id === subChatId) ?? agentSubChats.find(sc => sc.id === subChatId)
                 const isSystemMapMode = subChatMeta?.mode === "system-map"
                 const isOrchestratorMode = subChatMeta?.mode === "orchestrator"
+                const isPencilMode = subChatMeta?.mode === "design"
 
                 return (
                   <div
@@ -6154,7 +6478,14 @@ Make sure to preserve all functionality from both branches when resolving confli
                       contain: "layout style paint",
                     }}
                   >
-                    {isSystemMapMode ? (
+                    {isPencilMode ? (
+                      <Suspense fallback={<div className="flex items-center justify-center h-full"><IconSpinner className="h-6 w-6 animate-spin" /></div>}>
+                        <PencilDesignView
+                          chatId={chatId}
+                          subChatId={subChatId}
+                        />
+                      </Suspense>
+                    ) : isSystemMapMode ? (
                       <Suspense fallback={<div className="flex items-center justify-center h-full"><IconSpinner className="h-6 w-6 animate-spin" /></div>}>
                         <SystemMapView
                           chatId={chatId}

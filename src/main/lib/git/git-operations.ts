@@ -1,7 +1,9 @@
 import { shell } from "electron";
 import simpleGit from "simple-git";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { publicProcedure, router } from "../trpc";
+import { getDatabase, chats } from "../db";
 import { isUpstreamMissingError } from "./git-utils";
 import { assertRegisteredWorktree } from "./security";
 import { fetchGitHubPRStatus } from "./github";
@@ -85,6 +87,14 @@ export const createGitOperationsRouter = () => {
 						git.checkout(input.branch)
 					);
 					invalidateGitStateCaches(input.worktreePath);
+
+					// Sync branch to DB (same as switchBranch in branches.ts)
+					const db = getDatabase();
+					db.update(chats)
+						.set({ branch: input.branch })
+						.where(eq(chats.worktreePath, input.worktreePath))
+						.run();
+
 					return { success: true };
 				});
 			}),
@@ -678,18 +688,19 @@ export const createGitOperationsRouter = () => {
 				let unpushedCommits: Array<{ sha: string; shortSha: string; message: string }> = [];
 				let aheadCount = 0;
 				try {
-					const aheadLog = await git.log({ from: "origin/HEAD", to: "HEAD" }).catch(async () => {
-						// Fallback: try to get commits since upstream
-						const upstream = await git.raw(["rev-parse", "--abbrev-ref", "@{upstream}"]).catch(() => null);
-						if (!upstream) return { all: [] };
-						return git.log({ from: upstream.trim(), to: "HEAD" });
-					});
-					unpushedCommits = (aheadLog.all || []).map((c) => ({
-						sha: c.hash,
-						shortSha: c.hash.slice(0, 7),
-						message: c.message,
-					}));
-					aheadCount = unpushedCommits.length;
+					// Use @{upstream} (the actual tracking branch, e.g. origin/develop) first.
+					// Only fall back to origin/HEAD if no upstream is configured.
+					const upstream = await git.raw(["rev-parse", "--abbrev-ref", "@{upstream}"]).catch(() => null);
+					const compareRef = upstream?.trim() || null;
+					if (compareRef) {
+						const aheadLog = await git.log({ from: compareRef, to: "HEAD" });
+						unpushedCommits = (aheadLog.all || []).map((c) => ({
+							sha: c.hash,
+							shortSha: c.hash.slice(0, 7),
+							message: c.message,
+						}));
+						aheadCount = unpushedCommits.length;
+					}
 				} catch {
 					// Not fatal — branch may not have a remote yet
 				}
@@ -719,6 +730,7 @@ export const createGitOperationsRouter = () => {
 				}
 
 				return {
+					currentBranch: status.current || null,
 					uncommittedFiles: uniqueUncommitted,
 					hasUncommittedChanges: uniqueUncommitted.length > 0,
 					unpushedCommits,

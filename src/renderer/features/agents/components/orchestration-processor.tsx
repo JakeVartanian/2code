@@ -23,7 +23,23 @@ import { agentChatStore } from "../stores/agent-chat-store"
 import { IPCChatTransport } from "../lib/ipc-chat-transport"
 import { trpcClient } from "../../../lib/trpc"
 import { generateQueueId } from "../lib/queue-utils"
+import { selectedAgentChatIdAtom } from "../atoms"
+import { appStore } from "../../../lib/jotai-store"
 import type { OrchestrationRun, OrchestrationTask } from "../stores/orchestration-store"
+
+/** Build a Sonner action that navigates to the stuck worker's sub-chat tab */
+function goToWorkerTab(chatId: string, subChatId: string | null | undefined) {
+  if (!subChatId) return undefined
+  return {
+    label: "Go to tab",
+    onClick: () => {
+      appStore.set(selectedAgentChatIdAtom, chatId)
+      const store = useAgentSubChatStore.getState()
+      store.addToOpenSubChats(subChatId)
+      store.setActiveSubChat(subChatId)
+    },
+  }
+}
 
 // Default max concurrent workers (overridden by .2code/orchestrator.json)
 const DEFAULT_MAX_WORKERS = 4
@@ -621,6 +637,7 @@ export function OrchestrationProcessor() {
             }
             toast.error(`Worker "${stuck.taskName}" is stuck and needs attention`, {
               duration: 10000,
+              action: goToWorkerTab(chatId, stuck.subChatId),
             })
             continue
           }
@@ -714,6 +731,7 @@ export function OrchestrationProcessor() {
                 }
                 toast.error(`Worker "${stuck.taskName}" needs manual intervention: ${diagnosis.diagnosis}`, {
                   duration: 15000,
+                  action: goToWorkerTab(chatId, stuck.subChatId),
                 })
                 break
 
@@ -733,6 +751,7 @@ export function OrchestrationProcessor() {
                 }
                 toast.warning(`Worker "${stuck.taskName}" needs re-scoping: ${diagnosis.diagnosis}`, {
                   duration: 10000,
+                  action: goToWorkerTab(chatId, stuck.subChatId),
                 })
                 break
 
@@ -744,6 +763,7 @@ export function OrchestrationProcessor() {
                 }
                 toast.warning(`Worker "${stuck.taskName}" needs attention (unrecognized intervention: ${diagnosis.intervention})`, {
                   duration: 10000,
+                  action: goToWorkerTab(chatId, stuck.subChatId),
                 })
                 break
             }

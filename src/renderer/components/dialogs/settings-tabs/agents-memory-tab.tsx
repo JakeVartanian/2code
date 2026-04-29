@@ -13,6 +13,8 @@ import {
   CheckCircle2,
   Clock,
   Eye,
+  FileText,
+  Pencil,
   Zap,
   Brain,
   RotateCcw,
@@ -401,6 +403,144 @@ function AddMemoryForm({
   )
 }
 
+// ─── Project Overview Card ──────────────────────────────────────────────────
+
+function ProjectOverviewCard({ projectId, projectPath }: { projectId: string; projectPath: string }) {
+  const [editing, setEditing] = useState(false)
+  const [editContent, setEditContent] = useState("")
+
+  const { data: identity, refetch } = trpc.ambient.getProjectIdentity.useQuery(
+    { projectId },
+    { enabled: !!projectId },
+  )
+
+  const updateMutation = trpc.ambient.updateProjectIdentity.useMutation({
+    onSuccess: () => {
+      toast.success("Project overview saved")
+      setEditing(false)
+      refetch()
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
+  const refreshMutation = trpc.ambient.refreshProjectIdentity.useMutation({
+    onSuccess: (result) => {
+      if (result.success) {
+        toast.success("Project overview refreshed")
+        refetch()
+      } else {
+        toast.error(result.error ?? "Failed to refresh")
+      }
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
+  const startEdit = () => {
+    setEditContent(identity?.content ?? "")
+    setEditing(true)
+  }
+
+  if (!identity && !refreshMutation.isPending) {
+    return (
+      <div className="rounded-lg border border-dashed border-border/50 p-3">
+        <div className="flex items-center gap-1.5 text-xs font-medium mb-2">
+          <FileText className="h-3.5 w-3.5 text-teal-500" />
+          <span>Project Overview</span>
+        </div>
+        <p className="text-[11px] text-muted-foreground mb-2">
+          No project overview yet. Generate one to give GAAD a holistic understanding of this project.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 px-2 text-[10px]"
+          disabled={refreshMutation.isPending}
+          onClick={() => refreshMutation.mutate({ projectId, projectPath })}
+        >
+          <Zap className={cn("h-3 w-3 mr-1", refreshMutation.isPending && "animate-spin")} />
+          Generate Overview
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-lg border border-border/50 p-3">
+      <div className="flex items-center gap-1.5 text-xs font-medium mb-2">
+        <FileText className="h-3.5 w-3.5 text-teal-500" />
+        <span>Project Overview</span>
+        {identity?.source === "identity-manual" && (
+          <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400">edited</span>
+        )}
+        <span className="ml-auto flex items-center gap-1">
+          {!editing && (
+            <>
+              <button
+                onClick={startEdit}
+                className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                title="Edit"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() => refreshMutation.mutate({ projectId, projectPath })}
+                disabled={refreshMutation.isPending}
+                className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                title="Regenerate from project files"
+              >
+                <RefreshCw className={cn("h-3 w-3", refreshMutation.isPending && "animate-spin")} />
+              </button>
+            </>
+          )}
+        </span>
+      </div>
+
+      {editing ? (
+        <div className="space-y-2">
+          <textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            className="w-full h-48 rounded-md border border-border bg-background p-2 text-xs font-mono resize-y"
+          />
+          <div className="flex gap-1.5">
+            <Button
+              variant="default"
+              size="sm"
+              className="h-6 px-2 text-[10px]"
+              disabled={updateMutation.isPending}
+              onClick={() => updateMutation.mutate({ projectId, content: editContent })}
+            >
+              Save
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => setEditing(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="text-[11px] text-muted-foreground leading-relaxed max-h-40 overflow-y-auto whitespace-pre-wrap">
+          {refreshMutation.isPending ? (
+            <span className="text-muted-foreground italic">Generating overview...</span>
+          ) : (
+            identity?.content ?? "No overview available"
+          )}
+        </div>
+      )}
+
+      {identity?.updatedAt && !editing && (
+        <div className="mt-1.5 text-[9px] text-muted-foreground/60">
+          Updated {new Date(identity.updatedAt).toLocaleDateString()}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main tab component ────────────────────────────────────────────────────
 
 export function AgentsMemoryTab() {
@@ -670,6 +810,11 @@ export function AgentsMemoryTab() {
               )} />
             </button>
           </div>
+        </div>
+
+        {/* Project Overview */}
+        <div className="px-3 py-2 border-b border-border/50">
+          <ProjectOverviewCard projectId={selectedProject!.id} projectPath={selectedProject!.path} />
         </div>
 
         {/* Stats bar */}

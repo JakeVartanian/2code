@@ -13,7 +13,7 @@ import type { GitEvent, FileBatch, FileChangeEvent } from "./types"
 
 const execAsync = promisify(exec)
 
-const DIFF_POLL_INTERVAL = 30_000 // Check for changed files every 30s
+const DIFF_POLL_INTERVAL = 20_000 // Check for changed files every 20s
 
 export class AmbientGitMonitor extends EventEmitter {
   private projectPath: string
@@ -23,7 +23,7 @@ export class AmbientGitMonitor extends EventEmitter {
   private mergeConflictEmitted = false // Dedup: only emit once per conflict
   private diffPollTimer: ReturnType<typeof setInterval> | null = null
   private initialPollTimer: ReturnType<typeof setTimeout> | null = null
-  private lastKnownFiles: Set<string> = new Set() // Track seen changes to dedup
+  private lastDiffFingerprint = "" // Track diff content to detect real changes
 
   constructor(projectPath: string) {
     super()
@@ -79,30 +79,33 @@ export class AmbientGitMonitor extends EventEmitter {
    */
   private async emitChangedFiles(): Promise<void> {
     try {
-      // Get modified tracked files + untracked files in one shot
-      const [diffResult, untrackedResult] = await Promise.all([
-        execAsync("git diff --name-only", { cwd: this.projectPath, timeout: 5000 }).catch(() => ({ stdout: "" })),
+      // Get modified tracked files + untracked files + stat fingerprint in one shot
+      const [diffStatResult, untrackedResult] = await Promise.all([
+        execAsync("git diff --stat", { cwd: this.projectPath, timeout: 5000 }).catch(() => ({ stdout: "" })),
         execAsync("git ls-files --others --exclude-standard", { cwd: this.projectPath, timeout: 5000 }).catch(() => ({ stdout: "" })),
       ])
 
+      // Use diff stat as fingerprint — changes when file content changes, not just file names
+      const fingerprint = diffStatResult.stdout + "|" + untrackedResult.stdout
+      if (fingerprint === this.lastDiffFingerprint) return // Nothing actually changed
+      this.lastDiffFingerprint = fingerprint
+
+      // Now get file names for the batch
+      const { stdout: diffNames } = await execAsync(
+        "git diff --name-only", { cwd: this.projectPath, timeout: 5000 },
+      ).catch(() => ({ stdout: "" }))
+
       const files = [
-        ...diffResult.stdout.trim().split("\n").filter(Boolean),
+        ...diffNames.trim().split("\n").filter(Boolean),
         ...untrackedResult.stdout.trim().split("\n").filter(Boolean),
       ]
 
       if (files.length === 0) return
 
-      // Dedup against last known set — only emit genuinely new changes
-      const newFiles = files.filter(f => !this.lastKnownFiles.has(f))
-      if (newFiles.length === 0) return
-
-      // Update known set (keep it bounded)
-      this.lastKnownFiles = new Set(files.slice(0, 200))
-
       // Build file-batch event (limit to 8 files per batch)
       const path = await import("path")
       const batch: FileBatch = {
-        files: newFiles.slice(0, 8).map((filePath): FileChangeEvent => ({
+        files: files.slice(0, 8).map((filePath): FileChangeEvent => ({
           path: filePath,
           type: "change",
           ext: path.extname(filePath).toLowerCase(),

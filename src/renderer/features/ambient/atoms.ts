@@ -20,3 +20,6 @@ export const implementModeAtom = atomWithStorage<"plan" | "agent">(
 
 /** The suggestion currently shown in the full assessment panel (null = list view) */
 export const assessmentPanelSuggestionIdAtom = atom<string | null>(null)
+
+/** Goal text pre-filled by Ask GAAD for the Orchestrator tab */
+export const gaadOrchestratorGoalAtom = atom<string | null>(null)

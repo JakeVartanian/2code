@@ -39,9 +39,21 @@ export interface AmbientActivity {
   lastInsightAt: number | null
 }
 
+export interface MaintenanceAction {
+  id: string
+  projectId: string
+  type: string
+  title: string
+  description: string
+  details: string | null
+  status: string
+  createdAt: Date | null
+}
+
 interface AmbientState {
   // Per-project state
   suggestions: AmbientSuggestion[]
+  maintenanceActions: MaintenanceAction[]
   budgetStatus: AmbientBudgetStatus | null
   agentStatus: "running" | "paused" | "stopped"
   enabled: boolean
@@ -52,6 +64,8 @@ interface AmbientState {
   setSuggestions: (suggestions: AmbientSuggestion[]) => void
   addSuggestion: (suggestion: AmbientSuggestion) => void
   removeSuggestion: (id: string) => void
+  setMaintenanceActions: (actions: MaintenanceAction[]) => void
+  removeMaintenanceAction: (id: string) => void
   setBudgetStatus: (status: AmbientBudgetStatus | null) => void
   setAgentStatus: (status: "running" | "paused" | "stopped") => void
   setEnabled: (enabled: boolean) => void
@@ -62,6 +76,7 @@ interface AmbientState {
 
 export const useAmbientStore = create<AmbientState>((set) => ({
   suggestions: [],
+  maintenanceActions: [],
   budgetStatus: null,
   agentStatus: "stopped",
   enabled: true,
@@ -81,6 +96,12 @@ export const useAmbientStore = create<AmbientState>((set) => ({
     suggestions: state.suggestions.filter(s => s.id !== id),
   })),
 
+  setMaintenanceActions: (maintenanceActions) => set({ maintenanceActions }),
+
+  removeMaintenanceAction: (id) => set((state) => ({
+    maintenanceActions: state.maintenanceActions.filter(a => a.id !== id),
+  })),
+
   setBudgetStatus: (budgetStatus) => set({ budgetStatus }),
 
   setAgentStatus: (agentStatus) => set({ agentStatus }),
@@ -93,6 +114,7 @@ export const useAmbientStore = create<AmbientState>((set) => ({
 
   reset: () => set({
     suggestions: [],
+    maintenanceActions: [],
     budgetStatus: null,
     agentStatus: "stopped",
     enabled: true,

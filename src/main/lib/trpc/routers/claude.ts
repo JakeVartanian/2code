@@ -41,7 +41,7 @@ import {
 import { anthropicAccounts, anthropicSettings, chats, claudeCodeCredentials, getDatabase, projects as projectsTable, subChats, projectMemories } from "../../db"
 import { getMemoriesForInjection } from "../../memory/injection"
 import { extractMemoriesAsync } from "../../memory/extraction"
-import { emitChatEvent } from "../../ambient/chat-bridge"
+import { drainSessionEvents, emitChatEvent } from "../../ambient/chat-bridge"
 
 // Track injected memory IDs per session for post-session feedback
 const sessionInjectedMemories = new Map<string, string[]>()
@@ -329,7 +329,26 @@ function selectAvailableAccount(): string | null {
           .where(eq(anthropicAccounts.id, account.id))
           .run()
 
-        console.log(`[claude-auth-rotation] Selected account via rotation ${account.id} (${account.displayName || account.email || "unnamed"})`)
+        // Persist the switch: update activeAccountId so the app doesn't keep
+        // cycling back to the rate-limited account after the in-memory cooldown expires.
+        // Without this, the DB still points to the old account and selectAvailableAccount()
+        // Priority 2 will re-select it as soon as the in-memory rate limit entry clears.
+        db.insert(anthropicSettings)
+          .values({
+            id: "singleton",
+            activeAccountId: account.id,
+            updatedAt: new Date(),
+          })
+          .onConflictDoUpdate({
+            target: anthropicSettings.id,
+            set: {
+              activeAccountId: account.id,
+              updatedAt: new Date(),
+            },
+          })
+          .run()
+
+        console.log(`[claude-auth-rotation] Selected account via rotation ${account.id} (${account.displayName || account.email || "unnamed"}) — updated activeAccountId`)
         return account.id
       }
     }
@@ -417,6 +436,8 @@ function getCurrentActiveAccountId(): string | null {
  */
 let tokenRefreshCache: { token: string; refreshedAt: number } | null = null
 const TOKEN_REFRESH_TTL_MS = 45 * 60 * 1000 // 45 minutes
+
+
 
 // FIX: Invalidate Claude OAuth token cache after OS sleep/wake.
 // After 8+ hours of sleep, the cached token is likely expired. Without this,
@@ -1504,29 +1525,34 @@ export function updateRealTimeRateLimit(rateLimitInfo: {
       realTimeRateLimits.delete(key)
     }
   }
-  realTimeRateLimits.set(rateLimitInfo.rateLimitType, {
+  const entry = {
     rateLimitType: rateLimitInfo.rateLimitType,
     utilization: rateLimitInfo.utilization ?? 0,
     resetsAt: rateLimitInfo.resetsAt,
     status: rateLimitInfo.status,
     updatedAt: now,
-  })
+  }
+  console.log(`[usage] Real-time update: type=${entry.rateLimitType} util=${entry.utilization} resetsAt=${entry.resetsAt} (${entry.resetsAt ? new Date(entry.resetsAt).toISOString() : 'none'}) status=${entry.status}`)
+  realTimeRateLimits.set(rateLimitInfo.rateLimitType, entry)
 }
 
 /**
- * Get the soonest resetsAt timestamp from real-time rate limit data.
- * Used to give markAccountRateLimited a proper expiry instead of the 5-min default.
+ * Get the latest (furthest-out) resetsAt timestamp from real-time rate limit data.
+ * Used to give markAccountRateLimited a proper expiry instead of the default.
+ * We pick the LATEST reset time because if the 5-hour window resets in 1h but the
+ * 7-day window resets in 5d, the account is blocked until the 7-day window clears.
+ * Using the soonest would cause premature re-selection of the rate-limited account.
  */
 function getRealTimeResetsAt(): number | undefined {
   const now = Date.now()
-  let soonest: number | undefined
+  let latest: number | undefined
   for (const entry of realTimeRateLimits.values()) {
     if (now - entry.updatedAt > REALTIME_MAX_AGE_MS) continue
-    if (entry.resetsAt && (!soonest || entry.resetsAt < soonest)) {
-      soonest = entry.resetsAt
+    if (entry.resetsAt && entry.resetsAt > now && (!latest || entry.resetsAt > latest)) {
+      latest = entry.resetsAt
     }
   }
-  return soonest
+  return latest
 }
 
 /**
@@ -1584,12 +1610,16 @@ function parseUsageResponse(data: unknown): UsageSuccess {
     five_hour?: { utilization: number; resets_at: string }
     seven_day?: { utilization: number; resets_at: string }
   }
+  console.log(`[usage] API response raw: five_hour=${JSON.stringify(d.five_hour)} seven_day=${JSON.stringify(d.seven_day)}`)
+  // API returns utilization as a decimal (0-1), normalize to percentage (0-100)
+  // to match the real-time SDK path which also normalizes to 0-100
+  const toPercent = (v: number) => v <= 1 ? Math.round(v * 100) : v
   return {
     fiveHour: d.five_hour
-      ? { utilization: d.five_hour.utilization, resetsAt: d.five_hour.resets_at }
+      ? { utilization: toPercent(d.five_hour.utilization), resetsAt: d.five_hour.resets_at }
       : null,
     sevenDay: d.seven_day
-      ? { utilization: d.seven_day.utilization, resetsAt: d.seven_day.resets_at }
+      ? { utilization: toPercent(d.seven_day.utilization), resetsAt: d.seven_day.resets_at }
       : null,
   }
 }
@@ -1627,6 +1657,123 @@ async function fetchUsageWithRetry(
     console.log("[usage] Fetch error:", e)
     return { error: "fetch_failed" }
   }
+}
+
+// ============================================================================
+// Unified Error Classification
+// ============================================================================
+// Single source of truth for categorizing Claude errors. Both the SDK message
+// error path and the stream exception catch block use this function, ensuring
+// consistent category names, retryable flags, and context messages.
+
+interface ErrorClassification {
+  category: string
+  context: string
+  retryable: boolean
+}
+
+const RATE_LIMIT_CODES = new Set(["rate_limit_exceeded", "rate_limit"])
+const RATE_LIMIT_PATTERNS = ["rate limit", "rate_limit", "hit your limit", "usage limit", "too many requests", "429"]
+
+function classifyClaudeError(params: {
+  errorMessage: string
+  rawErrorCode?: string
+  stderrOutput?: string
+  isOpenRouter: boolean
+  isApiKeyAuthMode: boolean
+}): ErrorClassification {
+  const { errorMessage, rawErrorCode = "", stderrOutput = "", isOpenRouter, isApiKeyAuthMode } = params
+  const msg = errorMessage.toLowerCase()
+  const stderr = stderrOutput.toLowerCase()
+
+  // --- Session expiration (stderr-only signal) ---
+  if (stderrOutput?.includes("No conversation found with session ID")) {
+    return { category: "SESSION_EXPIRED", context: "Previous session expired. Please try again.", retryable: false }
+  }
+
+  // --- CPU / binary compatibility ---
+  if (stderrOutput?.includes("CPU lacks AVX support") || stderrOutput?.includes("bun-darwin-x64-baseline")) {
+    return {
+      category: "CPU_INCOMPATIBLE",
+      context: "Your CPU does not support AVX instructions required by the bundled runtime. Please update 2Code to the latest version for improved compatibility, or contact support.",
+      retryable: false,
+    }
+  }
+
+  // --- Binary not found ---
+  if (msg.includes("enoent")) {
+    return { category: "EXECUTABLE_NOT_FOUND", context: "Claude CLI binary not found — reinstall 2Code or contact support", retryable: false }
+  }
+
+  // --- Process crash ---
+  if (msg.includes("epipe") || (errorMessage as any)?.code === "EPIPE" || msg.includes("exited with code")) {
+    return { category: "PROCESS_CRASH", context: "Claude process exited unexpectedly", retryable: false }
+  }
+
+  // --- Authentication ---
+  if (rawErrorCode === "authentication_failed" || msg.includes("authentication") || msg.includes("401")) {
+    if (isApiKeyAuthMode) {
+      return {
+        category: "AUTH_FAILURE",
+        context: isOpenRouter
+          ? "OpenRouter authentication failed - check your API key in Settings → Models"
+          : "Authentication failed - check your API key",
+        retryable: false,
+      }
+    }
+    return { category: "AUTH_FAILED_SDK", context: "Authentication failed - not logged into Claude Code CLI", retryable: false }
+  }
+
+  // --- Invalid token (MCP) ---
+  if (msg.includes("invalid_token") || msg.includes("invalid access token")) {
+    return { category: "MCP_INVALID_TOKEN", context: "Invalid access token. Update MCP settings", retryable: false }
+  }
+
+  // --- Invalid API key ---
+  if (rawErrorCode === "invalid_api_key" || msg.includes("api_key") || msg.includes("invalid api key") || stderr.includes("invalid_api_key")) {
+    return {
+      category: "INVALID_API_KEY",
+      context: isOpenRouter ? "Invalid OpenRouter API key - update it in Settings → Models" : "Invalid API key",
+      retryable: false,
+    }
+  }
+
+  // --- OpenRouter-specific: transient upstream rate limit ---
+  if (isOpenRouter && rawErrorCode === "invalid_request" && (msg.includes("rate-limited") || msg.includes("temporarily") || msg.includes("rate limit") || msg.includes("overloaded") || msg.includes("upstream"))) {
+    return {
+      category: "OPENROUTER_RATE_LIMIT",
+      context: "OpenRouter model is rate-limited. Retrying automatically... (free-tier models have limited capacity)",
+      retryable: true,
+    }
+  }
+
+  // --- OpenRouter-specific: model not found ---
+  if (isOpenRouter && rawErrorCode === "invalid_request" && (msg.includes("model") || msg.includes("selected model"))) {
+    return { category: "OPENROUTER_MODEL_ERROR", context: errorMessage, retryable: false }
+  }
+
+  // --- Rate limit ---
+  if (RATE_LIMIT_CODES.has(rawErrorCode) || RATE_LIMIT_PATTERNS.some((p) => msg.includes(p) || stderr.includes(p))) {
+    return { category: "RATE_LIMIT", context: "Session limit reached", retryable: false }
+  }
+
+  // --- Overloaded ---
+  if (rawErrorCode === "overloaded" || msg.includes("overload") || stderr.includes("overloaded")) {
+    return { category: "OVERLOADED", context: "Claude is overloaded, try again later", retryable: true }
+  }
+
+  // --- Usage policy violation ---
+  if (rawErrorCode === "invalid_request" || msg.includes("usage policy") || msg.includes("violate")) {
+    return { category: "USAGE_POLICY_VIOLATION", context: errorMessage, retryable: true }
+  }
+
+  // --- Network errors ---
+  if (msg.includes("network") || msg.includes("econnrefused") || msg.includes("fetch failed")) {
+    return { category: "NETWORK_ERROR", context: "Network error - check your connection", retryable: false }
+  }
+
+  // --- Fallback ---
+  return { category: "UNKNOWN", context: errorMessage || "Claude streaming error", retryable: false }
 }
 
 export const claudeRouter = router({
@@ -1726,32 +1873,41 @@ export const claudeRouter = router({
                 .get()
               effectiveWorktreeCwd = chat?.worktreePath ?? null
 
-              // Evict stale sessions sharing this worktree (cleanup only, never blocks)
+              // Clean up genuinely dead sessions sharing this worktree.
+              // Only evict sessions whose AbortController is already aborted or whose
+              // DB streamId is cleared (meaning the backend finished). NEVER evict a
+              // session just because it has been running for a long time — long-running
+              // sessions (CI monitoring, PR checks, builds) are legitimate.
               if (effectiveWorktreeCwd) {
                 for (const [otherSubChatId, otherCwd] of activeSessionWorktrees) {
                   if (otherSubChatId !== input.subChatId && otherCwd === effectiveWorktreeCwd) {
                     const otherSession = activeSessions.get(otherSubChatId)
                     const isAborted = !otherSession || otherSession.abortController.signal.aborted
-                    const isZombie = otherSession && (Date.now() - otherSession.startedAt > 15 * 60 * 1000)
 
                     let isDbClean = false
                     try {
                       const otherSubChat = db
-                        .select({ streamId: subChats.streamId })
+                        .select({ streamId: subChats.streamId, updatedAt: subChats.updatedAt })
                         .from(subChats)
                         .where(eq(subChats.id, otherSubChatId))
                         .get()
-                      isDbClean = !otherSubChat?.streamId
+                      // Only consider "clean" if streamId is null AND updated >5s ago.
+                      // A session that just finished may have cleared streamId but not yet
+                      // removed itself from activeSessions — evicting it would kill the cleanup.
+                      const staleMs = otherSubChat?.updatedAt
+                        ? Date.now() - new Date(otherSubChat.updatedAt).getTime()
+                        : Infinity
+                      isDbClean = !otherSubChat?.streamId && staleMs > 5000
                     } catch { /* non-fatal */ }
 
-                    if (isAborted || isDbClean || isZombie) {
+                    if (isAborted || isDbClean) {
                       if (otherSession && !otherSession.abortController.signal.aborted) {
                         otherSession.abortController.abort()
                       }
                       activeSessions.delete(otherSubChatId)
                       activeSessionWorktrees.delete(otherSubChatId)
                       sessionCompletionPromises.delete(otherSubChatId)
-                      console.log(`[claude] Evicted stale session ${otherSubChatId.slice(-8)} (aborted=${isAborted} dbClean=${isDbClean} zombie=${!!isZombie})`)
+                      console.log(`[claude] Evicted dead session ${otherSubChatId.slice(-8)} (aborted=${isAborted} dbClean=${isDbClean})`)
                     }
                   }
                 }
@@ -1793,6 +1949,8 @@ export const claudeRouter = router({
         const streamStart = Date.now()
         let chunkCount = 0
         let lastChunkType = ""
+        // Track whether an error chunk has been emitted (blocks auto-continue)
+        let errorEmitted = false
         // Shared sessionId for cleanup to save on abort
         let currentSessionId: string | null = null
         console.log(
@@ -1801,6 +1959,9 @@ export const claudeRouter = router({
 
         // Track if observable is still active (not unsubscribed)
         let isObservableActive = true
+        // Track if session stream has completed (naturally or via error).
+        // Used by the unsubscribe callback to avoid aborting already-finished sessions.
+        let sessionStreamCompleted = false
 
         // Helper to safely emit (no-op if already unsubscribed)
         // Accepts both individual chunks and batch messages to reduce IPC overhead.
@@ -1823,6 +1984,7 @@ export const claudeRouter = router({
 
         // Helper to safely complete (no-op if already closed)
         const safeComplete = () => {
+          sessionStreamCompleted = true
           try {
             emit.complete()
           } catch {
@@ -1950,12 +2112,17 @@ export const claudeRouter = router({
                 input.subChatId,
               )
 
-              // Debounced write: user message + streamId will be persisted within 100ms.
-              // The stream takes longer to start, and the final save will flush anyway.
+              // Write streamId synchronously so stale-session eviction never sees
+              // streamId=null for an active session (the 100ms debounce window was
+              // enough for another tab's session start to race and evict this one).
+              // Messages are still debounced since they're not used for liveness checks.
+              const db2 = getDatabase()
+              db2.update(subChats)
+                .set({ streamId, updatedAt: new Date() })
+                .where(eq(subChats.id, input.subChatId))
+                .run()
               scheduleDebouncedWrite(input.subChatId, {
                 messages: JSON.stringify(messagesToSave),
-                streamId,
-                updatedAt: new Date(),
               })
 
               // Ambient chat bridge: notify of user prompt
@@ -2780,6 +2947,55 @@ ${prompt}
               } catch { /* truly non-critical — continue without memories */ }
             }
 
+            // Inject open audit findings so agents are aware of known project issues
+            try {
+              const chatRecordForAudit = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+              if (chatRecordForAudit?.projectId) {
+                const { getAuditFindingsForInjection } = require("../../audit/injection")
+                const auditResult = getAuditFindingsForInjection(chatRecordForAudit.projectId, null, 600)
+                if (auditResult.markdown) {
+                  systemAppend += `\n\n${auditResult.markdown}`
+                  console.log(`[SD] Injected ${auditResult.findingsUsed} audit findings (~${auditResult.tokensUsed} tokens)`)
+                }
+              }
+            } catch (err) {
+              console.error("[SD] Audit findings injection failed:", err)
+            }
+
+            // Inject Pencil design context (brand kit, design direction, .pen files)
+            try {
+              const chatRecordForDesign = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+              if (chatRecordForDesign?.projectId) {
+                const { getDesignContextForInjection } = require("./design-context")
+                const designBlock = await getDesignContextForInjection(chatRecordForDesign.projectId)
+                if (designBlock) {
+                  systemAppend += `\n\n${designBlock}`
+                  console.log("[SD] Injected Pencil design context")
+                }
+              }
+            } catch (err) {
+              // Non-critical — design context is supplementary
+              console.error("[SD] Design context injection failed:", err)
+            }
+
+            // Inject terminal awareness (running servers, terminal errors)
+            try {
+              const { gatherTerminalContext, shouldInjectTerminalContext, formatTerminalContextMarkdown, registerProjectForScanning } = require("../../terminal/context-collector")
+              const effectiveProjectPath = input.projectPath || input.cwd
+              registerProjectForScanning(effectiveProjectPath)
+              const isFirstMessage = !resumeSessionId
+              const terminalCtx = gatherTerminalContext(effectiveProjectPath, input.cwd, input.chatId)
+              if (shouldInjectTerminalContext(terminalCtx, input.prompt, isFirstMessage)) {
+                const terminalMd = formatTerminalContextMarkdown(terminalCtx)
+                if (terminalMd) {
+                  systemAppend += `\n\n${terminalMd}`
+                  console.log(`[SD] Terminal awareness: ${terminalCtx.servers.length} servers, ${terminalCtx.terminalOutputs.length} terminals`)
+                }
+              }
+            } catch (err) {
+              console.error("[SD] Terminal context injection failed:", err)
+            }
+
             if (disabledSections.length > 0) {
               const sectionList = disabledSections
                 .map((s) => `- ${s.name} (${s.patterns.join(", ")})`)
@@ -3097,6 +3313,8 @@ ${prompt}
             // Auto-retry on auth failure after token refresh (once)
             let authRetryAttempted = false
             let authRetryNeeded = false
+            // Auto-retry with alternate Anthropic account on rate limit
+            let rateLimitAccountRetryNeeded = false
             // Auto-retry on OpenRouter transient rate limits (free-tier models are frequently rate-limited)
             const MAX_OPENROUTER_RATE_LIMIT_RETRIES = 3
             let openRouterRateLimitRetryCount = 0
@@ -3115,11 +3333,14 @@ ${prompt}
             let errorEmitted = false // Set when error chunk sent — blocks auto-continue
             let messageCount = 0
             let pendingFinishChunk: UIMessageChunk | null = null
+            // Track CLI background tasks (e.g., "check CI in 10 min")
+            const pendingTasks = new Map<string, { description: string; startedAt: number }>()
 
             // eslint-disable-next-line no-constant-condition
             while (true) {
               policyRetryNeeded = false
               authRetryNeeded = false
+              rateLimitAccountRetryNeeded = false
               openRouterRateLimitRetryNeeded = false
               overloadedRetryNeeded = false
               autoContinueNeeded = false
@@ -3190,6 +3411,10 @@ ${prompt}
                 console.log(`[Ollama] CWD: ${input.cwd}`)
               }
 
+              // Hoisted to try-block scope so the catch handler can log it.
+              // Assigned inside the SDK error branch (msgAny.type === "error").
+              let rawErrorCode = ""
+
               try {
                 for await (const msg of stream) {
                   if (abortController.signal.aborted) {
@@ -3255,6 +3480,7 @@ ${prompt}
                   // Capture real-time rate limit data from SDK stream
                   const msgAny = msg as any
                   if (msgAny.type === "rate_limit_event" && msgAny.rate_limit_info) {
+                    console.log(`[usage] Raw rate_limit_event from SDK: ${JSON.stringify(msgAny.rate_limit_info)}`)
                     updateRealTimeRateLimit(msgAny.rate_limit_info)
                     // Also invalidate the OAuth API cache so getUsage picks up real-time data
                     usageCache.fetchedAt = 0
@@ -3313,90 +3539,22 @@ ${prompt}
                       `[CLAUDE SDK ERROR] ========================================`,
                     )
 
-                    // Categorize SDK-level errors
-                    // Use the raw error code (e.g., "invalid_request") for category matching
-                    const rawErrorCode = msgAny.error || ""
-                    let errorCategory = "SDK_ERROR"
-                    // Default errorContext to the full error text (which may include detailed message)
-                    let errorContext = sdkError
+                    // Categorize SDK-level errors via unified classifier
                     const isOpenRouter = finalCustomConfig?.baseUrl?.includes("openrouter.ai")
+                    rawErrorCode = msgAny.error || ""
+                    const classified = classifyClaudeError({
+                      errorMessage: sdkError,
+                      rawErrorCode,
+                      stderrOutput: "",
+                      isOpenRouter: !!isOpenRouter,
+                      isApiKeyAuthMode: Boolean(finalCustomConfig || hasExistingApiConfig),
+                    })
+                    let errorCategory = classified.category
+                    let errorContext = classified.context
 
+                    // Auto-switch to alternate Anthropic account on rate limit
                     if (
-                      rawErrorCode === "authentication_failed" ||
-                      sdkError.includes("authentication")
-                    ) {
-                      // Show OAuth reconnect only when OAuth auth is actually in use.
-                      // If API-key auth is active, treat as API auth failure instead.
-                      const isApiKeyAuthMode = Boolean(
-                        finalCustomConfig || hasExistingApiConfig,
-                      )
-                      if (isApiKeyAuthMode) {
-                        errorCategory = "AUTH_FAILURE"
-                        errorContext = isOpenRouter
-                          ? "OpenRouter authentication failed - check your API key in Settings → Models"
-                          : "Authentication failed - check your API key"
-                      } else {
-                        errorCategory = "AUTH_FAILED_SDK"
-                        errorContext =
-                          "Authentication failed - not logged into Claude Code CLI"
-                      }
-                    } else if (
-                      String(sdkError).includes("invalid_token") ||
-                      String(sdkError).includes("Invalid access token")
-                    ) {
-                      errorCategory = "MCP_INVALID_TOKEN"
-                      errorContext = "Invalid access token. Update MCP settings"
-                    } else if (
-                      rawErrorCode === "invalid_api_key" ||
-                      sdkError.includes("api_key")
-                    ) {
-                      errorCategory = "INVALID_API_KEY_SDK"
-                      errorContext = isOpenRouter
-                        ? "Invalid OpenRouter API key - update it in Settings → Models"
-                        : sdkError
-                    } else if (
-                      rawErrorCode === "rate_limit_exceeded" ||
-                      rawErrorCode === "rate_limit" ||
-                      sdkError.includes("rate") ||
-                      sdkError.includes("hit your limit")
-                    ) {
-                      errorCategory = "RATE_LIMIT_SDK"
-                      errorContext = "Session limit reached"
-                    } else if (
-                      rawErrorCode === "overloaded" ||
-                      sdkError.includes("overload")
-                    ) {
-                      errorCategory = "OVERLOADED_SDK"
-                      errorContext = "Claude is overloaded, try again later"
-                    } else if (
-                      rawErrorCode === "invalid_request" &&
-                      isOpenRouter &&
-                      (sdkError.includes("rate-limited") || sdkError.includes("temporarily") ||
-                        sdkError.includes("rate limit") || sdkError.includes("overloaded") ||
-                        sdkError.includes("upstream"))
-                    ) {
-                      // OpenRouter: transient upstream rate limit — retryable with backoff
-                      errorCategory = "OPENROUTER_RATE_LIMIT"
-                      errorContext = "OpenRouter model is rate-limited. Retrying automatically... (free-tier models have limited capacity)"
-                    } else if (
-                      rawErrorCode === "invalid_request" &&
-                      isOpenRouter &&
-                      (sdkError.includes("model") || sdkError.includes("selected model"))
-                    ) {
-                      // OpenRouter: model not found or no access — hard failure, don't retry.
-                      errorCategory = "OPENROUTER_MODEL_ERROR"
-                      errorContext = sdkError
-                    } else if (
-                      rawErrorCode === "invalid_request" ||
-                      sdkError.includes("Usage Policy") ||
-                      sdkError.includes("violate")
-                    ) {
-                      errorCategory = "USAGE_POLICY_VIOLATION"
-                    }
-
-                    // Auto-switch to alternate Anthropic account on rate limit (no mid-stream retry)
-                    if (
-                      errorCategory === "RATE_LIMIT_SDK" &&
+                      errorCategory === "RATE_LIMIT" &&
                       !isOpenRouter &&
                       !hasExistingApiConfig
                     ) {
@@ -3416,18 +3574,28 @@ ${prompt}
                         (acc) => acc.id !== accountId && !isAccountRateLimited(acc.id)
                       )
 
-                      if (hasAlternate) {
-                        safeEmit({
-                          type: "retry-notification",
-                          message: "Rate limit reached. Another account will be used automatically — start a new chat to continue.",
-                        } as UIMessageChunk)
+                      if (hasAlternate && !abortController.signal.aborted) {
+                        // Auto-retry: refresh token (will pick the alternate account) and retry
+                        const freshToken = await getClaudeCodeTokenFresh()
+                        if (freshToken && freshToken !== claudeCodeToken) {
+                          claudeCodeToken = freshToken
+                          finalEnv.CLAUDE_CODE_OAUTH_TOKEN = freshToken
+                          rateLimitAccountRetryNeeded = true
+                          safeEmit({
+                            type: "retry-notification",
+                            message: "Rate limit reached — automatically switching to another account...",
+                          } as UIMessageChunk)
+                          console.log(`[claude] Rate limit on ${accountId} - auto-retrying with alternate account`)
+                          break // break for-await loop to retry
+                        }
+                        // Token didn't change — fall through to error
                         errorContext = "Rate limit reached. Another account will be used automatically — start a new chat to continue."
-                        console.log(`[claude] Rate limit on ${accountId} - alternate account available for next session`)
-                      } else {
+                        console.log(`[claude] Rate limit on ${accountId} - alternate account available but token unchanged`)
+                      } else if (!hasAlternate) {
                         errorContext = "All connected accounts have reached their rate limit. Please wait and try again later."
                         console.log(`[claude] All accounts are rate-limited`)
                       }
-                      // Falls through to normal error emit — session ends, no retry
+                      // Falls through to normal error emit if no auto-retry
                     }
 
                     // Auto-retry on false-positive policy violations (gateway-level rejections)
@@ -3464,7 +3632,7 @@ ${prompt}
                     // Auto-retry on overloaded errors with exponential backoff
                     // Anthropic servers temporarily at capacity — usually resolves within seconds
                     if (
-                      errorCategory === "OVERLOADED_SDK" &&
+                      errorCategory === "OVERLOADED" &&
                       overloadedRetryCount < MAX_OVERLOADED_RETRIES &&
                       !abortController.signal.aborted
                     ) {
@@ -3731,6 +3899,23 @@ ${prompt}
                         }
                         break
                       }
+                      case "task-started":
+                        pendingTasks.set((chunk as any).taskId, {
+                          description: (chunk as any).description,
+                          startedAt: Date.now(),
+                        })
+                        console.log(
+                          `[claude] Task started: ${(chunk as any).taskId} — ${(chunk as any).description} (${pendingTasks.size} pending)`,
+                        )
+                        break
+                      case "task-notification": {
+                        const taskChunk = chunk as any
+                        pendingTasks.delete(taskChunk.taskId)
+                        console.log(
+                          `[claude] Task ${taskChunk.status}: ${taskChunk.taskId} — ${taskChunk.summary} (${pendingTasks.size} remaining)`,
+                        )
+                        break
+                      }
                       case "message-metadata":
                         metadata = { ...metadata, ...chunk.messageMetadata }
                         break
@@ -3797,6 +3982,9 @@ ${prompt}
                 const err = streamError as Error
                 const stderrOutput = stderrLines.join("\n")
 
+                // Log stack trace for debugging (helps trace ReferenceErrors and other unexpected throws)
+                console.error(`[claude] Stream catch: ${err.message}`, err.stack)
+
                 if (isUsingOllama) {
                   console.error(`[Ollama] ===== STREAM ERROR =====`)
                   console.error(`[Ollama] Error message: ${err.message}`)
@@ -3812,111 +4000,73 @@ ${prompt}
                   }
                 }
 
-                // Build detailed error message with category
-                let errorContext = "Claude streaming error"
-                let errorCategory = "UNKNOWN"
+                // Classify error via unified classifier
+                const catchIsOpenRouter = !!finalCustomConfig?.baseUrl?.includes("openrouter.ai")
+                const catchClassified = classifyClaudeError({
+                  errorMessage: err.message || "",
+                  rawErrorCode: (err as any).code || "",
+                  stderrOutput: stderrOutput || "",
+                  isOpenRouter: catchIsOpenRouter,
+                  isApiKeyAuthMode: Boolean(finalCustomConfig || hasExistingApiConfig),
+                })
+                let errorContext = catchClassified.context
+                let errorCategory = catchClassified.category
 
-                // Check for session-not-found error in stderr
-                const isSessionNotFound = stderrOutput?.includes(
-                  "No conversation found with session ID",
-                )
-
-                if (isSessionNotFound) {
-                  // Clear the invalid session ID from database so next attempt starts fresh
-                  console.log(
-                    `[claude] Session not found - clearing invalid sessionId from database`,
-                  )
+                // Side effect: clear invalid sessionId on session expiration
+                if (errorCategory === "SESSION_EXPIRED") {
+                  console.log(`[claude] Session not found - clearing invalid sessionId from database`)
                   db.update(subChats)
                     .set({ sessionId: null })
                     .where(eq(subChats.id, input.subChatId))
                     .run()
-
-                  errorContext = "Previous session expired. Please try again."
-                  errorCategory = "SESSION_EXPIRED"
-                } else if (
-                  stderrOutput?.includes("CPU lacks AVX support") ||
-                  stderrOutput?.includes("bun-darwin-x64-baseline")
-                ) {
-                  errorContext =
-                    "Your CPU does not support AVX instructions required by the bundled runtime. Please update 2Code to the latest version for improved compatibility, or contact support."
-                  errorCategory = "CPU_INCOMPATIBLE"
-                } else if (
-                  err.message?.includes("EPIPE") ||
-                  (err as NodeJS.ErrnoException).code === "EPIPE"
-                ) {
-                  errorContext = "Claude process exited unexpectedly"
-                  errorCategory = "PROCESS_CRASH"
-                } else if (err.message?.includes("exited with code")) {
-                  errorContext = "Claude Code process crashed"
-                  errorCategory = "PROCESS_CRASH"
-                } else if (err.message?.includes("ENOENT")) {
-                  errorContext = "Claude CLI binary not found — reinstall 2Code or contact support"
-                  errorCategory = "EXECUTABLE_NOT_FOUND"
-                } else if (
-                  err.message?.includes("authentication") ||
-                  err.message?.includes("401")
-                ) {
-                  errorContext = "Authentication failed - check your API key"
-                  errorCategory = "AUTH_FAILURE"
-                } else if (
-                  err.message?.includes("invalid_api_key") ||
-                  err.message?.includes("Invalid API Key") ||
-                  stderrOutput?.includes("invalid_api_key")
-                ) {
-                  errorContext = "Invalid API key"
-                  errorCategory = "INVALID_API_KEY"
-                } else if (
-                  err.message?.includes("overloaded") ||
-                  stderrOutput?.includes("overloaded")
-                ) {
-                  errorContext = "Claude is overloaded, try again later"
-                  errorCategory = "OVERLOADED"
-                  // Auto-retry with backoff
-                  if (overloadedRetryCount < MAX_OVERLOADED_RETRIES && !abortController.signal.aborted) {
-                    overloadedRetryCount++
-                    overloadedRetryNeeded = true
-                    const backoffMs = overloadedRetryCount * 5000
-                    console.log(
-                      `[claude] Overloaded (catch) - backing off ${backoffMs / 1000}s then retrying (attempt ${overloadedRetryCount}/${MAX_OVERLOADED_RETRIES})`,
-                    )
-                    safeEmit({
-                      type: "retry-notification",
-                      message: `Claude is busy — retrying automatically in ${backoffMs / 1000}s (attempt ${overloadedRetryCount}/${MAX_OVERLOADED_RETRIES})...`,
-                    } as UIMessageChunk)
-                    await new Promise((resolve) => setTimeout(resolve, backoffMs))
-                  }
-                } else if (
-                  err.message?.includes("rate_limit") ||
-                  err.message?.includes("429") ||
-                  stderrOutput?.includes("rate_limit") ||
-                  stderrOutput?.includes("429") ||
-                  stderrOutput?.includes("rate limit")
-                ) {
-                  errorContext = "Session limit reached"
-                  errorCategory = "RATE_LIMIT"
-
-                  // Mark account as rate-limited if using native Anthropic auth
-                  const catchIsOpenRouter = finalCustomConfig?.baseUrl?.includes("openrouter.ai")
-                  if (!catchIsOpenRouter && !hasExistingApiConfig) {
-                    const accountId = getCurrentActiveAccountId()
-                    if (accountId) {
-                      markAccountRateLimited(accountId, getRealTimeResetsAt())
-                      console.log(`[claude] Marked account ${accountId} as rate-limited (from catch block, resetsAt=${getRealTimeResetsAt() || 'default'})`)
-                    }
-                  }
-                } else if (
-                  err.message?.includes("network") ||
-                  err.message?.includes("ECONNREFUSED") ||
-                  err.message?.includes("fetch failed")
-                ) {
-                  errorContext = "Network error - check your connection"
-                  errorCategory = "NETWORK_ERROR"
                 }
 
+                // Side effect: auto-retry on overloaded with backoff
+                if (errorCategory === "OVERLOADED" && overloadedRetryCount < MAX_OVERLOADED_RETRIES && !abortController.signal.aborted) {
+                  overloadedRetryCount++
+                  overloadedRetryNeeded = true
+                  const backoffMs = overloadedRetryCount * 5000
+                  console.log(
+                    `[claude] Overloaded (catch) - backing off ${backoffMs / 1000}s then retrying (attempt ${overloadedRetryCount}/${MAX_OVERLOADED_RETRIES})`,
+                  )
+                  safeEmit({
+                    type: "retry-notification",
+                    message: `Claude is busy — retrying automatically in ${backoffMs / 1000}s (attempt ${overloadedRetryCount}/${MAX_OVERLOADED_RETRIES})...`,
+                  } as UIMessageChunk)
+                  await new Promise((resolve) => setTimeout(resolve, backoffMs))
+                }
 
-                // If retrying overloaded from catch, skip error emit and don't return
-                if (overloadedRetryNeeded) {
-                  console.log(`[claude] Overloaded retry from catch - skipping error emit`)
+                // Side effect: mark account as rate-limited and auto-retry with alternate
+                if (errorCategory === "RATE_LIMIT" && !catchIsOpenRouter && !hasExistingApiConfig) {
+                  const accountId = getCurrentActiveAccountId()
+                  if (accountId) {
+                    markAccountRateLimited(accountId, getRealTimeResetsAt())
+                    console.log(`[claude] Marked account ${accountId} as rate-limited (from catch block, resetsAt=${getRealTimeResetsAt() || 'default'})`)
+                  }
+                  tokenRefreshCache = null
+                  const catchDb = getDatabase()
+                  const catchAllAccounts = catchDb.select().from(anthropicAccounts).all()
+                  const catchHasAlternate = catchAllAccounts.some(
+                    (acc) => acc.id !== accountId && !isAccountRateLimited(acc.id)
+                  )
+                  if (catchHasAlternate && !abortController.signal.aborted) {
+                    const freshToken = await getClaudeCodeTokenFresh()
+                    if (freshToken && freshToken !== claudeCodeToken) {
+                      claudeCodeToken = freshToken
+                      finalEnv.CLAUDE_CODE_OAUTH_TOKEN = freshToken
+                      rateLimitAccountRetryNeeded = true
+                      safeEmit({
+                        type: "retry-notification",
+                        message: "Rate limit reached — automatically switching to another account...",
+                      } as UIMessageChunk)
+                      console.log(`[claude] Rate limit (catch) on ${accountId} - auto-retrying with alternate account`)
+                    }
+                  }
+                }
+
+                // If retrying overloaded or rate-limit-account-switch from catch, skip error emit
+                if (overloadedRetryNeeded || rateLimitAccountRetryNeeded) {
+                  console.log(`[claude] ${rateLimitAccountRetryNeeded ? 'Rate limit account switch' : 'Overloaded'} retry from catch - skipping error emit`)
                   // Don't emit error, don't save, don't return — let the while loop continue
                 } else {
                   // Send error with stderr output to frontend (only if not aborted by user)
@@ -3932,6 +4082,7 @@ ${prompt}
                         cwd: input.cwd,
                         mode: input.mode,
                         stderr: stderrOutput || "(no stderr captured)",
+                        stack: err.stack?.split("\n").slice(0, 5).join("\n"),
                       },
                     } as UIMessageChunk)
                   }
@@ -3986,6 +4137,13 @@ ${prompt}
               if (authRetryNeeded) {
                 authRetryNeeded = false
                 console.log("[claude] Auth retry - restarting stream with refreshed token")
+                continue
+              }
+
+              // Retry with alternate account after rate limit
+              if (rateLimitAccountRetryNeeded) {
+                rateLimitAccountRetryNeeded = false
+                console.log("[claude] Rate limit account switch - restarting stream with alternate account")
                 continue
               }
 
@@ -4046,10 +4204,18 @@ ${prompt}
               // NOTE: "end_turn" is NEVER auto-continued — it means the model deliberately
               // chose to stop (e.g., waiting for subagents, asking the user, etc.).
               if (!abortController.signal.aborted && !errorEmitted && autoContinueCount < MAX_AUTO_CONTINUES && input.mode !== "plan") {
+                const stopReason = metadata.stopReason
+
+                // "end_turn" means the model deliberately chose to stop — NEVER auto-continue.
+                // This is the primary guard: even if parts tracking has stale "call" states
+                // (e.g. from subagent tool dedup edge cases), end_turn is authoritative.
+                if (stopReason === "end_turn") {
+                  break
+                }
+
                 const interruptedTools = parts.filter(
                   (p: any) => p.type?.startsWith("tool-") && p.state === "call"
                 )
-                const stopReason = metadata.stopReason
 
                 // Decide whether to auto-continue
                 const hasInterruptedTools = interruptedTools.length > 0
@@ -4271,6 +4437,8 @@ ${prompt}
             activeSessionWorktrees.delete(input.subChatId)
             // Always clean up injected memories tracking (may not have been cleaned in success path)
             sessionInjectedMemories.delete(input.subChatId)
+            // Always clean up symlink tracking
+            symlinksCreated.delete(input.subChatId)
             // Untrack PID (no-op if already cleaned up by abort or natural exit)
             untrackSessionPid(input.subChatId)
           }
@@ -4279,28 +4447,35 @@ ${prompt}
         // Track session completion for graceful shutdown
         registerSessionCompletion(input.subChatId, sessionPromise)
 
-        // Cleanup on unsubscribe
+        // Cleanup on unsubscribe — DO NOT abort the session.
+        // This unsubscribe fires on ANY renderer-side disconnection: component unmount,
+        // workspace switch, IPC reconnect, React re-render. Aborting here kills sessions
+        // that the user expects to keep running (CI monitoring, PR checks, long builds).
+        //
+        // The session subprocess continues running and will:
+        // - Complete naturally and save via the sessionPromise's finally block
+        // - Be explicitly cancelled via the cancel mutation (user presses ESC/stop)
+        // - Be cleaned up on app quit via abortAllClaudeSessions()
+        //
+        // StreamingKeepAlive renders ChatDataSync for all streaming sub-chats so the
+        // renderer-side status stays synced even when the workspace is switched away.
         return () => {
           console.log(
-            `[SD] M:CLEANUP sub=${subId} sessionId=${currentSessionId || "none"}`,
+            `[SD] M:CLEANUP sub=${subId} sessionId=${currentSessionId || "none"} completed=${sessionStreamCompleted}`,
           )
           chunkBatcher.dispose() // Flush remaining batched chunks before teardown
           isObservableActive = false // Prevent emit after unsubscribe
-          abortController.abort()
-          killSessionProcessTree(input.subChatId) // Kill CLI + all child processes
-          activeSessions.delete(input.subChatId)
-          activeSessionWorktrees.delete(input.subChatId)
-          clearPendingApprovals("Session ended.", input.subChatId)
-
-          // Clear streamId since we're no longer streaming.
-          // sessionId is NOT saved here — the save block in the async function
-          // handles it (saves on normal completion, clears on abort). This avoids
-          // a redundant DB write that the cancel mutation would then overwrite.
-          const db = getDatabase()
-          db.update(subChats)
-            .set({ streamId: null })
-            .where(eq(subChats.id, input.subChatId))
-            .run()
+          // Do NOT abort — let the session run to completion.
+          // Do NOT clear streamId — the session is still active on the backend.
+          // Both are handled by the sessionPromise's completion/error paths.
+          if (sessionStreamCompleted) {
+            // Session already finished — safe to clear streamId (idempotent)
+            const db = getDatabase()
+            db.update(subChats)
+              .set({ streamId: null })
+              .where(eq(subChats.id, input.subChatId))
+              .run()
+          }
         }
       })
     }),
@@ -4409,10 +4584,80 @@ ${prompt}
         session.abortController.abort()
         activeSessions.delete(input.subChatId)
         activeSessionWorktrees.delete(input.subChatId)
+        sessionInjectedMemories.delete(input.subChatId)
+        symlinksCreated.delete(input.subChatId)
+        drainSessionEvents(input.subChatId)
         clearPendingApprovals("Session cancelled.", input.subChatId)
       }
 
       return { cancelled: !!session }
+    }),
+
+  /**
+   * /btw — Ephemeral side question answered from conversation context.
+   * Spawns a cheap Haiku query with the last N messages as context.
+   * Response is never written to DB — purely ephemeral.
+   */
+  btw: publicProcedure
+    .input(
+      z.object({
+        subChatId: z.string(),
+        question: z.string(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const { callClaude } = await import("../../claude/api")
+      const db = getDatabase()
+
+      // Get conversation context from the sub-chat's stored messages
+      const subChat = db
+        .select({ messages: subChats.messages })
+        .from(subChats)
+        .where(eq(subChats.id, input.subChatId))
+        .get()
+
+      // Build a compact context summary from last ~20 messages
+      let contextSummary = ""
+      if (subChat?.messages) {
+        try {
+          const msgs = typeof subChat.messages === "string"
+            ? JSON.parse(subChat.messages)
+            : subChat.messages
+          const recent = Array.isArray(msgs) ? msgs.slice(-20) : []
+          contextSummary = recent
+            .filter((m: any) => m.role === "user" || m.role === "assistant")
+            .map((m: any) => {
+              const role = m.role === "user" ? "User" : "Assistant"
+              // Extract text content from message parts
+              const text = Array.isArray(m.parts)
+                ? m.parts
+                    .filter((p: any) => p.type === "text" && p.text)
+                    .map((p: any) => p.text)
+                    .join("\n")
+                    .slice(0, 500)
+                : typeof m.content === "string"
+                  ? m.content.slice(0, 500)
+                  : ""
+              return text ? `${role}: ${text}` : null
+            })
+            .filter(Boolean)
+            .join("\n\n")
+        } catch {
+          contextSummary = "(conversation context unavailable)"
+        }
+      }
+
+      const result = await callClaude({
+        system: "You are answering a quick side question about an ongoing coding conversation. Answer concisely (1-3 sentences). Do not use tools or take any actions. Just answer from what you know based on the conversation context provided.",
+        userMessage: contextSummary
+          ? `Here is the recent conversation context:\n\n${contextSummary}\n\n---\n\nSide question: ${input.question}`
+          : `Side question: ${input.question}`,
+        model: "haiku",
+        maxTokens: 1024,
+        timeoutMs: 30_000,
+      })
+
+      return { answer: result.text }
     }),
 
   /**
@@ -4792,8 +5037,10 @@ ${prompt}
     // aggressively rate-limited and often returns stale data).
     const realTime = getRealTimeUsage()
     if (realTime) {
+      console.log(`[usage] Returning real-time data: fiveHour=${JSON.stringify(realTime.fiveHour)} sevenDay=${JSON.stringify(realTime.sevenDay)}`)
       return realTime
     }
+    console.log(`[usage] No real-time data, falling back to OAuth API`)
 
     // Fall back to OAuth API with caching (5 min TTL for success, 1 min for rate limits)
     if (usageCache.data && Date.now() - usageCache.fetchedAt < USAGE_CACHE_TTL_MS) {
@@ -4843,6 +5090,7 @@ ${prompt}
     }
 
     const result = await fetchUsageWithRetry(accessToken, refreshToken)
+    console.log(`[usage] OAuth API result: ${JSON.stringify(result)}`)
     // Cache both success and rate_limited responses to avoid hammer hits
     if (!("error" in result) || result.error === "rate_limited") {
       usageCache.data = result
@@ -4850,4 +5098,125 @@ ${prompt}
     }
     return result
   }),
+
+  /**
+   * Optimize a prompt — cheap, fast rewrite to remove filler
+   * and improve clarity while preserving all meaning.
+   *
+   * Uses OpenRouter (free/cheap models) when available, falls back to callClaude (OAuth).
+   */
+  optimizePrompt: publicProcedure
+    .input(z.object({ text: z.string().min(20) }))
+    .mutation(async ({ input }) => {
+      const system = `You are a prompt optimizer. Rewrite the user's prompt to be concise and clear while preserving ALL meaning, intent, and technical specificity.
+
+Rules:
+- Remove filler words, redundancy, and stream-of-consciousness rambling
+- Preserve all @[...] mentions, /commands, code blocks, file paths, and technical terms exactly as written
+- Keep the same tone (casual stays casual, formal stays formal)
+- Do not add new ideas or change the intent
+- Output ONLY the rewritten prompt, nothing else`
+
+      console.log(`[optimizePrompt] Starting optimization, input length=${input.text.length}`)
+
+      const estimateTokens = (t: string) => {
+        const words = t.split(/\s+/).filter(Boolean).length
+        return Math.ceil(words * 1.3)
+      }
+
+      // Try OpenRouter first — doesn't require OAuth, works for all users
+      const { getSecureKey } = await import("./secure-store")
+      const openRouterKey = getSecureKey("openRouterKey")
+      console.log(`[optimizePrompt] OpenRouter key present: ${!!openRouterKey}, key length: ${openRouterKey?.length || 0}`)
+
+      if (openRouterKey) {
+        // Use a capable free/cheap model for prompt optimization
+        const models = [
+          "meta-llama/llama-3.3-70b-instruct:free",
+          "google/gemma-3-27b-it:free",
+          "qwen/qwen3-coder:free",
+        ]
+
+        for (const model of models) {
+          const controller = new AbortController()
+          const timeout = setTimeout(() => controller.abort(), 15_000)
+
+          try {
+            const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${openRouterKey}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://2code.dev",
+                "X-Title": "2Code",
+              },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: "system", content: system },
+                  { role: "user", content: input.text },
+                ],
+                temperature: 0.3,
+                max_tokens: 2048,
+              }),
+              signal: controller.signal,
+            })
+
+            if (!res.ok) {
+              const detail = await res.text().catch(() => "")
+              console.warn(`[optimizePrompt] OpenRouter ${model} HTTP ${res.status}: ${detail.slice(0, 200)}`)
+              // Abort on auth errors
+              if (res.status === 401 || res.status === 403) break
+              continue
+            }
+
+            const data = await res.json()
+            const text = data?.choices?.[0]?.message?.content?.trim()
+            if (text && text.length > 10) {
+              const usage = data?.usage
+              console.log(`[optimizePrompt] Success via OpenRouter ${model}, output length=${text.length}`)
+              return {
+                optimized: text,
+                originalTokenCount: usage?.prompt_tokens || estimateTokens(input.text),
+                optimizedTokenCount: usage?.completion_tokens || estimateTokens(text),
+              }
+            }
+            console.warn(`[optimizePrompt] OpenRouter ${model} returned empty/short response`)
+            continue
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            console.warn(`[optimizePrompt] OpenRouter ${model} failed: ${msg}`)
+            continue
+          } finally {
+            clearTimeout(timeout)
+          }
+        }
+
+        console.warn("[optimizePrompt] All OpenRouter models failed, falling back to callClaude")
+      }
+
+      // Fallback: use callClaude (requires OAuth token)
+      try {
+        const { callClaude } = await import("../../claude/api")
+        const result = await callClaude({
+          system,
+          userMessage: input.text,
+          model: "haiku",
+          maxTokens: 2048,
+          timeoutMs: 30_000,
+        })
+
+        console.log(`[optimizePrompt] Success via callClaude, output length=${result.text.length}`)
+
+        return {
+          optimized: result.text.trim(),
+          originalTokenCount: result.inputTokens || estimateTokens(input.text),
+          optimizedTokenCount: result.outputTokens || estimateTokens(result.text),
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[optimizePrompt] FAILED: ${msg}`)
+        throw err
+      }
+    }),
 })

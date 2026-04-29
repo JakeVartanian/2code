@@ -77,6 +77,10 @@ const IGNORED_DIRS = new Set([
 const routeCache = new Map<string, { routes: ScannedRoute[]; framework: string | null; timestamp: number }>()
 const ROUTE_CACHE_TTL = 5000
 
+// Validated route cache keyed by projectPath+serverUrl
+const validatedRouteCache = new Map<string, { routes: ScannedRoute[]; timestamp: number }>()
+const VALIDATED_CACHE_TTL = 10000
+
 interface ScannedRoute {
   path: string
   name: string
@@ -85,7 +89,7 @@ interface ScannedRoute {
   isDynamic: boolean
 }
 
-interface DetectedServer {
+export interface DetectedServer {
   port: number
   url: string
   framework: string | null
@@ -188,14 +192,22 @@ async function getProcessCwd(pid: number): Promise<string | null> {
  * Check if any process listening on the given port has a cwd
  * that is within (or is) the specified projectPath.
  */
-async function isPortOwnedByProject(port: number, projectPath: string): Promise<boolean> {
+async function isPortOwnedByProject(port: number, projectPath: string, additionalPaths?: string[]): Promise<boolean> {
   const pids = await getListeningPids(port)
   if (pids.length === 0) return false // Can't verify — allow it as a fallback
 
+  const pathsToCheck = [projectPath, ...(additionalPaths || [])]
+
   for (const pid of pids) {
     const cwd = await getProcessCwd(pid)
-    if (cwd && (cwd === projectPath || cwd.startsWith(projectPath + "/"))) {
-      return true
+    if (!cwd) continue
+
+    for (const checkPath of pathsToCheck) {
+      // Bidirectional containment: process CWD under project path, OR project path under process CWD.
+      // Handles monorepos where dev server runs from root but project is opened at a sub-package.
+      if (cwd === checkPath || cwd.startsWith(checkPath + "/") || checkPath.startsWith(cwd + "/")) {
+        return true
+      }
     }
   }
   return false
@@ -427,6 +439,112 @@ async function findRoutesDir(projectPath: string): Promise<{ dir: string; type: 
   return null
 }
 
+/**
+ * Check if a route returns a non-404 response from the dev server
+ */
+function checkRouteAlive(serverUrl: string, routePath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const url = `${serverUrl}${routePath}`
+    const req = http.get(url, { timeout: 2000 }, (res) => {
+      res.resume()
+      // Consider anything other than 404 as "alive"
+      resolve(res.statusCode !== 404)
+    })
+    req.on("error", () => resolve(false))
+    req.on("timeout", () => {
+      req.destroy()
+      resolve(false)
+    })
+  })
+}
+
+/**
+ * Validate routes against a running dev server, filtering out 404s
+ */
+async function validateRoutes(routes: ScannedRoute[], serverUrl: string): Promise<ScannedRoute[]> {
+  // Check all routes in parallel (with a concurrency limit)
+  const BATCH_SIZE = 10
+  const validRoutes: ScannedRoute[] = []
+
+  for (let i = 0; i < routes.length; i += BATCH_SIZE) {
+    const batch = routes.slice(i, i + BATCH_SIZE)
+    const results = await Promise.all(
+      batch.map(async (route) => {
+        // Skip dynamic routes — can't validate without real params
+        if (route.isDynamic) return { route, alive: true }
+        const alive = await checkRouteAlive(serverUrl, route.path)
+        return { route, alive }
+      }),
+    )
+    for (const { route, alive } of results) {
+      if (alive) validRoutes.push(route)
+    }
+  }
+
+  return validRoutes
+}
+
+/**
+ * Detect running dev servers for a project path.
+ * Scans common ports, verifies HTTP, checks process ownership.
+ * Exported for direct use by terminal context collector.
+ */
+export async function detectRunningServers(projectPath: string): Promise<DetectedServer[]> {
+  const { framework, expectedPort } = await detectFramework(projectPath)
+
+  // Build port list — expected port first, then common ports
+  const portsToCheck = new Set<number>()
+  if (expectedPort) portsToCheck.add(expectedPort)
+  for (const port of COMMON_DEV_PORTS) portsToCheck.add(port)
+
+  const servers: DetectedServer[] = []
+
+  // Probe all ports in parallel
+  const results = await Promise.all(
+    Array.from(portsToCheck).map(async (port) => {
+      // Try IPv4 first (127.0.0.1), then IPv6 (::1)
+      let open = await isPortOpen(port, "127.0.0.1")
+      if (!open) open = await isPortOpen(port, "::1")
+      if (!open) return null
+
+      // Verify it's an HTTP server
+      const isHttp = await isHttpServer(port)
+      if (!isHttp) return null
+
+      return {
+        port,
+        url: `http://localhost:${port}`,
+        framework: port === expectedPort ? framework : null,
+        status: "running" as const,
+      }
+    }),
+  )
+
+  for (const result of results) {
+    if (result) servers.push(result)
+  }
+
+  // If multiple servers detected, verify ownership via process cwd
+  // to avoid showing another workspace's server
+  if (servers.length > 1) {
+    const verified: DetectedServer[] = []
+    for (const server of servers) {
+      const owned = await isPortOwnedByProject(server.port, projectPath)
+      if (owned) verified.push(server)
+    }
+    // If at least one server is verified, return only verified ones
+    // Otherwise fall back to framework-expected port, then all results
+    if (verified.length > 0) return verified
+    // Fallback: prefer expected port server
+    if (expectedPort) {
+      const expected = servers.find((s) => s.port === expectedPort)
+      if (expected) return [expected]
+    }
+  }
+
+  return servers
+}
+
 export const devServerRouter = router({
   /**
    * Detect running dev servers for a project
@@ -434,111 +552,80 @@ export const devServerRouter = router({
   detectServers: publicProcedure
     .input(z.object({ projectPath: z.string() }))
     .query(async ({ input }): Promise<DetectedServer[]> => {
-      const { projectPath } = input
-      const { framework, expectedPort } = await detectFramework(projectPath)
-
-      // Build port list — expected port first, then common ports
-      const portsToCheck = new Set<number>()
-      if (expectedPort) portsToCheck.add(expectedPort)
-      for (const port of COMMON_DEV_PORTS) portsToCheck.add(port)
-
-      const servers: DetectedServer[] = []
-
-      // Probe all ports in parallel
-      const results = await Promise.all(
-        Array.from(portsToCheck).map(async (port) => {
-          // Try IPv4 first (127.0.0.1), then IPv6 (::1)
-          let open = await isPortOpen(port, "127.0.0.1")
-          if (!open) open = await isPortOpen(port, "::1")
-          if (!open) return null
-
-          // Verify it's an HTTP server
-          const isHttp = await isHttpServer(port)
-          if (!isHttp) return null
-
-          return {
-            port,
-            url: `http://localhost:${port}`,
-            framework: port === expectedPort ? framework : null,
-            status: "running" as const,
-          }
-        }),
-      )
-
-      for (const result of results) {
-        if (result) servers.push(result)
-      }
-
-      // If multiple servers detected, verify ownership via process cwd
-      // to avoid showing another workspace's server
-      if (servers.length > 1) {
-        const verified: DetectedServer[] = []
-        for (const server of servers) {
-          const owned = await isPortOwnedByProject(server.port, projectPath)
-          if (owned) verified.push(server)
-        }
-        // If at least one server is verified, return only verified ones
-        // Otherwise fall back to framework-expected port, then all results
-        if (verified.length > 0) return verified
-        // Fallback: prefer expected port server
-        if (expectedPort) {
-          const expected = servers.find((s) => s.port === expectedPort)
-          if (expected) return [expected]
-        }
-      }
-
-      return servers
+      return detectRunningServers(input.projectPath)
     }),
 
   /**
    * Scan project for route definitions
    */
   scanRoutes: publicProcedure
-    .input(z.object({ projectPath: z.string() }))
+    .input(z.object({ projectPath: z.string(), serverUrl: z.string().optional() }))
     .query(async ({ input }): Promise<{ routes: ScannedRoute[]; framework: string | null }> => {
-      const { projectPath } = input
+      const { projectPath, serverUrl } = input
 
-      // Check cache
-      const cached = routeCache.get(projectPath)
-      if (cached && Date.now() - cached.timestamp < ROUTE_CACHE_TTL) {
-        return { routes: cached.routes, framework: cached.framework }
-      }
-
-      const { framework } = await detectFramework(projectPath)
-      const routesDir = await findRoutesDir(projectPath)
-
-      let routes: ScannedRoute[] = []
-
-      if (routesDir) {
-        const maxDepth = 5
-        switch (routesDir.type) {
-          case "next-app":
-            routes = await scanNextAppRouter(routesDir.dir, "/", maxDepth)
-            break
-          case "next-pages":
-            routes = await scanNextPagesRouter(routesDir.dir, "/", maxDepth)
-            break
-          case "generic":
-            routes = await scanGenericRoutes(routesDir.dir, "/", maxDepth)
-            break
+      // Check validated cache first when serverUrl is provided
+      if (serverUrl) {
+        const cacheKey = `${projectPath}::${serverUrl}`
+        const validatedCached = validatedRouteCache.get(cacheKey)
+        if (validatedCached && Date.now() - validatedCached.timestamp < VALIDATED_CACHE_TTL) {
+          const { framework } = await detectFramework(projectPath)
+          return { routes: validatedCached.routes, framework }
         }
       }
 
-      // Sort: / first, then alphabetically
-      routes.sort((a, b) => {
-        if (a.path === "/") return -1
-        if (b.path === "/") return 1
-        return a.path.localeCompare(b.path)
-      })
+      // Check file-scan cache
+      const cached = routeCache.get(projectPath)
+      let routes: ScannedRoute[]
+      let framework: string | null
 
-      // Make sourceFile relative for display
-      routes = routes.map((r) => ({
-        ...r,
-        sourceFile: relative(projectPath, r.sourceFile),
-      }))
+      if (cached && Date.now() - cached.timestamp < ROUTE_CACHE_TTL) {
+        routes = cached.routes
+        framework = cached.framework
+      } else {
+        const detected = await detectFramework(projectPath)
+        framework = detected.framework
+        const routesDir = await findRoutesDir(projectPath)
 
-      // Cache
-      routeCache.set(projectPath, { routes, framework, timestamp: Date.now() })
+        routes = []
+
+        if (routesDir) {
+          const maxDepth = 5
+          switch (routesDir.type) {
+            case "next-app":
+              routes = await scanNextAppRouter(routesDir.dir, "/", maxDepth)
+              break
+            case "next-pages":
+              routes = await scanNextPagesRouter(routesDir.dir, "/", maxDepth)
+              break
+            case "generic":
+              routes = await scanGenericRoutes(routesDir.dir, "/", maxDepth)
+              break
+          }
+        }
+
+        // Sort: / first, then alphabetically
+        routes.sort((a, b) => {
+          if (a.path === "/") return -1
+          if (b.path === "/") return 1
+          return a.path.localeCompare(b.path)
+        })
+
+        // Make sourceFile relative for display
+        routes = routes.map((r) => ({
+          ...r,
+          sourceFile: relative(projectPath, r.sourceFile),
+        }))
+
+        // Cache file scan
+        routeCache.set(projectPath, { routes, framework, timestamp: Date.now() })
+      }
+
+      // Validate routes against running dev server if URL provided
+      if (serverUrl && routes.length > 0) {
+        routes = await validateRoutes(routes, serverUrl)
+        const cacheKey = `${projectPath}::${serverUrl}`
+        validatedRouteCache.set(cacheKey, { routes, timestamp: Date.now() })
+      }
 
       return { routes, framework }
     }),

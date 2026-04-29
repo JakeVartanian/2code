@@ -90,6 +90,7 @@ import {
 } from "../mentions"
 import { AgentContextIndicator, type MessageTokenData } from "../ui/agent-context-indicator"
 import { SessionCostIndicator } from "../ui/session-cost-indicator"
+import { PromptOptimizerChip } from "../ui/prompt-optimizer-strip"
 import { AgentDiffTextContextItem } from "../ui/agent-diff-text-context-item"
 import { AgentFileItem } from "../ui/agent-file-item"
 import { AgentImageItem } from "../ui/agent-image-item"
@@ -1690,6 +1691,13 @@ export const ChatInputArea = memo(function ChatInputArea({
                       }}
                     />
                   )}
+
+                  {/* Prompt optimizer chip */}
+                  <PromptOptimizerChip
+                    editorRef={editorRef}
+                    hasContent={hasContent}
+                    isStreaming={isStreaming}
+                  />
 
                 </div>
 

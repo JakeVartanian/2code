@@ -10,6 +10,9 @@ import {
   Bug,
   Settings,
   AlertTriangle,
+  Megaphone,
+  Compass,
+  Paintbrush,
 } from "lucide-react"
 
 // ─── Category metadata ──────────────────────────────────────────────────────
@@ -33,6 +36,9 @@ export const CATEGORIES = [
   "debugging",
   "preference",
   "gotcha",
+  "brand",
+  "strategy",
+  "design",
 ] as const
 
 export type Category = (typeof CATEGORIES)[number]
@@ -104,6 +110,39 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
     badgeText: "text-red-400",
     dotColor: "bg-red-400",
   },
+  brand: {
+    label: "Brand",
+    icon: Megaphone,
+    color: "border-pink-500/30",
+    glowRgb: "236,72,153",
+    textColor: "text-pink-400",
+    barFill: "bg-gradient-to-r from-pink-500 to-pink-400",
+    badgeBg: "bg-pink-500/15",
+    badgeText: "text-pink-400",
+    dotColor: "bg-pink-400",
+  },
+  strategy: {
+    label: "Strategy",
+    icon: Compass,
+    color: "border-indigo-500/30",
+    glowRgb: "99,102,241",
+    textColor: "text-indigo-400",
+    barFill: "bg-gradient-to-r from-indigo-500 to-indigo-400",
+    badgeBg: "bg-indigo-500/15",
+    badgeText: "text-indigo-400",
+    dotColor: "bg-indigo-400",
+  },
+  design: {
+    label: "Design",
+    icon: Paintbrush,
+    color: "border-yellow-500/30",
+    glowRgb: "234,179,8",
+    textColor: "text-yellow-400",
+    barFill: "bg-gradient-to-r from-yellow-500 to-yellow-400",
+    badgeBg: "bg-yellow-500/15",
+    badgeText: "text-yellow-400",
+    dotColor: "bg-yellow-400",
+  },
 }
 
 // ─── Semantic connections between categories ────────────────────────────────
@@ -121,6 +160,9 @@ export const CATEGORY_CONNECTIONS: CategoryConnection[] = [
   { from: "debugging", to: "gotcha", label: "pitfalls" },
   { from: "deployment", to: "debugging", label: "ops" },
   { from: "gotcha", to: "architecture", label: "design" },
+  { from: "brand", to: "design", label: "identity" },
+  { from: "strategy", to: "brand", label: "direction" },
+  { from: "design", to: "convention", label: "components" },
 ]
 
 // ─── State colors ───────────────────────────────────────────────────────────

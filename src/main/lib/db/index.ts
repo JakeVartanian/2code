@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from "fs"
 import { readdir as readdirAsync, rm as rmAsync } from "fs/promises"
 import crypto from "crypto"
 import * as schema from "./schema"
+import { initFTS } from "../memory/fts"
 
 let db: ReturnType<typeof drizzle<typeof schema>> | null = null
 let sqlite: Database.Database | null = null
@@ -172,7 +173,22 @@ export function initDatabase() {
     }
   }
 
+  // Initialize FTS5 full-text search index
+  try {
+    initFTS(sqlite)
+  } catch (err) {
+    console.warn("[DB] FTS5 init failed (non-critical):", err)
+  }
+
   return db
+}
+
+/**
+ * Get the raw better-sqlite3 database handle for FTS5 queries.
+ * Returns null if the database hasn't been initialized.
+ */
+export function getSqlite(): Database.Database | null {
+  return sqlite
 }
 
 /**

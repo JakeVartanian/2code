@@ -62,6 +62,57 @@ const RULES: HeuristicRule[] = [
     description: "A `debugger` statement was found. This will pause execution in browsers and should be removed before shipping.",
     confidence: 90,
   },
+  {
+    id: "api-contract-change",
+    category: "risk",
+    severity: "warning",
+    extensions: [".ts", ".tsx", ".js", ".jsx"],
+    pattern: /export\s+(?:function|const|class|interface|type|enum)\s+\w+/,
+    title: "Exported API surface changed",
+    description: "An exported function, type, or class was modified. Consumers of this export may need updates.",
+    confidence: 70,
+  },
+  {
+    id: "error-swallowing",
+    category: "bug",
+    severity: "warning",
+    extensions: [".ts", ".tsx", ".js", ".jsx"],
+    pattern: /catch\s*\([^)]*\)\s*\{\s*\}/,
+    title: "Empty catch block swallows errors",
+    description: "An empty catch block silently swallows errors, making failures invisible. At minimum log the error.",
+    confidence: 75,
+  },
+  // ─── Design heuristics ──────────────────────────────────────────────────
+  {
+    id: "hardcoded-color",
+    category: "design",
+    severity: "warning",
+    extensions: [".css", ".scss", ".tsx", ".jsx"],
+    pattern: /(?:color|background|border|fill|stroke)\s*:\s*#[0-9a-fA-F]{3,8}(?!\s*\*\/)/,
+    title: "Hardcoded color value — consider using a design token",
+    description: "A hex color value is hardcoded in styles instead of using a CSS variable or theme token. This makes it harder to maintain consistent branding.",
+    confidence: 60,
+  },
+  {
+    id: "hardcoded-font-size",
+    category: "design",
+    severity: "info",
+    extensions: [".css", ".scss", ".tsx", ".jsx"],
+    pattern: /font-size:\s*\d+px|text-\[\d+px\]/,
+    title: "Hardcoded font size — consider using a type scale",
+    description: "A pixel font size is hardcoded instead of using a type scale token or Tailwind preset. Consistent typography improves brand coherence.",
+    confidence: 55,
+  },
+  {
+    id: "new-ui-component",
+    category: "next-step",
+    severity: "info",
+    extensions: [".tsx", ".jsx"],
+    pattern: /export\s+(?:default\s+)?function\s+\w+(?:Page|Screen|Modal|Dialog|Card|Widget|Panel)/,
+    title: "New UI component detected",
+    description: "A new UI component was added. Consider reviewing it against the project's design system and brand guidelines.",
+    confidence: 65,
+  },
 ]
 
 // ============ FILE-LEVEL FILTERS ============
@@ -98,6 +149,20 @@ export function runHeuristics(
   // Analyze each changed file
   for (const file of batch.files) {
     if (file.type === "unlink") continue // Can't analyze deleted files
+
+    // .pen file change → design-relevant event (can't read content — binary/encrypted)
+    if (file.ext === ".pen") {
+      results.push({
+        category: "next-step",
+        severity: "info",
+        title: `Design file modified: ${file.path}`,
+        description: "A Pencil design file was changed. Review it in the Design tab for brand consistency and token alignment.",
+        confidence: 70,
+        triggerFiles: [file.path],
+        triggerEvent: "file-change",
+      })
+      continue
+    }
 
     const fileResults = analyzeFile(file, batch.projectPath, sensitivityThreshold)
     results.push(...fileResults)
@@ -154,6 +219,61 @@ function analyzeFile(
         triggerEvent: "file-change",
       })
     }
+  }
+
+  return results
+}
+
+// ============ DOC DRIFT DETECTION ============
+
+export interface DocDriftResult {
+  file: string
+  staleReferences: string[]
+}
+
+/**
+ * Check if CLAUDE.md or README.md reference file paths that no longer exist.
+ * Free filesystem check — only runs when these files are in the changed set.
+ */
+export function checkDocDrift(
+  changedPaths: string[],
+  projectPath: string,
+): DocDriftResult[] {
+  const results: DocDriftResult[] = []
+  const docFiles = changedPaths.filter(p =>
+    /^(CLAUDE\.md|README\.md|readme\.md)$/i.test(p.split("/").pop() ?? ""),
+  )
+
+  for (const docFile of docFiles) {
+    const fullPath = join(projectPath, docFile)
+    if (!existsSync(fullPath)) continue
+
+    try {
+      const content = readFileSync(fullPath, "utf-8")
+      const staleRefs: string[] = []
+
+      // Extract file path references (src/..., lib/..., etc.)
+      const pathRefs = content.match(/(?:src|lib|packages|app|components|features|utils)\/[\w\-./]+\.\w+/g) ?? []
+      for (const ref of new Set(pathRefs)) {
+        const refPath = join(projectPath, ref)
+        if (!existsSync(refPath)) {
+          staleRefs.push(ref)
+        }
+      }
+
+      // Extract directory references
+      const dirRefs = content.match(/(?:src|lib|packages|app)\/[\w\-./]+\//g) ?? []
+      for (const ref of new Set(dirRefs)) {
+        const refPath = join(projectPath, ref.replace(/\/$/, ""))
+        if (!existsSync(refPath)) {
+          staleRefs.push(ref)
+        }
+      }
+
+      if (staleRefs.length > 0) {
+        results.push({ file: docFile, staleReferences: [...new Set(staleRefs)] })
+      }
+    } catch { /* non-critical */ }
   }
 
   return results

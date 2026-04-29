@@ -87,7 +87,8 @@ export async function synthesizeSystemMap(
       (m) =>
         m.category === "architecture" ||
         m.category === "deployment" ||
-        m.category === "convention",
+        m.category === "convention" ||
+        m.category === "design", // UI/UX zones deserve map representation
     )
 
   if (memories.length === 0) {

@@ -27,6 +27,7 @@ import { crashRecoveryRouter } from "./crash-recovery"
 import { memoryRouter } from "./memory"
 import { orchestrationRouter } from "./orchestration"
 import { ambientRouter } from "./ambient"
+import { designRouter } from "./design"
 import { createGitRouter } from "../../git"
 import { BrowserWindow } from "electron"
 
@@ -64,6 +65,7 @@ export function createAppRouter(getWindow: () => BrowserWindow | null) {
     memory: memoryRouter,
     orchestration: orchestrationRouter,
     ambient: ambientRouter,
+    design: designRouter,
     // Git operations - named "changes" to match Superset API
     changes: createGitRouter(),
   })

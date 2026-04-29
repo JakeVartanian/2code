@@ -16,6 +16,7 @@ export type SuggestionCategory =
   | "next-step"    // what to build/do next (includes ideas, momentum, tools)
   | "risk"         // something that might bite you (includes security, performance)
   | "memory"       // pattern worth remembering (auto-saved to project memory)
+  | "design"       // design consistency, brand drift, visual suggestion
 
 export type SuggestionSeverity = "info" | "warning" | "error"
 

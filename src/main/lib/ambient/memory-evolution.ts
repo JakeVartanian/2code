@@ -7,9 +7,10 @@
  */
 
 import { eq, and, sql } from "drizzle-orm"
-import { getDatabase } from "../db"
+import { getDatabase, getSqlite } from "../db"
 import { projectMemories } from "../db/schema"
 import { createId } from "../db/utils"
+import { findSimilarMemories as ftsFindSimilar } from "../memory/fts"
 
 export type EvolutionResult = "created" | "updated" | "skipped"
 
@@ -58,8 +59,8 @@ export function evolveMemory(
       return "updated" as EvolutionResult
     }
 
-    // Check for high content overlap (fuzzy dedup)
-    const similar = findSimilarMemory(existing, observation)
+    // Check for high content overlap (fuzzy dedup via FTS5 + fallback)
+    const similar = findSimilarMemory(existing, observation, projectId)
     if (similar) {
       // Update existing memory with new context if it adds information
       const mergedContent = mergeContent(similar.content, observation.content)
@@ -173,26 +174,75 @@ export function boostMemoryConfidence(memoryId: string, boost: number = 5): void
     .run()
 }
 
+/**
+ * Enrich an existing memory with new content from an overlapping extraction.
+ * Merges the new observation into the existing memory, boosts score, increments validationCount.
+ */
+export async function enrichMemory(
+  memoryId: string,
+  newContent: string,
+): Promise<void> {
+  const db = getDatabase()
+
+  const memory = db.select()
+    .from(projectMemories)
+    .where(eq(projectMemories.id, memoryId))
+    .get()
+
+  if (!memory) return
+
+  // Intelligent merge: if new content is substantially different, append as update
+  const merged = mergeContent(memory.content, newContent)
+
+  db.update(projectMemories)
+    .set({
+      content: merged,
+      relevanceScore: sql`MIN(100, ${projectMemories.relevanceScore} + 5)`,
+      validationCount: sql`${projectMemories.validationCount} + 1`,
+      validatedAt: new Date(),
+      isStale: false,
+      updatedAt: new Date(),
+    })
+    .where(eq(projectMemories.id, memoryId))
+    .run()
+
+  console.log(`[Memory] Enriched memory "${memory.title}" (validation #${(memory.validationCount ?? 0) + 1})`)
+
+  // Flag map for refresh if architecture-related category was enriched
+  if (["architecture", "deployment", "convention", "design"].includes(memory.category)) {
+    try {
+      const { flagMapForRefresh } = require("./map-freshness")
+      flagMapForRefresh(memory.projectId, `Memory enriched: ${memory.title}`)
+    } catch { /* non-critical */ }
+  }
+}
+
 // ============ INTERNAL HELPERS ============
 
 function findSimilarMemory(
   memories: Array<{ id: string; title: string; content: string; relevanceScore: number | null; linkedFiles: string | null }>,
   observation: ObservedPattern,
+  projectId?: string,
 ): (typeof memories)[number] | null {
-  const obsWords = new Set(observation.content.toLowerCase().split(/\s+/).filter(w => w.length > 3))
+  // FTS5 path: fast semantic similarity via full-text search
+  const rawSqlite = getSqlite()
+  if (rawSqlite && projectId) {
+    const ftsMatches = ftsFindSimilar(rawSqlite, projectId, observation.title, observation.content, 3)
+    if (ftsMatches.length > 0 && ftsMatches[0].rank < -5) {
+      const match = memories.find(m => m.id === ftsMatches[0].memoryId)
+      if (match) return match
+    }
+  }
 
+  // Fallback: word overlap
+  const obsWords = new Set(observation.content.toLowerCase().split(/\s+/).filter(w => w.length > 3))
   for (const memory of memories) {
     const memWords = new Set(memory.content.toLowerCase().split(/\s+/).filter(w => w.length > 3))
-
-    // Calculate word overlap
     let overlap = 0
     for (const word of obsWords) {
       if (memWords.has(word)) overlap++
     }
-
     const overlapRatio = obsWords.size > 0 ? overlap / obsWords.size : 0
-
-    // 70%+ word overlap = too similar, deduplicate
     if (overlapRatio > 0.7) return memory
   }
 
@@ -200,13 +250,35 @@ function findSimilarMemory(
 }
 
 function mergeContent(existing: string, newContent: string): string {
+  const MAX_CONTENT_LENGTH = 2000 // Cap total content to prevent unbounded growth across enrichment cycles
+
   // If new content is substantially longer, it's likely more detailed — prefer it
-  if (newContent.length > existing.length * 1.5) return newContent
+  if (newContent.length > existing.length * 1.5) return newContent.slice(0, MAX_CONTENT_LENGTH)
 
-  // If existing is longer, keep it but append any new info
-  if (existing.length > newContent.length * 1.5) return existing
+  // If existing is substantially longer, keep it
+  if (existing.length > newContent.length * 1.5) return existing.slice(0, MAX_CONTENT_LENGTH)
 
-  // Similar length — keep existing (already validated by being in memory)
+  // Similar length — check if new content adds genuinely different info
+  const existingWords = new Set(existing.toLowerCase().split(/\s+/).filter(w => w.length > 3))
+  const newWords = newContent.toLowerCase().split(/\s+/).filter(w => w.length > 3)
+  const novelWords = newWords.filter(w => !existingWords.has(w))
+  const noveltyRatio = newWords.length > 0 ? novelWords.length / newWords.length : 0
+
+  // If >30% of words are novel, append as an update (but cap total length)
+  if (noveltyRatio > 0.3) {
+    const merged = `${existing}\n\n**Update:** ${newContent}`
+    if (merged.length > MAX_CONTENT_LENGTH) {
+      // Too long — keep existing and trim new content to fit
+      const budget = MAX_CONTENT_LENGTH - existing.length - 15 // 15 for "\n\n**Update:** "
+      if (budget > 50) {
+        return `${existing}\n\n**Update:** ${newContent.slice(0, budget)}...`
+      }
+      return existing // No room to append meaningfully
+    }
+    return merged
+  }
+
+  // Mostly the same info — keep existing (already validated)
   return existing
 }
 

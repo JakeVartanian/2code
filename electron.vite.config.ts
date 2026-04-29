@@ -51,6 +51,31 @@ export default defineConfig({
   renderer: {
     plugins: [
       react(),
+      // Prevent streamdown's unused code-block and mermaid components from pulling
+      // in all 213 shiki grammar chunks + full mermaid bundle. We override both
+      // the `code` component (using our own CodeBlock + shiki-theme-loader with
+      // only 12 languages) and handle mermaid rendering ourselves.
+      {
+        name: "exclude-streamdown-heavy-chunks",
+        enforce: "pre",
+        resolveId(source, importer) {
+          // Block streamdown's lazy imports of code-block (pulls in full shiki)
+          // and mermaid (we have our own mermaid-block.tsx)
+          if (
+            importer?.includes("node_modules/streamdown") &&
+            (source.includes("code-block") || source.includes("mermaid"))
+          ) {
+            return { id: `\0streamdown-stub:${source}`, moduleSideEffects: false }
+          }
+          return null
+        },
+        load(id) {
+          if (id.startsWith("\0streamdown-stub:")) {
+            return "export const CodeBlock = () => null; export const Mermaid = () => null;"
+          }
+          return null
+        },
+      },
     ],
     resolve: {
       alias: {

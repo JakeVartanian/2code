@@ -6,8 +6,8 @@
  * Flow: Goal input → Decomposition (Claude call) → Plan Review (editable) → Start Run
  */
 
-import { memo, useState, useCallback, useMemo } from "react"
-import { useAtomValue } from "jotai"
+import { memo, useState, useCallback, useMemo, useEffect } from "react"
+import { useAtomValue, useSetAtom } from "jotai"
 import {
   Play,
   Pause,
@@ -26,6 +26,7 @@ import { PipelineView } from "./pipeline-view"
 import { PlanEditor, type PlanTask } from "./plan-editor"
 import { useOrchestrationStore } from "../../stores/orchestration-store"
 import { useAgentSubChatStore } from "../../stores/sub-chat-store"
+import { gaadOrchestratorGoalAtom } from "../../../../features/ambient/atoms"
 import type { Autonomy, OrchestrationRun } from "../../stores/orchestration-store"
 
 interface OrchestratorViewProps {
@@ -40,6 +41,8 @@ export const OrchestratorView = memo(function OrchestratorView({
   onNavigateToSubChat,
 }: OrchestratorViewProps) {
   const selectedProject = useAtomValue(selectedProjectAtom)
+  const gaadGoal = useAtomValue(gaadOrchestratorGoalAtom)
+  const clearGaadGoal = useSetAtom(gaadOrchestratorGoalAtom)
   const [goalInput, setGoalInput] = useState("")
   const [showHistory, setShowHistory] = useState(false)
   const [isDecomposing, setIsDecomposing] = useState(false)
@@ -51,6 +54,14 @@ export const OrchestratorView = memo(function OrchestratorView({
     tasks: PlanTask[]
     userGoal: string
   } | null>(null)
+
+  // Consume goal pre-filled by Ask GAAD
+  useEffect(() => {
+    if (gaadGoal) {
+      setGoalInput(gaadGoal)
+      clearGaadGoal(null)
+    }
+  }, [gaadGoal, clearGaadGoal])
 
   // Store
   const run = useOrchestrationStore((s) => s.getRunForChat(chatId))

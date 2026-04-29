@@ -60,12 +60,21 @@ function trimToolOutput(value: unknown): unknown {
   return value
 }
 
+// Cache trimmed results — keyed by input string reference or content hash.
+// The DB returns the same string object for unchanged rows, so reference
+// equality is the fast path. Falls back to a small LRU of recent results.
+const trimCache = new Map<string, string>() // messagesJson → trimmedJson
+const TRIM_CACHE_MAX = 50
+
 /**
  * Trim message parts for renderer display.
  * Strips large tool output/result content, keeping metadata and small excerpts.
  * Returns a new array (does NOT mutate the input).
+ * Results are cached to avoid re-parsing/cloning on repeated reads.
  */
 function trimMessagesForRenderer(messagesJson: string): string {
+  const cached = trimCache.get(messagesJson)
+  if (cached !== undefined) return cached
   try {
     const messages = JSON.parse(messagesJson)
     if (!Array.isArray(messages)) return messagesJson
@@ -92,7 +101,14 @@ function trimMessagesForRenderer(messagesJson: string): string {
       return { ...msg, parts: newParts }
     })
 
-    return JSON.stringify(trimmed)
+    const result = JSON.stringify(trimmed)
+    // Evict oldest if cache is full
+    if (trimCache.size >= TRIM_CACHE_MAX) {
+      const firstKey = trimCache.keys().next().value
+      if (firstKey !== undefined) trimCache.delete(firstKey)
+    }
+    trimCache.set(messagesJson, result)
+    return result
   } catch {
     return messagesJson // Return original on parse error
   }
@@ -153,18 +169,23 @@ function sendWorktreeSetupFailure(
  * Fast, zero-cost title generation from the user's first message.
  */
 // Free models to try in order — OpenRouter rotates availability frequently
+// Updated 2026-04-25: refreshed from OpenRouter /models endpoint
 const FREE_MODELS_FOR_NAMING = [
-  "meta-llama/llama-3.1-8b-instruct:free",
-  "meta-llama/llama-3-8b-instruct:free",
-  "qwen/qwen3-8b:free",
-  "mistralai/mistral-7b-instruct:free",
-  "google/gemma-2-9b-it:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemma-3-12b-it:free",
+  "google/gemma-3-27b-it:free",
+  "qwen/qwen3-coder:free",
+  "nvidia/nemotron-nano-9b-v2:free",
+  "meta-llama/llama-3.2-3b-instruct:free",
+  "google/gemma-3-4b-it:free",
 ]
 
 async function generateChatNameWithOpenRouter(
   userMessage: string,
   apiKey: string,
 ): Promise<string | null> {
+  const errors: string[] = []
+
   for (const model of FREE_MODELS_FOR_NAMING) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 5000)
@@ -175,6 +196,8 @@ async function generateChatNameWithOpenRouter(
         headers: {
           "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          "HTTP-Referer": "https://2code.dev",
+          "X-Title": "2Code",
         },
         body: JSON.stringify({
           model,
@@ -195,29 +218,49 @@ async function generateChatNameWithOpenRouter(
       })
 
       if (!res.ok) {
-        console.warn(`[generateChatNameWithOpenRouter] Model ${model} returned ${res.status}, trying next...`)
+        let detail = ""
+        try { detail = await res.text() } catch { /* ignore */ }
+        const reason = `${model}: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 200)}` : ""}`
+        errors.push(reason)
+        console.warn(`[generateChatNameWithOpenRouter] ${reason}`)
+        // Only abort all retries on 401/403 if the error is clearly about the API key,
+        // not about a missing/removed model (which OpenRouter sometimes returns as 4xx)
+        if (res.status === 401 || res.status === 403) {
+          const isAuthError = detail.toLowerCase().includes("api key") ||
+            detail.toLowerCase().includes("invalid credentials") ||
+            detail.toLowerCase().includes("unauthorized") ||
+            detail.toLowerCase().includes("user not found")
+          if (isAuthError) {
+            console.error("[generateChatNameWithOpenRouter] API key rejected, aborting all retries")
+            break
+          }
+        }
         continue
       }
 
       const data = await res.json()
-      const name = data?.choices?.[0]?.message?.content?.trim()
-      if (!name || name.length < 2 || name.length > 60) {
-        console.warn(`[generateChatNameWithOpenRouter] Model ${model} returned invalid name: "${name}"`)
+      const rawName = data?.choices?.[0]?.message?.content?.trim()
+      if (!rawName || rawName.length < 2 || rawName.length > 60) {
+        errors.push(`${model}: invalid name "${rawName}"`)
+        console.warn(`[generateChatNameWithOpenRouter] Model ${model} returned invalid name: "${rawName}"`)
         continue
       }
 
-      console.log(`[generateChatNameWithOpenRouter] Success with ${model}: "${name}"`)
       // Strip quotes if the model wrapped the title
-      return name.replace(/^["']|["']$/g, "").trim()
+      const name = rawName.replace(/^["']|["']$/g, "").trim()
+      console.log(`[generateChatNameWithOpenRouter] Success with ${model}: "${name}"`)
+      return name
     } catch (error) {
-      console.warn(`[generateChatNameWithOpenRouter] Model ${model} failed:`, error instanceof Error ? error.message : error)
+      const msg = error instanceof Error ? error.message : String(error)
+      errors.push(`${model}: ${msg}`)
+      console.warn(`[generateChatNameWithOpenRouter] Model ${model} failed: ${msg}`)
       continue
     } finally {
       clearTimeout(timeout)
     }
   }
 
-  console.error("[generateChatNameWithOpenRouter] All free models failed")
+  console.error(`[generateChatNameWithOpenRouter] All models failed:\n  ${errors.join("\n  ")}`)
   return null
 }
 
@@ -494,7 +537,7 @@ export const chatsRouter = router({
         baseBranch: z.string().optional(), // Branch to base the worktree off
         branchType: z.enum(["local", "remote"]).optional(), // Whether baseBranch is local or remote
         useWorktree: z.boolean().default(true), // If false, work directly in project dir
-        mode: z.enum(["plan", "agent", "orchestrator", "system-map"]).default("agent"),
+        mode: z.enum(["plan", "agent", "orchestrator", "system-map", "design"]).default("agent"),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -670,6 +713,19 @@ export const chatsRouter = router({
       return db
         .update(chats)
         .set({ baseBranch: input.baseBranch, updatedAt: new Date() })
+        .where(eq(chats.id, input.id))
+        .returning()
+        .get()
+    }),
+
+  /** Sync branch field when agent switches branches via raw git commands */
+  updateBranch: publicProcedure
+    .input(z.object({ id: z.string(), branch: z.string().min(1) }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      return db
+        .update(chats)
+        .set({ branch: input.branch, updatedAt: new Date() })
         .where(eq(chats.id, input.id))
         .returning()
         .get()
@@ -964,7 +1020,7 @@ export const chatsRouter = router({
       z.object({
         chatId: z.string(),
         name: z.string().optional(),
-        mode: z.enum(["plan", "agent", "orchestrator", "system-map"]).default("agent"),
+        mode: z.enum(["plan", "agent", "orchestrator", "system-map", "design"]).default("agent"),
       }),
     )
     .mutation(({ input }) => {
@@ -1261,7 +1317,7 @@ export const chatsRouter = router({
    * Update sub-chat mode
    */
   updateSubChatMode: publicProcedure
-    .input(z.object({ id: z.string(), mode: z.enum(["plan", "agent", "orchestrator", "system-map"]) }))
+    .input(z.object({ id: z.string(), mode: z.enum(["plan", "agent", "orchestrator", "system-map", "design"]) }))
     .mutation(({ input }) => {
       const db = getDatabase()
       return db
@@ -1279,12 +1335,16 @@ export const chatsRouter = router({
     .input(z.object({ id: z.string(), name: z.string().min(1) }))
     .mutation(({ input }) => {
       const db = getDatabase()
-      return db
+      const result = db
         .update(subChats)
         .set({ name: input.name })
         .where(eq(subChats.id, input.id))
         .returning()
         .get()
+      if (!result) {
+        throw new Error(`Sub-chat ${input.id} not found in database`)
+      }
+      return result
     }),
 
   /**
@@ -1589,27 +1649,128 @@ export const chatsRouter = router({
     }))
     .mutation(async ({ input }) => {
       try {
-        // Try OpenRouter first (free model, fast)
-        if (input.openRouterApiKey) {
-          const orName = await generateChatNameWithOpenRouter(input.userMessage, input.openRouterApiKey)
+        // Read OpenRouter key server-side from secure store — don't rely on the
+        // renderer's Jotai atom which may not have hydrated yet at rename time.
+        const { getSecureKey } = await import("./secure-store")
+        const serverKey = getSecureKey("openRouterKey")
+        const openRouterKey = input.openRouterApiKey || serverKey
+        console.log(`[generateSubChatName] ENTRY — clientKey=${!!input.openRouterApiKey} serverKey=${!!serverKey} finalKey=${!!openRouterKey} msgLen=${input.userMessage.length}`)
+
+        // 1. Try OpenRouter free models (fast, zero-cost)
+        if (openRouterKey) {
+          const orName = await generateChatNameWithOpenRouter(input.userMessage, openRouterKey)
           if (orName) {
             console.log("[generateSubChatName] Generated name via OpenRouter:", orName)
             return { name: orName }
           }
+          console.warn("[generateSubChatName] OpenRouter failed, trying callClaude...")
+        } else {
+          console.log("[generateSubChatName] No OpenRouter key, trying callClaude...")
         }
 
-        // Try Ollama (local/offline)
+        // 2. Try callClaude with Haiku (reliable if user has Claude subscription)
+        try {
+          const { callClaude } = await import("../../claude/api")
+          const result = await callClaude({
+            system: "Generate a concise 3-6 word title for this coding chat message. Return ONLY the title, no quotes, no punctuation, no explanation.",
+            userMessage: input.userMessage.slice(0, 500),
+            model: "haiku",
+            maxTokens: 20,
+            timeoutMs: 15_000,
+          })
+          const claudeName = result.text.trim().replace(/^["']|["']$/g, "").trim()
+          if (claudeName && claudeName.length >= 2 && claudeName.length <= 60) {
+            console.log("[generateSubChatName] Generated name via callClaude:", claudeName)
+            return { name: claudeName }
+          }
+          console.warn("[generateSubChatName] callClaude returned invalid name:", claudeName)
+        } catch (err) {
+          console.warn("[generateSubChatName] callClaude failed:", err instanceof Error ? err.message : err)
+        }
+
+        // 3. Try Ollama (local/offline)
         const ollamaName = await generateChatNameWithOllama(input.userMessage, input.ollamaModel)
         if (ollamaName) {
           console.log("[generateSubChatName] Generated name via Ollama:", ollamaName)
           return { name: ollamaName }
         }
 
-        return { name: getFallbackName(input.userMessage) }
+        // 4. Last resort: truncated message
+        const fallback = getFallbackName(input.userMessage)
+        console.log("[generateSubChatName] All AI naming failed, using fallback:", fallback)
+        return { name: fallback }
       } catch (error) {
         console.error("[generateSubChatName] Error:", error)
-        return { name: getFallbackName(input.userMessage) }
+        const fallback = getFallbackName(input.userMessage)
+        return { name: fallback }
       }
+    }),
+
+  /**
+   * Diagnostic: test naming pipeline components individually.
+   * Call from renderer console: window.trpc.chats.debugNaming.mutate({ test: "hello world test message here" })
+   */
+  debugNaming: publicProcedure
+    .input(z.object({ test: z.string().default("Debug test: fix login bug in auth module") }))
+    .mutation(async ({ input }) => {
+      const results: Record<string, unknown> = {}
+
+      // 1. Test getSecureKey
+      try {
+        const { getSecureKey } = await import("./secure-store")
+        const key = getSecureKey("openRouterKey")
+        results.secureKeyPresent = !!key
+        results.secureKeyLength = key?.length || 0
+        results.secureKeyPrefix = key ? key.slice(0, 8) + "..." : "(empty)"
+      } catch (e) {
+        results.secureKeyError = (e as Error).message
+      }
+
+      // 2. Test OpenRouter naming
+      try {
+        const { getSecureKey } = await import("./secure-store")
+        const key = getSecureKey("openRouterKey")
+        if (key) {
+          const orName = await generateChatNameWithOpenRouter(input.test, key)
+          results.openRouterName = orName
+          results.openRouterSuccess = !!orName
+        } else {
+          results.openRouterSkipped = "no key"
+        }
+      } catch (e) {
+        results.openRouterError = (e as Error).message
+      }
+
+      // 3. Test callClaude
+      try {
+        const { callClaude } = await import("../../claude/api")
+        const result = await callClaude({
+          system: "Generate a concise 3-6 word title for this coding chat message. Return ONLY the title.",
+          userMessage: input.test,
+          model: "haiku",
+          maxTokens: 20,
+          timeoutMs: 15_000,
+        })
+        results.callClaudeName = result.text.trim()
+        results.callClaudeSuccess = true
+      } catch (e) {
+        results.callClaudeError = (e as Error).message
+      }
+
+      // 4. Test Ollama
+      try {
+        const ollamaName = await generateChatNameWithOllama(input.test, null)
+        results.ollamaName = ollamaName
+        results.ollamaSuccess = !!ollamaName
+      } catch (e) {
+        results.ollamaError = (e as Error).message
+      }
+
+      // 5. Test fallback
+      results.fallbackName = getFallbackName(input.test)
+
+      console.log("[debugNaming] Full results:", JSON.stringify(results, null, 2))
+      return results
     }),
 
   // ============ PR-related procedures ============

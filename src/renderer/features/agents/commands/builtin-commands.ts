@@ -44,6 +44,13 @@ export const CLI_PASSTHROUGH_COMMANDS = new Set(["usage", "doctor", "config", "m
  */
 export const BUILTIN_SLASH_COMMANDS: SlashCommandOption[] = [
   {
+    id: "builtin:btw",
+    name: "btw",
+    command: "/btw",
+    description: "Ask a side question without interrupting the current stream",
+    category: "builtin",
+  },
+  {
     id: "builtin:clear",
     name: "clear",
     command: "/clear",

@@ -27,6 +27,8 @@ export const projects = sqliteTable("projects", {
   systemMapBuiltAt: integer("system_map_built_at", { mode: "timestamp" }),
   // Ambient agent auto-start (persists across restarts)
   ambientEnabled: integer("ambient_enabled", { mode: "boolean" }).notNull().$default(() => true),
+  // Last weekly synthesis timestamp (persists across restarts)
+  lastSynthesisAt: integer("last_synthesis_at", { mode: "timestamp" }),
 })
 
 export const projectsRelations = relations(projects, ({ many }) => ({
@@ -160,8 +162,11 @@ export const projectMemories = sqliteTable("project_memories", {
   isStale: integer("is_stale", { mode: "boolean" }).$default(() => false),
   linkedFiles: text("linked_files"), // JSON array of file paths
   isArchived: integer("is_archived", { mode: "boolean" }).$default(() => false),
+  // Consolidation fields
+  consolidatedFrom: text("consolidated_from"), // JSON array of source memory IDs
+  validationCount: integer("validation_count").notNull().default(0), // times confirmed by overlapping extractions
   // Memory cycling fields
-  state: text("state").notNull().default("active"), // "active" | "cold" | "dead"
+  state: text("state").notNull().default("active"), // "active" | "cold" | "dead" | "absorbed"
   injectionCount: integer("injection_count").notNull().default(0),
   utilityCount: integer("utility_count").notNull().default(0),
   lastUtilityAt: integer("last_utility_at", { mode: "timestamp" }),
@@ -492,6 +497,52 @@ export const ambientBudgetRelations = relations(ambientBudget, ({ one }) => ({
     references: [projects.id],
   }),
 }))
+
+// ============ MAINTENANCE ACTIONS ============
+// GAAD maintenance actions requiring user approval (system map refresh, memory writes, audits, etc.)
+export const maintenanceActions = sqliteTable("maintenance_actions", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  type: text("type").notNull(), // "refresh-system-map" | "update-memory" | "run-zone-audit" | "refresh-docs" | "archive-stale-memory"
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  details: text("details"), // JSON — type-specific payload (e.g., which files are uncovered, which zone is stale)
+  status: text("status").notNull().default("pending"), // "pending" | "approved" | "denied" | "completed" | "failed"
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+}, (table) => [
+  index("maintenance_actions_project_status_idx").on(table.projectId, table.status),
+])
+
+export const maintenanceActionsRelations = relations(maintenanceActions, ({ one }) => ({
+  project: one(projects, {
+    fields: [maintenanceActions.projectId],
+    references: [projects.id],
+  }),
+}))
+
+// ============ SESSION FILE ACTIVITY ============
+// Tracks which files are modified per session for cross-session churn detection
+export const sessionFileActivity = sqliteTable("session_file_activity", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  filePath: text("file_path").notNull(),
+  timestamp: integer("timestamp", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+}, (table) => [
+  index("session_file_activity_project_file_idx").on(table.projectId, table.filePath, table.timestamp),
+])
 
 // ============ AMBIENT FEEDBACK ============
 // Per-category feedback weights — learned from user dismissals/approvals

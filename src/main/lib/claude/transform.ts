@@ -172,6 +172,9 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
 
         // Store mapping for tool-result lookup
         toolIdMapping.set(originalId, currentToolCallId)
+        // Also track original ID for dedup — the batch assistant message uses block.id (original)
+        // while emittedToolIds tracks composite IDs. Without this, nested tools get emitted twice.
+        emittedToolIds.add(originalId)
 
         // Emit tool-input-start for progressive UI
         yield {
@@ -208,6 +211,19 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
       }
 
       // Thinking/reasoning streaming - emit as tool-like chunks for UI
+      // Defensive: auto-start thinking block if delta arrives without content_block_start
+      if (event.delta?.type === "thinking_delta" && (!inThinkingBlock || !currentThinkingId)) {
+        console.warn("[transform] thinking_delta without content_block_start, auto-starting")
+        currentThinkingId = `thinking-${Date.now()}`
+        inThinkingBlock = true
+        accumulatedThinking = ""
+        thinkingJsonStarted = false
+        yield {
+          type: "tool-input-start",
+          toolCallId: currentThinkingId,
+          toolName: "Thinking",
+        }
+      }
       if (event.delta?.type === "thinking_delta" && currentThinkingId && inThinkingBlock) {
         const thinkingText = String(event.delta.thinking || "")
         accumulatedThinking += thinkingText
@@ -245,6 +261,15 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
         currentThinkingId = null
         accumulatedThinking = ""
         inThinkingBlock = false
+      }
+
+      // Log unknown stream event types
+      const KNOWN_EVENT_TYPES = new Set([
+        "content_block_start", "content_block_delta", "content_block_stop",
+        "message_start", "message_delta", "message_stop",
+      ])
+      if (event.type && !KNOWN_EVENT_TYPES.has(event.type)) {
+        console.warn(`[transform] Unknown stream event type: "${event.type}"`)
       }
     }
 
@@ -382,7 +407,7 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
               s.status,
             )
               ? s.status
-              : "pending") as MCPServerStatus,
+              : (console.warn(`[transform] Unknown MCP status: "${s.status}", falling back to "pending"`), "pending")) as MCPServerStatus,
             ...(s.serverInfo && { serverInfo: s.serverInfo }),
             ...(s.error && { error: s.error }),
           }),
@@ -408,6 +433,29 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
         }
       }
 
+      // Task started — CLI scheduled a background task (e.g., "check CI in 10 min")
+      if (msg.subtype === "task_started") {
+        yield {
+          type: "task-started",
+          taskId: msg.task_id,
+          toolUseId: msg.tool_use_id,
+          description: msg.description,
+          taskType: msg.task_type,
+          sessionId: msg.session_id,
+        } as UIMessageChunk
+      }
+
+      // Task notification — background task completed/failed/stopped
+      if (msg.subtype === "task_notification") {
+        yield {
+          type: "task-notification",
+          taskId: msg.task_id,
+          status: msg.status,
+          summary: msg.summary,
+          sessionId: msg.session_id,
+        } as UIMessageChunk
+      }
+
       // Compact boundary - mark the compacting tool as complete
       if (msg.subtype === "compact_boundary") {
         let compactId = lastCompactId
@@ -428,6 +476,13 @@ export function createTransformer(options?: { isUsingOllama?: boolean; model?: s
         }
         lastCompactId = null // Clear for next compacting cycle
       }
+    }
+
+    // ===== UNKNOWN MESSAGE TYPE DETECTION =====
+    // Log unrecognized message types so we notice when the SDK adds new features
+    const KNOWN_MSG_TYPES = new Set(["stream_event", "assistant", "user", "system", "result"])
+    if (msg.type && !KNOWN_MSG_TYPES.has(msg.type)) {
+      console.warn(`[transform] Unknown SDK message type: "${msg.type}"`)
     }
 
     // ===== RESULT (final) =====

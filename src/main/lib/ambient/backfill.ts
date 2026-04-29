@@ -42,36 +42,41 @@ export interface BackfillResult {
 
 const MEMORY_FORMAT_INSTRUCTIONS = `Output ONLY a JSON array. Each memory object:
 {
-  "category": "architecture|convention|deployment|debugging|preference|gotcha",
-  "title": "Short descriptive title (max 80 chars, NO [CLAUDE.md] prefix)",
-  "content": "Detailed explanation. Use ALWAYS:/NEVER:/Applies-to: format where appropriate. Be specific — reference actual file names, function names, patterns.",
+  "category": "architecture|convention|deployment|debugging|preference|gotcha|brand|strategy|design",
+  "title": "Short directive title phrased as a PRINCIPLE or RULE (max 80 chars)",
+  "content": "2-5 sentences explaining the principle, WHY it matters, and where it applies. Reference file paths where relevant.",
   "linkedFiles": ["path/to/file.ts"]
 }
 
-Rules:
-- Be SPECIFIC to THIS project. Reference actual file names, variable names, patterns.
-- Each memory should teach something a new developer needs to know.
-- Don't repeat general programming knowledge — only project-specific insights.
-- Content should be 2-5 sentences, detailed enough to be actionable.
-- linkedFiles should reference real files that demonstrate the pattern.`
+QUALITY BAR — each memory must pass ALL THREE:
+1. Is this a REUSABLE PRINCIPLE, not a one-time observation? (e.g., "Auth tokens must use .credentials.json" ✅ vs "Fixed the auth bug" ❌)
+2. Would someone benefit from this 6 months from now? (architectural decisions ✅ vs "renamed 19 files" ❌)
+3. Is this NOT already obvious from reading the code? (non-obvious gotchas ✅ vs "uses React" ❌)
+
+NEVER create memories that are:
+- Bug reports or UI observations ("text appears small", "button is misaligned")
+- Tool usage instructions ("run X command to do Y")
+- Descriptions of what was done (that's what git is for)
+- General programming knowledge everyone already knows
+
+linkedFiles should reference real files that demonstrate the pattern.`
 
 const PASS_PROMPTS: Record<string, string> = {
-  architecture: `You are analyzing a software project's architecture and components to create foundational knowledge memories. This is the MOST IMPORTANT pass — create a comprehensive map of every major piece.
+  architecture: `You are analyzing a software project's architecture, components, and integrations to create foundational knowledge memories.
 
 Focus on:
-- EVERY major module, feature, and component — what it does and where it lives
-- The full directory structure rationale — why things are organized this way
-- Data model and database schema (every table, relationships, what they represent)
-- How all the pieces connect to each other (data flow, imports, IPC, events)
-- Entry points and how the app boots up end-to-end
+- Major modules, features, and components — what they do and where they live
+- Directory structure rationale — why things are organized this way
+- Data model and database schema (tables, relationships, what they represent)
+- How the pieces connect (data flow, imports, IPC, events, API surfaces)
+- Entry points and boot sequence
 - State management approach — what tools, where state lives, how it flows
-- Component hierarchy and feature boundaries
-- Smart contracts, APIs, or other domain-specific systems and their paths
-- Key abstractions and design patterns used throughout
-- Where a new developer would need to look first vs what they can ignore
+- External integrations, APIs, and key dependencies (and WHY they were chosen)
+- Build system, CI/CD, and deployment infrastructure
+- Key abstractions and design patterns
 
-Create one memory per major component/module so the brain has a complete map.
-Generate 20-30 memories covering the FULL architectural landscape.
+Each memory should be a PRINCIPLE about how the system works, not a code-level detail.
+Generate 8-12 memories covering architecture AND integrations. Favor fewer, richer memories.
 
 ${MEMORY_FORMAT_INSTRUCTIONS}`,
 
@@ -85,7 +90,7 @@ Focus on:
 - Key contributors and their focus areas
 - Version history and release patterns
 
-Generate 15-25 memories about the project's history and trajectory.
+Generate 6-10 memories about the project's history and trajectory. Focus on major arcs, not individual commits.
 
 ${MEMORY_FORMAT_INSTRUCTIONS}`,
 
@@ -101,7 +106,7 @@ Focus on:
 - Testing patterns (if any tests exist)
 - TypeScript usage patterns (strict vs loose, type organization)
 
-Generate 15-25 memories about coding patterns and conventions.
+Generate 6-10 memories about coding patterns and conventions. Each should be a reusable principle, not a one-off observation.
 
 ${MEMORY_FORMAT_INSTRUCTIONS}`,
 
@@ -116,23 +121,25 @@ Focus on:
 - IPC/communication patterns between processes
 - Configuration management and environment handling
 
-Generate 15-25 memories about integrations and infrastructure.
+Generate 6-10 memories about integrations and infrastructure. Capture the WHY behind integration choices, not just the WHAT.
 
 ${MEMORY_FORMAT_INSTRUCTIONS}`,
 
-  debugging: `You are analyzing a project's bug history, crash patterns, and known gotchas to help future developers avoid pitfalls.
+  debugging: `You are analyzing a project's pitfalls, gotchas, quality gaps, and technical debt to help future developers avoid mistakes.
 
 Focus on:
-- Common bug patterns visible from fix commits
+- Common bug patterns visible from fix commits — generalize into warnings
 - Areas of the codebase that are fragile or frequently fixed
 - Race conditions, timing issues, or concurrency problems
 - Known gotchas or "watch out for this" situations
-- Error handling gaps or edge cases
+- Code duplication, inconsistencies, or missing error handling
+- TODO/FIXME/HACK comments — what technical debt exists and why
 - Performance-sensitive areas
-- What areas require careful testing
-- Recent bugs and their root causes
+- Type safety gaps or missing validation
+- Dependency risks (outdated, abandoned packages)
 
-Generate 15-25 memories about pitfalls, debugging tips, and gotchas.
+Each memory should be a REUSABLE WARNING or PRINCIPLE, not a specific bug report.
+Generate 6-10 memories covering gotchas AND quality gaps. Frame as "when doing X, watch out for Y because Z."
 
 ${MEMORY_FORMAT_INSTRUCTIONS}`,
 
@@ -149,7 +156,22 @@ Focus on:
 - Release philosophy — how often, how carefully, what's the process?
 - How they handle scope — do they gold-plate or stay minimal? Evidence from commit patterns.
 
-Generate 10-20 memories that capture how this team THINKS and BUILDS.
+BRAND & VOICE (use category "brand"):
+- What's the product's personality? (playful, serious, technical, approachable?)
+- How does the team talk about their product — in README, commit messages, UI text?
+- What language/terms do they consistently use or avoid?
+- What's the target audience and how does the communication style reflect that?
+- Any explicit brand guidelines, tone rules, or messaging conventions?
+
+STRATEGY (use category "strategy"):
+- What's the product's positioning — who is it for, what problem does it solve?
+- What are the stated or implicit goals for the next phase?
+- What's explicitly deferred or out of scope (and why)?
+- Platform/distribution decisions (desktop-only, web-first, mobile, etc.)
+- Business model signals if visible
+
+Generate 6-10 memories that capture how this team THINKS, BUILDS, and COMMUNICATES.
+Use categories "preference", "brand", and "strategy" where appropriate — not just "convention".
 
 ${MEMORY_FORMAT_INSTRUCTIONS}`,
 
@@ -171,7 +193,7 @@ Focus on:
 - Dependency risks — outdated deps, abandoned packages, version conflicts
 
 Be specific. Name files, functions, patterns. Don't be generic — be a tough but fair reviewer.
-Generate 15-25 memories about quality issues and technical debt.
+Generate 6-10 memories about quality issues and technical debt. Focus on systemic patterns, not individual instances.
 
 ${MEMORY_FORMAT_INSTRUCTIONS}`,
 
@@ -191,8 +213,22 @@ Focus on:
 - What features or capabilities are partially built but not finished?
 - Where is the team's approach diverging from best practices in ways that will cost them later?
 
+STRATEGIC DIRECTION (use category "strategy"):
+- Product positioning gaps — is the product clearly differentiated?
+- Market insights visible from how the product is evolving
+- Feature prioritization — what should ship next based on trajectory?
+- What's the competitive landscape suggesting (from dependencies, integrations, feature choices)?
+- Scaling considerations — what will break first at 10x users/data/complexity?
+
+DESIGN OPPORTUNITIES (use category "design"):
+- UI/UX patterns that could be unified or improved
+- Accessibility gaps
+- Design system opportunities (component reuse, theming, consistency)
+- User workflow optimizations visible from the code structure
+
 Think like a CTO doing a quarterly architecture review. Be specific and actionable.
-Generate 15-25 memories about opportunities and strategic improvements.
+Generate 6-10 memories about opportunities and strategic improvements. Each should be actionable and specific enough to act on.
+Use categories "strategy" and "design" where appropriate — not just "architecture".
 
 ${MEMORY_FORMAT_INSTRUCTIONS}`,
 }
@@ -232,14 +268,44 @@ export async function buildBrain(
     sources.push("git-coupling")
   }
 
+  // Phase 0c: Development narrative synthesis (1 Haiku call)
+  try {
+    const { updateNarrative } = await import("./narrative")
+    await updateNarrative(projectId, projectPath)
+    sources.push("narrative")
+    console.log("[Brain] Development narrative updated")
+  } catch (err) {
+    console.warn("[Brain] Narrative synthesis failed:", err instanceof Error ? err.message : err)
+  }
+
+  // Phase 0d: Project identity synthesis — the foundation for all passes
+  let identityContent: string | null = null
+  try {
+    const { refreshIdentity, getIdentity } = await import("./project-identity")
+    await refreshIdentity(projectId, projectPath)
+    const identity = getIdentity(projectId)
+    if (identity) {
+      identityContent = identity.content
+      sources.push("identity")
+      console.log("[Brain] Project identity synthesized")
+    }
+  } catch (err) {
+    console.warn("[Brain] Identity synthesis failed:", err instanceof Error ? err.message : err)
+  }
+
   // Gather all signals once (reused across passes) — async to avoid blocking event loop
   const signals = await gatherDeepSignals(projectPath)
   const failedPasses: string[] = []
 
+  // Identity preamble — prepended to all pass contexts so every pass knows WHAT the project is
+  const identityPreamble = identityContent
+    ? `## Project Overview (identity anchor — this is WHAT the project is)\n${identityContent}\n\n---\n\n`
+    : ""
+
   // Helper to run a pass with error tracking
   async function runPass(name: string, contextBuilder: () => string, prompt: string) {
     try {
-      const context = contextBuilder()
+      const context = identityPreamble + contextBuilder()
       const memories = await callForMemories(provider, prompt, context)
       memories.forEach(writeMemory)
       sources.push(name)
@@ -250,30 +316,25 @@ export async function buildBrain(
     }
   }
 
-  // Run passes in parallel pairs to cut wall time (~2-3 min instead of ~8 min)
-  // Pair 1: Architecture + Evolution
+  // 5 focused passes (down from 8) — quality over quantity
+  // Evolution → handled by narrative system
+  // Integrations → merged into architecture
+  // Quality → merged into gotchas
+
+  // Pair 1: Architecture (includes integrations) + Conventions
   await Promise.all([
     runPass("architecture", () => buildArchitectureContext(signals), PASS_PROMPTS.architecture),
-    runPass("evolution", () => buildEvolutionContext(signals), PASS_PROMPTS.evolution),
-  ])
-
-  // Pair 2: Conventions + Integrations
-  await Promise.all([
     runPass("conventions", () => buildConventionsContext(signals), PASS_PROMPTS.conventions),
-    runPass("integrations", () => buildIntegrationsContext(signals), PASS_PROMPTS.integrations),
   ])
 
-  // Pair 3: Debugging + Philosophy
+  // Pair 2: Gotchas (includes quality gaps) + Philosophy (includes brand/strategy)
   await Promise.all([
-    runPass("debugging", () => buildDebuggingContext(signals), PASS_PROMPTS.debugging),
+    runPass("gotchas", () => buildDebuggingContext(signals) + "\n\n" + buildQualityContext(signals), PASS_PROMPTS.debugging),
     runPass("philosophy", () => buildPhilosophyContext(signals), PASS_PROMPTS.philosophy),
   ])
 
-  // Pair 4: Quality + Opportunities
-  await Promise.all([
-    runPass("quality", () => buildQualityContext(signals), PASS_PROMPTS.quality),
-    runPass("opportunities", () => buildOpportunitiesContext(signals), PASS_PROMPTS.opportunities),
-  ])
+  // Final: Opportunities (strategic)
+  await runPass("opportunities", () => buildOpportunitiesContext(signals), PASS_PROMPTS.opportunities)
 
   // Phase 5: Synthesize system architecture map from memories
   try {
@@ -435,7 +496,7 @@ async function gatherDeepSignals(projectPath: string): Promise<DeepSignals> {
 
     packageJson: readIfExists(join(projectPath, "package.json"), 4000),
     tsconfig: readIfExists(join(projectPath, "tsconfig.json"), 2000),
-    readme: readIfExists(join(projectPath, "README.md"), 4000),
+    readme: readIfExists(join(projectPath, "README.md"), 15000),
     claudeMd: readIfExists(join(projectPath, "CLAUDE.md"), 6000),
     eslintConfig: readIfExists(join(projectPath, ".eslintrc.json"), 500)
       ?? readIfExists(join(projectPath, "eslint.config.js"), 500),
@@ -491,9 +552,13 @@ function buildArchitectureContext(s: DeepSignals): string {
     if (ctx.length > 20000) break
   }
 
-  if (s.readme) ctx += `## README.md\n${s.readme.slice(0, 2000)}\n\n`
+  if (s.readme) ctx += `## README.md\n${s.readme.slice(0, 6000)}\n\n`
 
-  return ctx.slice(0, 25000)
+  // Include integration context (merged from old integrations pass)
+  if (s.buildScripts) ctx += `## Build Scripts\n\`\`\`json\n${s.buildScripts}\n\`\`\`\n\n`
+  if (s.ciWorkflows) ctx += `## CI Workflows\n\`\`\`\n${s.ciWorkflows.slice(0, 2000)}\n\`\`\`\n\n`
+
+  return ctx.slice(0, 30000)
 }
 
 function buildEvolutionContext(s: DeepSignals): string {
@@ -598,7 +663,7 @@ function buildPhilosophyContext(s: DeepSignals): string {
 
   // CLAUDE.md is the primary source — it IS the team's codified philosophy
   if (s.claudeMd) ctx += `## CLAUDE.md (team's AI instructions = their values codified)\n${s.claudeMd.slice(0, 6000)}\n\n`
-  if (s.readme) ctx += `## README.md\n${s.readme.slice(0, 3000)}\n\n`
+  if (s.readme) ctx += `## README.md\n${s.readme}\n\n`
 
   // Commit message patterns reveal priorities
   if (s.gitLogFull) ctx += `## Commit History (patterns reveal priorities)\n\`\`\`\n${s.gitLogFull.slice(0, 4000)}\n\`\`\`\n\n`
@@ -688,7 +753,7 @@ function parseMemories(text: string): Array<{ category: string; title: string; c
     const parsed = JSON.parse(jsonMatch[0])
     if (!Array.isArray(parsed)) return []
 
-    const validCategories = new Set(["architecture", "convention", "deployment", "debugging", "preference", "gotcha"])
+    const validCategories = new Set(["architecture", "convention", "deployment", "debugging", "preference", "gotcha", "brand", "strategy", "design"])
 
     return parsed
       .filter((m: any) => m.title && m.content && validCategories.has(m.category))

@@ -97,7 +97,7 @@ export function SubChatContextMenu({
 }: SubChatContextMenuProps) {
   const closeTabShortcut = useCloseTabShortcut()
   const isOrchestrator = subChat.mode === "orchestrator"
-  const isSpecialTab = isOrchestrator || subChat.mode === "system-map"
+  const isSpecialTab = isOrchestrator || subChat.mode === "system-map" || subChat.mode === "design"
 
   const handleExport = useCallback((format: ExportFormat) => {
     if (!chatId) return

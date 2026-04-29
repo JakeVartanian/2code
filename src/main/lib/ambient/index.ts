@@ -10,9 +10,10 @@ import { createAmbientProvider, type AmbientProvider } from "./provider"
 import { loadAmbientConfig, isQuietHours } from "./config"
 import { applyScoreDecay, trimMemories } from "./memory-cycling"
 import { runWeeklySynthesis } from "./synthesis"
-import { eq, and } from "drizzle-orm"
+import { eq, and, lte } from "drizzle-orm"
 import { getDatabase } from "../db"
-import { ambientSuggestions } from "../db/schema"
+import { ambientSuggestions, projects, auditProfiles, maintenanceActions } from "../db/schema"
+import { createId } from "../db/utils"
 import type {
   AmbientConfig,
   AmbientEvent,
@@ -23,10 +24,13 @@ import type {
   GitEvent,
 } from "./types"
 
+/** Timestamp of when this module was loaded — used to detect stale agent instances after app restart */
+export const PROCESS_START_TIME = Date.now()
+
 export class AmbientAgent {
   private gitMonitor: AmbientGitMonitor | null = null
   private pipeline: AnalysisPipeline
-  private budget: BudgetTracker
+  readonly budget: BudgetTracker
   private config: AmbientConfig
   private projectId: string
   private projectPath: string
@@ -41,6 +45,8 @@ export class AmbientAgent {
   private changesReviewedToday = 0
   private suggestionsToday = 0
   private lastInsightAt: number | null = null
+  /** When this agent instance was created — compared against PROCESS_START_TIME to detect staleness */
+  readonly createdAt: number = Date.now()
 
   constructor(projectId: string, projectPath: string) {
     this.projectId = projectId
@@ -55,20 +61,33 @@ export class AmbientAgent {
   /**
    * Set up the AI provider for Tier 1/2 analysis.
    * Call this after start() with the appropriate credentials.
+   * Retries up to 3 times with backoff if token isn't ready yet.
    */
   async initProvider(
     getAnthropicToken: () => Promise<string | null>,
     openRouterKey: string | null,
     openRouterFreeOnly: boolean = false,
   ): Promise<void> {
-    const provider = await createAmbientProvider(getAnthropicToken, openRouterKey, openRouterFreeOnly)
-    this.ambientProvider = provider
-    this.pipeline.setProvider(provider)
-    if (provider) {
-      console.log(`[GAAD] Provider initialized: ${provider.type}`)
-    } else {
-      console.log("[GAAD] No AI provider available — running Tier 0 only")
+    const maxRetries = 3
+    const delays = [0, 5_000, 15_000] // immediate, 5s, 15s
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (attempt > 0) {
+        console.log(`[GAAD] Provider init retry ${attempt}/${maxRetries - 1} in ${delays[attempt] / 1000}s...`)
+        await new Promise(r => setTimeout(r, delays[attempt]))
+      }
+      if (this.status === "stopped") return // Agent was stopped during retry wait
+
+      const provider = await createAmbientProvider(getAnthropicToken, openRouterKey, openRouterFreeOnly)
+      if (provider) {
+        this.ambientProvider = provider
+        this.pipeline.setProvider(provider)
+        console.log(`[GAAD] Provider initialized: ${provider.type}${attempt > 0 ? ` (attempt ${attempt + 1})` : ""}`)
+        return
+      }
     }
+
+    console.warn("[GAAD] No AI provider after retries — running Tier 0 only (heuristics). User must connect Claude account in Settings.")
   }
 
   async start(): Promise<void> {
@@ -126,13 +145,85 @@ export class AmbientAgent {
       }, 6 * 60 * 60 * 1000), // 6h
     )
 
-    // Weekly synthesis (guarded by provider availability)
+    // Weekly synthesis — check elapsed time since last run on startup
+    const SYNTHESIS_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+    const runSynthesisIfDue = async () => {
+      if (!this.ambientProvider) return
+      try {
+        const db = getDatabase()
+        const project = db.select({ lastSynthesisAt: projects.lastSynthesisAt })
+          .from(projects)
+          .where(eq(projects.id, this.projectId))
+          .get()
+        const lastRun = project?.lastSynthesisAt?.getTime() ?? 0
+        if (Date.now() - lastRun >= SYNTHESIS_INTERVAL_MS) {
+          await runWeeklySynthesis(this.projectId, this.projectPath, this.ambientProvider)
+          db.update(projects)
+            .set({ lastSynthesisAt: new Date() })
+            .where(eq(projects.id, this.projectId))
+            .run()
+        }
+      } catch (e) {
+        console.warn("[GAAD] Synthesis error:", e)
+      }
+    }
+    // Check on startup and every 6 hours
+    runSynthesisIfDue()
     this.schedulerTimers.push(
-      setInterval(() => {
-        if (!this.ambientProvider) return
-        runWeeklySynthesis(this.projectId, this.projectPath, this.ambientProvider)
-          .catch(e => console.warn("[GAAD] Synthesis error:", e))
-      }, 7 * 24 * 60 * 60 * 1000), // 7 days
+      setInterval(() => runSynthesisIfDue(), 6 * 60 * 60 * 1000),
+    )
+
+    // Scheduled audit honoring — check every hour for due audit profiles
+    const checkScheduledAudits = () => {
+      try {
+        const db = getDatabase()
+        const now = new Date()
+        const dueProfiles = db.select()
+          .from(auditProfiles)
+          .where(and(
+            eq(auditProfiles.projectId, this.projectId),
+            eq(auditProfiles.schedule, "daily"),
+            lte(auditProfiles.nextScheduledAt, now),
+          ))
+          .all()
+
+        for (const profile of dueProfiles) {
+          const zoneNames = profile.zoneNames ? JSON.parse(profile.zoneNames) : []
+          const label = zoneNames.length > 0 ? zoneNames.join(", ") : "all zones"
+
+          // Dedup: don't create if same type already pending
+          const existing = db.select({ id: maintenanceActions.id })
+            .from(maintenanceActions)
+            .where(and(
+              eq(maintenanceActions.projectId, this.projectId),
+              eq(maintenanceActions.type, "run-zone-audit"),
+              eq(maintenanceActions.status, "pending"),
+            ))
+            .get()
+          if (existing) continue
+
+          const actionId = createId()
+          db.insert(maintenanceActions)
+            .values({
+              id: actionId,
+              projectId: this.projectId,
+              type: "run-zone-audit",
+              title: `Scheduled audit due for ${label}`,
+              description: `Audit profile "${profile.name}" is overdue. Approve to run.`,
+              details: JSON.stringify({
+                profileId: profile.id,
+                zoneIds: profile.zoneIds ? JSON.parse(profile.zoneIds) : null,
+              }),
+            })
+            .run()
+        }
+      } catch (e) {
+        console.warn("[GAAD] Scheduled audit check error:", e)
+      }
+    }
+    checkScheduledAudits()
+    this.schedulerTimers.push(
+      setInterval(() => checkScheduledAudits(), 60 * 60 * 1000), // 1 hour
     )
 
     console.log(`[GAAD] Started for project ${this.projectId}`)
@@ -255,8 +346,18 @@ export class AmbientAgent {
 
     const budgetTier = this.budget.getDegradationTier()
     if (budgetTier === "paused") {
+      console.log("[GAAD] Budget paused — skipping event")
       this.pause()
       return
+    }
+
+    // Log provider status periodically (every 50th event) to catch "no provider" situations
+    if (event.kind === "file-batch" || event.kind === "chat") {
+      this.eventCount = (this.eventCount ?? 0) + 1
+      if (this.eventCount % 50 === 1) {
+        const budgetStatus = this.budget.getStatus()
+        console.log(`[GAAD] Status check — provider: ${this.ambientProvider ? this.ambientProvider.type : "NONE"}, budget: ${budgetStatus.percentUsed}% (${budgetTier}), events processed: ${this.eventCount}`)
+      }
     }
 
     // Track activity for micro-status
@@ -270,6 +371,8 @@ export class AmbientAgent {
       console.error("[GAAD] Pipeline error:", err)
     })
   }
+
+  private eventCount = 0
 }
 
 // ============ REGISTRY ============

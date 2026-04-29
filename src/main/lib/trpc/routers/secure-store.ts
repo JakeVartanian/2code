@@ -87,6 +87,16 @@ function saveToDisk(): void {
 // Load on module init
 loadFromDisk()
 
+/**
+ * Read a decrypted API key from secure store (main-process only).
+ * Use this instead of depending on the renderer to pass keys via mutation input.
+ */
+export function getSecureKey(key: AllowedKey): string {
+  const encrypted = readFromStore(key)
+  if (!encrypted) return ""
+  return decryptValue(encrypted) ?? ""
+}
+
 export const secureStoreRouter = router({
   /** Read all API keys at once (for startup hydration) */
   getApiKeys: publicProcedure.query(() => {

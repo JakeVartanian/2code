@@ -101,9 +101,14 @@ function getExistingMemorySummary(projectId: string): string {
 
   if (memories.length === 0) return "No existing memories."
 
+  // Include content snippets (truncated to ~100 chars) so Haiku can reason about staleness
+  // Cap at ~30 memories to stay within 3000 token budget
   return memories
-    .slice(0, 20) // Top 20 by relevance
-    .map(m => `[${m.category}] ${m.title} (score: ${m.relevanceScore}${m.isStale ? ", STALE" : ""})`)
+    .slice(0, 30)
+    .map(m => {
+      const snippet = m.content.length > 100 ? m.content.slice(0, 100) + "…" : m.content
+      return `[${m.category}] ${m.title} (score: ${m.relevanceScore}${m.isStale ? ", STALE" : ""})\n  ${snippet}`
+    })
     .join("\n")
 }
 

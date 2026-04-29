@@ -6,19 +6,40 @@
 import { z } from "zod"
 import { router, publicProcedure } from "../index"
 import { getDatabase } from "../../db"
-import { ambientSuggestions, ambientBudget, ambientFeedback, subChats, projects } from "../../db/schema"
+import { ambientSuggestions, ambientBudget, ambientFeedback, maintenanceActions, subChats, projects } from "../../db/schema"
 import { eq, and, desc, sql, inArray } from "drizzle-orm"
 import { observable } from "@trpc/server/observable"
 import { EventEmitter } from "events"
-import { ambientAgentRegistry } from "../../ambient"
+import { ambientAgentRegistry, PROCESS_START_TIME } from "../../ambient"
 import { createAmbientProvider } from "../../ambient/provider"
 import { buildBrain, refreshBrain, getBrainStatus } from "../../ambient/backfill"
 import { trimMemories } from "../../ambient/memory-cycling"
+import { getCategoryHealthReport } from "../../memory/category-balance"
+import { getIdentity, refreshIdentity, saveIdentityManual } from "../../ambient/project-identity"
 import { createId } from "../../db/utils"
 
 // Event emitter for real-time suggestion notifications
 export const ambientEvents = new EventEmitter()
 ambientEvents.setMaxListeners(50)
+
+// Rate limiter for Ask GAAD: Map<projectId, timestamp[]>
+const askGAADRateLimit = new Map<string, number[]>()
+
+const ASK_GAAD_SYSTEM_PROMPT = `You are GAAD — the developer's institutional memory and senior advisor for this project. You have access to everything the team has learned, decided, and built.
+
+INTENT CLASSIFICATION:
+If the user is asking you to plan, break down, decompose, design an approach for, or orchestrate a multi-step project or task — respond with EXACTLY the line "[PLAN_REQUEST]" on the first line, followed by a clean, actionable version of their goal on the next line. Do NOT answer the question in this case — just output the classification and goal.
+
+Otherwise, answer their question normally using the rules below.
+
+ANSWER RULES:
+- Answer using ONLY what you know from the project memories and recent activity below. If you don't have enough information, say so — never hallucinate or guess.
+- Direct, concise, confident
+- Cite specific memories/decisions when relevant
+- Connect dots between different memories when the question spans topics
+- If the question is about brand/design/strategy, match the team's established voice and framing
+
+Format: Plain text, 1-3 paragraphs max. No JSON. No markdown headers. Just talk.`
 
 const suggestionCategoryEnum = z.enum([
   "bug", "security", "performance", "test-gap", "dead-code", "dependency",
@@ -27,6 +48,41 @@ const suggestionCategoryEnum = z.enum([
 const suggestionStatusEnum = z.enum([
   "pending", "dismissed", "approved", "snoozed", "expired",
 ])
+
+/**
+ * Initialize provider with background recovery. If the initial 3-attempt init fails
+ * (e.g., auth not ready yet), schedule a retry in 60s and 5min. Without a provider,
+ * GAAD runs Tier 0 only (heuristics) and produces zero AI analysis.
+ */
+function initProviderWithRecovery(agent: ReturnType<typeof ambientAgentRegistry.get> & {}) {
+  const RECOVERY_DELAYS = [0, 60_000, 300_000] // immediate (3 internal retries), then 60s, 5min
+
+  async function attempt(delayIndex: number) {
+    try {
+      const { getClaudeCodeTokenFresh } = await import("./claude")
+      await agent.initProvider(
+        () => getClaudeCodeTokenFresh(),
+        null,
+      )
+      // Success — provider is set
+    } catch (err: any) {
+      const nextDelay = RECOVERY_DELAYS[delayIndex + 1]
+      if (nextDelay !== undefined) {
+        console.warn(`[GAAD] Provider init failed, recovery retry in ${nextDelay / 1000}s:`, err.message)
+        setTimeout(() => {
+          // Check agent is still running before retrying
+          if (agent.getStatus().agentStatus === "running") {
+            attempt(delayIndex + 1).catch(() => {})
+          }
+        }, nextDelay)
+      } else {
+        console.error("[GAAD] Provider init failed after all recovery attempts. Tier 0 only until restart.")
+      }
+    }
+  }
+
+  attempt(0).catch(() => {})
+}
 
 export const ambientRouter = router({
   // ============ QUERIES ============
@@ -128,6 +184,63 @@ export const ambientRouter = router({
     }),
 
   /**
+   * Get memory category coverage health report.
+   */
+  memoryCoverage: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(({ input }) => {
+      return getCategoryHealthReport(input.projectId)
+    }),
+
+  // ─── Project Identity ───────────────────────────────────────────────
+
+  /**
+   * Get the project identity/overview document.
+   */
+  getProjectIdentity: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(({ input }) => {
+      const identity = getIdentity(input.projectId)
+      if (!identity) return null
+      return {
+        content: identity.content,
+        source: identity.source,
+        updatedAt: identity.updatedAt?.toISOString() ?? null,
+      }
+    }),
+
+  /**
+   * Save user's manual edits to the project overview.
+   */
+  updateProjectIdentity: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      content: z.string().min(10),
+    }))
+    .mutation(({ input }) => {
+      saveIdentityManual(input.projectId, input.content)
+      return { success: true }
+    }),
+
+  /**
+   * Re-generate the project overview from current project state.
+   */
+  refreshProjectIdentity: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      projectPath: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      const success = await refreshIdentity(input.projectId, input.projectPath, true)
+      if (!success) return { success: false, error: "Failed to synthesize identity" }
+      const identity = getIdentity(input.projectId)
+      return {
+        success: true,
+        content: identity?.content ?? null,
+      }
+    }),
+
+  /**
    * Get ambient config for a project.
    */
   getConfig: publicProcedure
@@ -186,16 +299,7 @@ export const ambientRouter = router({
           // Initialize the AI provider in background — don't block the UI
           // The agent is already running (file watcher + git monitor active)
           // Provider enables Tier 1/2 analysis; Tier 0 works without it
-          import("./claude").then(({ getClaudeCodeTokenFresh }) => {
-            agent.initProvider(
-              () => getClaudeCodeTokenFresh(),
-              null, // TODO: pass OpenRouter key if configured
-            ).catch((err) => {
-              console.warn("[GAAD] Provider init failed (Tier 0 only):", err.message)
-            })
-          }).catch((err) => {
-            console.error("[GAAD] Failed to import claude module:", err.message)
-          })
+          initProviderWithRecovery(agent)
         } catch (err) {
           console.error("[GAAD] Failed to start agent:", err)
           // Clean up any partial state
@@ -240,24 +344,53 @@ export const ambientRouter = router({
         return { status: "disabled" as const }
       }
 
-      // Check if already running
+      // Check if already running — but recreate if agent is stale (from before app restart)
       const existing = ambientAgentRegistry.get(input.projectId)
-      if (existing) return { status: "running" as const }
+      if (existing) {
+        if (existing.createdAt >= PROCESS_START_TIME) {
+          return { status: "running" as const }
+        }
+        // Stale agent from before restart — recreate with fresh code
+        console.log(`[Ambient] Recycling stale agent for ${input.projectId} (created ${new Date(existing.createdAt).toISOString()}, process started ${new Date(PROCESS_START_TIME).toISOString()})`)
+        await ambientAgentRegistry.stop(input.projectId).catch(() => {})
+      }
 
       try {
         const agent = await ambientAgentRegistry.getOrCreate(input.projectId, input.projectPath)
-        // Init provider in background (same as toggle)
-        import("./claude").then(({ getClaudeCodeTokenFresh }) => {
-          agent.initProvider(
-            () => getClaudeCodeTokenFresh(),
-            null,
-          ).catch(err => console.warn("[GAAD] Provider init failed:", err.message))
-        }).catch((err) => {
-          console.error("[GAAD] Failed to import claude module for provider init:", err?.message ?? err)
-        })
+        // Init provider in background with recovery
+        initProviderWithRecovery(agent)
         return { status: "running" as const }
       } catch (err) {
         console.error("[Ambient] Auto-start failed:", err)
+        return { status: "error" as const }
+      }
+    }),
+
+  /**
+   * Force-restart the ambient agent for a project.
+   * Destroys the old instance and creates a fresh one with current code.
+   * Use after code changes in dev, or when GAAD seems stuck.
+   */
+  restart: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      projectPath: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      // Stop and remove old agent (don't let stop errors block restart)
+      try {
+        await ambientAgentRegistry.stop(input.projectId)
+      } catch (err) {
+        console.warn("[Ambient] Stop during restart failed (continuing):", err)
+      }
+      console.log(`[Ambient] Force-restarting agent for project ${input.projectId}`)
+
+      try {
+        const agent = await ambientAgentRegistry.getOrCreate(input.projectId, input.projectPath)
+        initProviderWithRecovery(agent)
+        return { status: "restarted" as const }
+      } catch (err) {
+        console.error("[Ambient] Restart failed:", err)
         return { status: "error" as const }
       }
     }),
@@ -347,10 +480,24 @@ export const ambientRouter = router({
         parts: [{ type: "text", text: promptText }],
       }])
 
-      // Truncate title for tab name (keep it readable)
-      const tabName = suggestion.title.length > 60
-        ? suggestion.title.slice(0, 57) + "..."
-        : suggestion.title
+      // Short tab name: category prefix + truncated title (~30 chars)
+      const categoryPrefix = suggestion.category === "bug" ? "Fix: "
+        : suggestion.category === "security" ? "Sec: "
+        : suggestion.category === "performance" ? "Perf: "
+        : suggestion.category === "test-gap" ? "Test: "
+        : suggestion.category === "dead-code" ? "Clean: "
+        : suggestion.category === "dependency" ? "Dep: "
+        : suggestion.category === "blind-spot" ? "Check: "
+        : suggestion.category === "next-step" ? "Next: "
+        : suggestion.category === "risk" ? "Risk: "
+        : ""
+      const cleanedTitle = suggestion.title
+        .replace(/^(Remember|Note|Warning|Important):\s*/i, "")
+        .replace(/\s*[-—–]\s*.+$/, "")
+      const maxBody = 30 - categoryPrefix.length
+      const tabName = cleanedTitle.length <= maxBody
+        ? categoryPrefix + cleanedTitle
+        : categoryPrefix + cleanedTitle.slice(0, maxBody - 1).trimEnd() + "…"
 
       db.insert(subChats)
         .values({
@@ -685,6 +832,8 @@ export const ambientRouter = router({
       }
 
       try {
+        // Pass budget tracker so audit spend is tracked against daily limits
+        const agent = ambientAgentRegistry.get(input.projectId)
         const result = await auditAllZonesWithLock(
           input.projectId,
           input.projectPath,
@@ -696,6 +845,7 @@ export const ambientRouter = router({
               progress,
             })
           },
+          agent?.budget,
         )
         return { success: true, ...result }
       } catch (err: any) {
@@ -726,7 +876,8 @@ export const ambientRouter = router({
       }
 
       try {
-        const result = await auditZone(input.projectId, input.projectPath, input.zoneId, provider)
+        const agent = ambientAgentRegistry.get(input.projectId)
+        const result = await auditZone(input.projectId, input.projectPath, input.zoneId, provider, agent?.budget)
         return { success: true, ...result }
       } catch (err: any) {
         return { success: false, error: err.message }
@@ -756,6 +907,34 @@ export const ambientRouter = router({
     .query(({ input }) => {
       const db = getDatabase()
       const { auditRuns: ar, auditRunZones: arz, auditFindings: af } = require("../../db/schema")
+
+      // Finalize stale ambient runs from previous days so they show as completed
+      const today = new Date().toISOString().slice(0, 10)
+      const staleAmbientRuns = db.select({ id: ar.id, startedAt: ar.startedAt, createdAt: ar.createdAt })
+        .from(ar)
+        .where(and(eq(ar.projectId, input.projectId), eq(ar.trigger, "ambient"), eq(ar.status, "running")))
+        .all()
+      for (const stale of staleAmbientRuns) {
+        const d = stale.startedAt ?? stale.createdAt
+        const runDate = d ? new Date(typeof d === "number" ? d : d).toISOString().slice(0, 10) : null
+        if (runDate && runDate < today) {
+          // Finalize: count findings and mark completed
+          const counts = db.select({ severity: af.severity, count: sql<number>`count(*)` })
+            .from(af).where(eq(af.runId, stale.id)).groupBy(af.severity).all()
+          let total = 0, errors = 0, warnings = 0, infos = 0
+          for (const c of counts) {
+            total += c.count
+            if (c.severity === "error") errors = c.count
+            else if (c.severity === "warning") warnings = c.count
+            else if (c.severity === "info") infos = c.count
+          }
+          db.update(ar).set({
+            status: "completed", completedAt: new Date(),
+            totalFindings: total, errorCount: errors, warningCount: warnings, infoCount: infos,
+            overallScore: Math.max(0, 100 - (errors * 15 + warnings * 5 + infos * 1)),
+          }).where(eq(ar.id, stale.id)).run()
+        }
+      }
 
       let runs = db.select()
         .from(ar)
@@ -874,6 +1053,62 @@ export const ambientRouter = router({
         hasMore,
         nextCursor: hasMore ? results[results.length - 1]?.id : undefined,
       }
+    }),
+
+  /**
+   * Per-zone summary of open audit findings — single query, no file matching.
+   * Used by zone cards to show issue counts from the canonical auditFindings table.
+   */
+  getZoneFindingSummary: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(({ input }) => {
+      const db = getDatabase()
+      const { auditFindings: af } = require("../../db/schema")
+
+      // Aggregate open findings by zone
+      const rows = db.select({
+        zoneId: af.zoneId,
+        zoneName: af.zoneName,
+        severity: af.severity,
+        count: sql<number>`count(*)`,
+        avgConfidence: sql<number>`avg(${af.confidence})`,
+        lastCreatedAt: sql<string>`max(${af.createdAt})`,
+      })
+        .from(af)
+        .where(and(eq(af.projectId, input.projectId), eq(af.status, "open")))
+        .groupBy(af.zoneId, af.severity)
+        .all()
+
+      // Collapse severity groups into per-zone summary
+      const zones: Record<string, {
+        issueCount: number
+        maxSeverity: string
+        avgConfidence: number
+        lastAuditedAt: string | null
+      }> = {}
+
+      const severityOrder: Record<string, number> = { error: 3, warning: 2, info: 1, none: 0 }
+
+      for (const row of rows) {
+        if (!zones[row.zoneId]) {
+          zones[row.zoneId] = { issueCount: 0, maxSeverity: "none", avgConfidence: 0, lastAuditedAt: null }
+        }
+        const z = zones[row.zoneId]
+        z.issueCount += row.count
+        if ((severityOrder[row.severity] ?? 0) > (severityOrder[z.maxSeverity] ?? 0)) {
+          z.maxSeverity = row.severity
+        }
+        // Weighted average confidence
+        const prevTotal = z.avgConfidence * (z.issueCount - row.count)
+        z.avgConfidence = Math.round((prevTotal + row.avgConfidence * row.count) / z.issueCount)
+        // Latest timestamp
+        const ts = row.lastCreatedAt ? String(row.lastCreatedAt) : null
+        if (ts && (!z.lastAuditedAt || ts > z.lastAuditedAt)) {
+          z.lastAuditedAt = ts
+        }
+      }
+
+      return zones
     }),
 
   /**
@@ -1138,6 +1373,7 @@ export const ambientRouter = router({
         suggestionId?: string
         subChatId?: string
         runId?: string
+        actionId?: string
         progress?: Array<{
           zoneId: string
           zoneName: string
@@ -1176,5 +1412,218 @@ export const ambientRouter = router({
           if (timer) { clearTimeout(timer); flush() }
         }
       })
+    }),
+
+  // ============ MAINTENANCE ACTIONS ============
+
+  /**
+   * List pending maintenance actions for a project.
+   */
+  listMaintenanceActions: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(({ input }) => {
+      const db = getDatabase()
+      return db.select()
+        .from(maintenanceActions)
+        .where(and(
+          eq(maintenanceActions.projectId, input.projectId),
+          eq(maintenanceActions.status, "pending"),
+        ))
+        .orderBy(desc(maintenanceActions.createdAt))
+        .limit(5) // G6: max 5 pending per project
+        .all()
+    }),
+
+  /**
+   * Approve a maintenance action — executes the action.
+   */
+  approveMaintenanceAction: publicProcedure
+    .input(z.object({
+      actionId: z.string(),
+      projectId: z.string(),
+      projectPath: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      const db = getDatabase()
+      const action = db.select()
+        .from(maintenanceActions)
+        .where(eq(maintenanceActions.id, input.actionId))
+        .get()
+
+      if (!action || action.status !== "pending") {
+        return { success: false, error: "Action not found or already processed" }
+      }
+
+      // Mark as approved
+      db.update(maintenanceActions)
+        .set({ status: "approved" })
+        .where(eq(maintenanceActions.id, input.actionId))
+        .run()
+
+      try {
+        // Execute based on type
+        if (action.type === "refresh-system-map") {
+          // Trigger system map regeneration
+          const agent = ambientAgentRegistry.get(input.projectId)
+          if (agent) {
+            const { synthesizeSystemMap } = await import("../../ambient/system-map-synthesis")
+            const { getClaudeCodeTokenFresh } = await import("./claude")
+            const provider = await createAmbientProvider(() => getClaudeCodeTokenFresh(), null)
+            if (provider) {
+              await synthesizeSystemMap(input.projectId, input.projectPath, provider)
+            }
+          }
+        } else if (action.type === "update-memory") {
+          // Memory was already written with source="suggested" — promote to active
+          const details = action.details ? JSON.parse(action.details) : {}
+          if (details.memoryId) {
+            const { projectMemories } = await import("../../db/schema")
+            db.update(projectMemories)
+              .set({ source: "auto", relevanceScore: 50 })
+              .where(eq(projectMemories.id, details.memoryId))
+              .run()
+          }
+        } else if (action.type === "run-zone-audit") {
+          const details = action.details ? JSON.parse(action.details) : {}
+          if (details.zoneId) {
+            const { auditZone } = await import("../../ambient/zone-audit-engine")
+            const { getClaudeCodeTokenFresh } = await import("./claude")
+            const provider = await createAmbientProvider(() => getClaudeCodeTokenFresh(), null)
+            if (provider) {
+              const agent = ambientAgentRegistry.get(input.projectId)
+              await auditZone(input.projectId, input.projectPath, details.zoneId, provider, agent?.budget)
+            }
+          }
+        } else if (action.type === "enrich-memory") {
+          // Merge new content into existing memory, boost score, increment validationCount
+          const details = action.details ? JSON.parse(action.details) : {}
+          if (details.existingMemoryId && details.newContent) {
+            const { enrichMemory } = await import("../../ambient/memory-evolution")
+            await enrichMemory(details.existingMemoryId, details.newContent)
+          }
+        } else if (action.type === "archive-stale-memory") {
+          const details = action.details ? JSON.parse(action.details) : {}
+          if (details.memoryId) {
+            const { projectMemories } = await import("../../db/schema")
+            db.update(projectMemories)
+              .set({ isArchived: true, state: "dead" })
+              .where(eq(projectMemories.id, details.memoryId))
+              .run()
+          }
+        }
+
+        // Mark completed
+        db.update(maintenanceActions)
+          .set({ status: "completed", completedAt: new Date() })
+          .where(eq(maintenanceActions.id, input.actionId))
+          .run()
+
+        // Emit event so frontend can update
+        ambientEvents.emit(`project:${input.projectId}`, {
+          type: "maintenance-action-completed",
+          actionId: input.actionId,
+        })
+
+        return { success: true }
+      } catch (err: any) {
+        db.update(maintenanceActions)
+          .set({ status: "failed" })
+          .where(eq(maintenanceActions.id, input.actionId))
+          .run()
+        return { success: false, error: err.message }
+      }
+    }),
+
+  /**
+   * Deny a maintenance action — dismiss without executing.
+   */
+  denyMaintenanceAction: publicProcedure
+    .input(z.object({
+      actionId: z.string(),
+      projectId: z.string(),
+    }))
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      db.update(maintenanceActions)
+        .set({ status: "denied" })
+        .where(eq(maintenanceActions.id, input.actionId))
+        .run()
+
+      ambientEvents.emit(`project:${input.projectId}`, {
+        type: "maintenance-action-denied",
+        actionId: input.actionId,
+      })
+
+      return { success: true }
+    }),
+
+  // ============ ASK GAAD ============
+
+  /**
+   * Ask GAAD a question — queries memory bank + recent suggestions and returns
+   * a grounded answer. Uses Sonnet for quality since this is user-initiated.
+   */
+  askGAAD: publicProcedure
+    .input(z.object({
+      projectId: z.string(),
+      question: z.string().min(1).max(2000),
+    }))
+    .mutation(async ({ input }) => {
+      console.log(`[askGAAD] Question received for project ${input.projectId}: "${input.question.slice(0, 100)}"`)
+
+      // Rate limiting: max 10 calls per hour per project
+      const now = Date.now()
+      const projectCalls = askGAADRateLimit.get(input.projectId) ?? []
+      const recentCalls = projectCalls.filter(t => now - t < 3600_000)
+      if (recentCalls.length >= 10) {
+        console.log("[askGAAD] Rate limited")
+        return { answer: "Rate limit reached — GAAD can answer up to 10 questions per hour. Try again later." }
+      }
+      recentCalls.push(now)
+      askGAADRateLimit.set(input.projectId, recentCalls)
+
+      try {
+        // 1. Load project memories with full budget (user-initiated, not background)
+        const { getMemoriesForInjection } = await import("../../memory/injection")
+        console.log("[askGAAD] Loading memories...")
+        const memoryResult = await getMemoriesForInjection(input.projectId, input.question, 8000)
+        console.log(`[askGAAD] Loaded ${memoryResult.memoriesUsed} memories (${memoryResult.tokensUsed} tokens)`)
+
+        // 2. Load open audit findings (canonical source of project health)
+        const { getAuditFindingsForInjection } = await import("../../audit/injection")
+        const auditResult = getAuditFindingsForInjection(input.projectId, null, 1000)
+        console.log(`[askGAAD] Loaded ${auditResult.findingsUsed} audit findings (${auditResult.tokensUsed} tokens)`)
+
+        // 3. Build the user prompt with context
+        const auditContext = auditResult.markdown ? `\n\n${auditResult.markdown}` : ""
+
+        const userPrompt = `${memoryResult.markdown}${auditContext}\n\n## Question\n${input.question}`
+
+        // 4. Call Claude with advisor prompt
+        console.log("[askGAAD] Calling Claude (sonnet)...")
+        const { callClaude } = await import("../../claude/api")
+        const result = await callClaude({
+          system: ASK_GAAD_SYSTEM_PROMPT,
+          userMessage: userPrompt,
+          maxTokens: 2048,
+          timeoutMs: 60_000,
+          model: "sonnet",
+        })
+
+        console.log(`[askGAAD] Got response (${result.text.length} chars, ${result.inputTokens}in/${result.outputTokens}out)`)
+        return { answer: result.text }
+      } catch (err: any) {
+        const msg = err?.message ?? String(err)
+        console.error("[askGAAD] Failed:", msg, err?.stack)
+
+        // Give the user a useful error instead of a generic message
+        if (msg.includes("token") || msg.includes("auth") || msg.includes("credential") || msg.includes("401")) {
+          return { answer: "GAAD couldn't process your question — not connected to Claude. Check Settings → Claude Code." }
+        }
+        if (msg.includes("timeout") || msg.includes("ETIMEDOUT")) {
+          return { answer: "GAAD's request timed out. Try a shorter question or try again." }
+        }
+        return { answer: `GAAD hit an error: ${msg.slice(0, 200)}` }
+      }
     }),
 })

@@ -92,13 +92,12 @@ export async function callClaude(opts: CallClaudeOptions): Promise<CallClaudeRes
     CLAUDE_CODE_OAUTH_TOKEN: token,
   }
 
-  // Force model selection via env vars if specified
-  if (opts.model === "haiku") {
-    finalEnv.ANTHROPIC_DEFAULT_SONNET_MODEL = "claude-haiku-4-5-20251001"
-    finalEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-haiku-4-5-20251001"
-    finalEnv.CLAUDE_CODE_SUBAGENT_MODEL = "claude-haiku-4-5-20251001"
+  // Map model tier to actual model ID for the SDK `model` option
+  const modelMap: Record<string, string> = {
+    haiku: "claude-haiku-4-5-20251001",
+    sonnet: "claude-sonnet-4-6",
   }
-  // sonnet is the CLI default — no override needed
+  const modelId = opts.model ? modelMap[opts.model] : undefined
 
   // 4. User message only — system prompt goes via the systemPrompt option
   const fullPrompt = opts.userMessage
@@ -121,6 +120,7 @@ export async function callClaude(opts: CallClaudeOptions): Promise<CallClaudeRes
         cwd: app.getPath("userData"),
         maxTurns: 1,
         systemPrompt: opts.system,
+        model: modelId,
         env: finalEnv,
         permissionMode: "plan" as const,
         pathToClaudeCodeExecutable: claudeBinaryPath,
@@ -131,9 +131,20 @@ export async function callClaude(opts: CallClaudeOptions): Promise<CallClaudeRes
     let text = ""
     let inputTokens = 0
     let outputTokens = 0
+    let msgCount = 0
+
+    console.log(`[callClaude] Starting stream, model=${modelId || "default"}, timeout=${opts.timeoutMs ?? 120_000}ms`)
 
     for await (const msg of stream) {
       const m = msg as any
+      msgCount++
+
+      // Handle errors from the CLI binary
+      if (m.type === "error") {
+        const errorText = m.error?.message || m.error || m.message || "Unknown CLI error"
+        console.error(`[callClaude] CLI error at msg#${msgCount}: ${typeof errorText === "string" ? errorText : JSON.stringify(errorText)}`)
+        throw new Error(`CLI error: ${typeof errorText === "string" ? errorText : JSON.stringify(errorText)}`)
+      }
 
       // Collect text from assistant message content blocks
       if (m.type === "assistant" && m.message?.content) {
@@ -151,10 +162,23 @@ export async function callClaude(opts: CallClaudeOptions): Promise<CallClaudeRes
 
       // Also check for result message type (final summary)
       if (m.type === "result") {
+        // Result may have error info
+        if (m.is_error) {
+          const resultError = m.result || "Query failed"
+          console.error(`[callClaude] Query result error: ${resultError}`)
+          throw new Error(`Query failed: ${resultError}`)
+        }
         // Result may contain additional usage info
         if (m.input_tokens) inputTokens = m.input_tokens
         if (m.output_tokens) outputTokens = m.output_tokens
       }
+    }
+
+    console.log(`[callClaude] Stream complete, msgs=${msgCount}, textLen=${text.length}`)
+
+    if (!text.trim()) {
+      console.error("[callClaude] No text received from CLI — stream completed with empty response")
+      throw new Error("No response received from Claude")
     }
 
     return { text, inputTokens, outputTokens }

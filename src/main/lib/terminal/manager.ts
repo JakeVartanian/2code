@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events"
 import { FALLBACK_SHELL, SHELL_CRASH_THRESHOLD_MS } from "./env"
+import { outputBuffer } from "./output-buffer"
 import { portManager } from "./port-manager"
 import { createSession, setupInitialCommands } from "./session"
 import type {
@@ -70,6 +71,12 @@ export class TerminalManager extends EventEmitter {
 		this.sessions.set(paneId, session)
 
 		portManager.registerSession(session, workspaceId || "")
+		outputBuffer.registerSession(paneId, workspaceId || "")
+
+		// Feed terminal output to the ring buffer
+		this.on(`data:${paneId}`, (data: string) => {
+			outputBuffer.onData(paneId, data)
+		})
 
 		return {
 			isNew: true,
@@ -97,6 +104,8 @@ export class TerminalManager extends EventEmitter {
 				)
 
 				this.sessions.delete(paneId)
+				outputBuffer.unregisterSession(paneId)
+				this.removeAllListeners(`data:${paneId}`)
 
 				try {
 					await this.doCreateSession({
@@ -112,8 +121,10 @@ export class TerminalManager extends EventEmitter {
 				}
 			}
 
-			// Unregister from port manager (also removes detected ports)
+			// Unregister from port manager and output buffer
 			portManager.unregisterSession(paneId)
+			outputBuffer.unregisterSession(paneId)
+			this.removeAllListeners(`data:${paneId}`)
 
 			this.emit(`exit:${paneId}`, exitCode, signal)
 
@@ -416,6 +427,7 @@ export class TerminalManager extends EventEmitter {
 		await Promise.all(exitPromises)
 		this.sessions.clear()
 		this.removeAllListeners()
+		outputBuffer.clear()
 	}
 }
 

@@ -14,10 +14,10 @@ const DEFAULT_CONFIG: AmbientConfig = {
     haikuRateLimit: 60, // calls per hour — no artificial bottleneck
     sonnetRateLimit: 20, // calls per hour — Sonnet is where the real insights come from
   },
-  enabledCategories: ["bug", "security", "performance", "test-gap", "blind-spot", "next-step", "risk"],
+  enabledCategories: ["bug", "security", "performance", "test-gap", "blind-spot", "next-step", "risk", "memory", "design"],
   ignorePatterns: [],
   autoMemoryWrite: false, // Disabled — suggestions are in ambientSuggestions table, don't pollute project memories
-  triageThreshold: 0.65, // Lowered from 0.85 — let synthesis breathe, filter harder downstream
+  triageThreshold: 0.55, // Lowered from 0.65 — upstream context improvements make lower threshold viable
 }
 
 const VALID_CATEGORIES: SuggestionCategory[] = [
@@ -28,6 +28,10 @@ const VALID_CATEGORIES: SuggestionCategory[] = [
   "dead-code",
   "dependency",
   "blind-spot",
+  "next-step",
+  "risk",
+  "memory",
+  "design",
 ]
 
 /**

@@ -19,15 +19,18 @@ import {
 } from "../../../lib/atoms"
 import { appStore } from "../../../lib/jotai-store"
 import { trpcClient } from "../../../lib/trpc"
+import { selectedAgentChatIdAtom } from "../atoms"
 import {
   askUserQuestionResultsAtom,
   compactingSubChatsAtom,
   expiredUserQuestionsAtom,
   MODEL_ID_MAP,
   pendingAuthRetryMessageAtom,
+  pendingTasksAtom,
   pendingUserQuestionsAtom,
   subChatModelIdAtomFamily,
   subChatOpenRouterModelAtomFamily,
+  type PendingTask,
 } from "../atoms"
 import { useAgentSubChatStore } from "../stores/sub-chat-store"
 import type { AgentMessageMetadata } from "../ui/agent-message-usage"
@@ -45,17 +48,12 @@ const ERROR_TOAST_CONFIG: Record<
     description:
       "Not connected — Go to Settings → Claude Code to connect your account.",
   },
-  INVALID_API_KEY_SDK: {
-    title: "Invalid API key",
-    description:
-      "Your Claude API key is invalid. Check your CLI configuration.",
-  },
   INVALID_API_KEY: {
     title: "Invalid API key",
     description:
       "Your Claude API key is invalid. Check your CLI configuration.",
   },
-  OVERLOADED_SDK: {
+  OVERLOADED: {
     title: "Claude is busy",
     description:
       "Claude is overloaded after multiple retry attempts. Please try again in a few minutes.",
@@ -97,10 +95,6 @@ const ERROR_TOAST_CONFIG: Record<
     title: "OpenRouter model unavailable",
     description: "This model is currently unavailable or rate-limited. Try a different model in Settings → Models.",
   },
-  RATE_LIMIT_SDK: {
-    title: "Rate limit reached",
-    description: "You've hit your Claude usage limit. Wait a few minutes or start a new chat to continue.",
-  },
   RATE_LIMIT: {
     title: "Rate limit reached",
     description: "You've hit your Claude usage limit. Wait a few minutes or start a new chat to continue.",
@@ -119,8 +113,6 @@ const INLINE_ERROR_MESSAGES: Partial<Record<string, string>> = {
     "Connection was lost during the response. Send a follow-up to continue.",
   PROCESS_CRASH:
     "Claude crashed unexpectedly. Try sending your message again.",
-  RATE_LIMIT_SDK:
-    "Rate limit reached — your Claude usage limit has been hit. Wait a few minutes, then send your message again to continue.",
   RATE_LIMIT:
     "Rate limit reached — your Claude usage limit has been hit. Wait a few minutes, then send your message again to continue.",
 }
@@ -133,6 +125,19 @@ type UIMessageChunk = any // Inferred from subscription
 // metadata. Without this set, every subsequent sendMessages() would read the
 // stale ID, immediately hit SESSION_EXPIRED again, and loop forever.
 const expiredSessionIds = new Set<string>()
+
+/** Navigate to a specific sub-chat tab (used by toast action buttons) */
+function navigateToSubChat(chatId: string, subChatId: string) {
+  appStore.set(selectedAgentChatIdAtom, chatId)
+  const store = useAgentSubChatStore.getState()
+  store.addToOpenSubChats(subChatId)
+  store.setActiveSubChat(subChatId)
+}
+
+/** Build a Sonner action config that navigates to the given sub-chat */
+function goToTabAction(chatId: string, subChatId: string) {
+  return { label: "Go to tab", onClick: () => navigateToSubChat(chatId, subChatId) }
+}
 
 type IPCChatTransportConfig = {
   chatId: string
@@ -473,6 +478,44 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 return // don't enqueue retry-notification as a stream chunk
               }
 
+              // Handle CLI background task lifecycle — update pending tasks state
+              if (chunk.type === "task-started") {
+                const taskChunk = chunk as any
+                const desc = taskChunk.description || "Waiting..."
+                // Parse estimated wait from description (e.g., "~10 min", "in 5 minutes")
+                const minMatch = desc.match(/~?\s*(\d+)\s*min/i)
+                const estimatedMs = minMatch ? parseInt(minMatch[1], 10) * 60_000 : undefined
+
+                const current = appStore.get(pendingTasksAtom)
+                const next = new Map(current)
+                next.set(subId, {
+                  taskId: taskChunk.taskId,
+                  description: desc,
+                  scheduledAt: Date.now(),
+                  estimatedMs,
+                } satisfies PendingTask)
+                appStore.set(pendingTasksAtom, next)
+                return
+              }
+              if (chunk.type === "task-notification") {
+                const taskChunk = chunk as any
+                // Clear the pending task for this sub-chat
+                const current = appStore.get(pendingTasksAtom)
+                if (current.has(subId)) {
+                  const next = new Map(current)
+                  next.delete(subId)
+                  appStore.set(pendingTasksAtom, next)
+                }
+                if (taskChunk.status !== "completed") {
+                  toast.warning(`Task ${taskChunk.status}`, {
+                    description: taskChunk.summary || `Task ${taskChunk.status}`,
+                    duration: 5000,
+                    action: goToTabAction(this.config.chatId, this.config.subChatId),
+                  })
+                }
+                return
+              }
+
               // Handle errors - show toast to user FIRST before anything else
               if (chunk.type === "error") {
                 const category = chunk.debugInfo?.category || "UNKNOWN"
@@ -516,7 +559,6 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 // For auth/API key failures, prefer original backend error to aid debugging
                 const preferOriginalError =
                   category === "AUTH_FAILURE" ||
-                  category === "INVALID_API_KEY_SDK" ||
                   category === "INVALID_API_KEY"
                 // Use config description if set, otherwise fall back to errorText
                 const rawDescription = preferOriginalError
@@ -530,6 +572,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 toast.error(title, {
                   description,
                   duration: 12000,
+                  action: goToTabAction(this.config.chatId, this.config.subChatId),
                 })
 
                 // Inject inline error text into the chat thread so the user sees

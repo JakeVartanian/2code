@@ -21,6 +21,7 @@ import {
 } from "../db/schema"
 import { createId } from "../db/utils"
 import type { AmbientProvider } from "./provider"
+import type { BudgetTracker } from "./budget"
 import type { SystemZone } from "../../../shared/system-map-types"
 import type { AuditProgress, AuditRunResult } from "../../../shared/audit-types"
 import type { SuggestionCategory, SuggestionSeverity } from "./types"
@@ -120,7 +121,13 @@ export async function generateZoneAuditProfile(
   projectId: string,
   projectPath: string,
   provider: AmbientProvider,
+  budget?: BudgetTracker,
 ): Promise<string> {
+  // Budget gate: profile generation uses Sonnet (~4000 input, ~200 output)
+  if (budget && !budget.canSpend("sonnet", 4000, 200)) {
+    throw new Error("Budget insufficient for profile generation")
+  }
+
   const db = getDatabase()
   const fileContents = readZoneFiles(zone.linkedFiles, projectPath)
 
@@ -131,6 +138,9 @@ export async function generateZoneAuditProfile(
 ${fileContents.slice(0, 15000)}`
 
   const result = await provider.callSonnet(PROFILE_SYSTEM_PROMPT, userPrompt)
+
+  // Record spend
+  if (budget) budget.recordSpend("sonnet", result.inputTokens, result.outputTokens)
 
   // Parse the profile
   let profileData: any = {}
@@ -201,7 +211,13 @@ export async function executeZoneAudit(
   provider: AmbientProvider,
   trigger: string = "manual-zone",
   signal?: AbortSignal,
+  budget?: BudgetTracker,
 ): Promise<AuditRunResult> {
+  // Budget gate: audit execution uses Sonnet (~8000 input, ~800 output)
+  if (budget && !budget.canSpend("sonnet", 8000, 800)) {
+    return { runId: "", zonesAudited: 0, totalFindings: 0, suggestionsCreated: 0, overallScore: 0, durationMs: 0, progress: [], partialErrors: [{ zoneId: zone.id, error: "Budget insufficient" }] }
+  }
+
   const start = Date.now()
   const db = getDatabase()
 
@@ -277,6 +293,9 @@ export async function executeZoneAudit(
         signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("Audit cancelled")) })
       }),
     ])
+
+    // Record budget spend
+    if (budget) budget.recordSpend("sonnet", result.inputTokens, result.outputTokens)
 
     // Parse findings
     const rawFindings = parseFindings(result.text, zone)
@@ -384,6 +403,7 @@ export async function auditAllZones(
   profileId: string | null,
   provider: AmbientProvider,
   onProgress?: (progress: AuditProgress[], runId: string) => void,
+  budget?: BudgetTracker,
 ): Promise<AuditRunResult> {
   const start = Date.now()
   const db = getDatabase()
@@ -475,7 +495,7 @@ export async function auditAllZones(
         onProgress?.(progress, runId)
 
         try {
-          await generateZoneAuditProfile(zone, projectId, projectPath, provider)
+          await generateZoneAuditProfile(zone, projectId, projectPath, provider, budget)
         } catch (err: any) {
           console.error(`[ZoneAudit] Profile generation failed for "${zone.name}":`, err)
           // Continue with no profile — audit will use base prompt
@@ -502,6 +522,16 @@ export async function auditAllZones(
 
       const userPrompt = `# Zone: ${zone.name}\n## Description: ${zone.description}\n## Files: ${zone.linkedFiles.join(", ")}\n\n${fileContents}`
 
+      // Budget check before each zone's Sonnet call
+      if (budget && !budget.canSpend("sonnet", 8000, 800)) {
+        progress[i].status = "error"
+        progress[i].errorMessage = "Budget exhausted"
+        partialErrors.push({ zoneId: zone.id, error: "Budget exhausted" })
+        db.insert(auditRunZones).values({ runId, zoneId: zone.id, zoneName: zone.name, zoneScore: 0 }).run()
+        zoneScores.push(0)
+        continue
+      }
+
       const result = await Promise.race([
         provider.callSonnet(systemPrompt, userPrompt.slice(0, 30000)),
         new Promise<never>((_, reject) => {
@@ -509,6 +539,9 @@ export async function auditAllZones(
           controller.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("Audit cancelled")) })
         }),
       ])
+
+      // Record budget spend
+      if (budget) budget.recordSpend("sonnet", result.inputTokens, result.outputTokens)
 
       const rawFindings = parseFindings(result.text, zone)
       const sevOrder: Record<string, number> = { info: 0, warning: 1, error: 2 }
@@ -600,6 +633,7 @@ export async function auditZone(
   projectPath: string,
   zoneId: string,
   provider: AmbientProvider,
+  budget?: BudgetTracker,
 ): Promise<AuditRunResult> {
   // Lock
   const lockError = acquireZoneLock(projectId, zoneId)
@@ -634,11 +668,11 @@ export async function auditZone(
       profileId = existing.id
     } else {
       // Phase A: Generate profile
-      profileId = await generateZoneAuditProfile(zone, projectId, projectPath, provider)
+      profileId = await generateZoneAuditProfile(zone, projectId, projectPath, provider, budget)
     }
 
     // Phase B: Execute audit
-    return await executeZoneAudit(zone, profileId, projectId, projectPath, provider, "manual-zone")
+    return await executeZoneAudit(zone, profileId, projectId, projectPath, provider, "manual-zone", undefined, budget)
   } finally {
     releaseZoneLock(projectId, zoneId)
   }
@@ -652,12 +686,13 @@ export async function auditAllZonesWithLock(
   projectPath: string,
   provider: AmbientProvider,
   onProgress?: (progress: AuditProgress[], runId: string) => void,
+  budget?: BudgetTracker,
 ): Promise<AuditRunResult> {
   const lockError = acquireProjectLock(projectId)
   if (lockError) throw new Error(lockError)
 
   try {
-    return await auditAllZones(projectId, projectPath, null, provider, onProgress)
+    return await auditAllZones(projectId, projectPath, null, provider, onProgress, budget)
   } finally {
     releaseProjectLock(projectId)
   }

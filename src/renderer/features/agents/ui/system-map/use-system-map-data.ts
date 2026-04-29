@@ -194,7 +194,7 @@ export function useSystemMapData(projectId: string | null, chatId: string): Syst
     { chatId },
     {
       enabled: !!chatId,
-      refetchInterval: 3_000,
+      refetchInterval: 15_000,
       placeholderData: (prev) => prev,
     },
   )
@@ -238,19 +238,30 @@ export function useSystemMapData(projectId: string | null, chatId: string): Syst
   const allSubChats = useAgentSubChatStore((s) => s.allSubChats)
   const openSubChatIds = useAgentSubChatStore((s) => s.openSubChatIds)
   const activeSubChatId = useAgentSubChatStore((s) => s.activeSubChatId)
-  const streamingStatuses = useStreamingStatusStore((s) => s.statuses)
+  // Only subscribe to streaming IDs relevant to this chat's sub-chats,
+  // not the entire statuses object (which changes on every status update across ALL chats).
+  // Returns a comma-joined string for stable reference equality.
+  const subChatIds = useMemo(() => allSubChats.map(sc => sc.id), [allSubChats])
+  const streamingIdsKey = useStreamingStatusStore((s) => {
+    const ids: string[] = []
+    for (const id of subChatIds) {
+      if (s.statuses[id] === "streaming" || s.statuses[id] === "submitted") {
+        ids.push(id)
+      }
+    }
+    return ids.join(",")
+  })
+  const streamingSet = useMemo(() => new Set(streamingIdsKey ? streamingIdsKey.split(",") : []), [streamingIdsKey])
 
   const agents = useMemo<AgentItem[]>(() => {
     return allSubChats.map((sc) => ({
       id: sc.id,
       name: sc.name,
       mode: sc.mode || "agent",
-      isStreaming:
-        streamingStatuses[sc.id] === "streaming" ||
-        streamingStatuses[sc.id] === "submitted",
+      isStreaming: streamingSet.has(sc.id),
       isActive: sc.id === activeSubChatId,
     }))
-  }, [allSubChats, activeSubChatId, streamingStatuses])
+  }, [allSubChats, activeSubChatId, streamingSet])
 
   // ── 5. Ambient Suggestions ───────────────────────────────────────────────
 
@@ -303,9 +314,7 @@ export function useSystemMapData(projectId: string | null, chatId: string): Syst
     const hasActiveOrchestration = !!orchestrationRun && !["completed", "failed", "cancelled"].includes(runStatus || "")
 
     // Check if any sub-agents are actively streaming
-    const hasStreamingAgents = Object.values(streamingStatuses).some(
-      (s) => s === "streaming" || s === "submitted",
-    )
+    const hasStreamingAgents = streamingSet.size > 0
 
     // Check if there are plan-mode sub-chats (indicates planning phase)
     const hasPlanSubChats = allSubChats.some((sc) => sc.mode === "plan")
@@ -343,7 +352,7 @@ export function useSystemMapData(projectId: string | null, chatId: string): Syst
       activeStage,
       completedStages: [...new Set(completedStages)],
     }
-  }, [orchestrationRun, streamingStatuses, allSubChats, openSubChatIds])
+  }, [orchestrationRun, streamingSet, allSubChats, openSubChatIds])
 
   // ── Loading state ────────────────────────────────────────────────────────
 

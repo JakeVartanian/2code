@@ -1,5 +1,5 @@
 /**
- * MemoryCluster — Visualizes the memory bank as 6 category clusters.
+ * MemoryCluster — Visualizes the memory bank as category clusters.
  * Each cluster shows colored dots representing individual memories,
  * sized by relevance and colored by state (active/cold/dead).
  */
@@ -34,6 +34,9 @@ const CATEGORIES = [
   "debugging",
   "preference",
   "gotcha",
+  "brand",
+  "strategy",
+  "design",
 ] as const
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -43,6 +46,9 @@ const CATEGORY_COLORS: Record<string, string> = {
   debugging: "border-amber-500/30",
   preference: "border-cyan-500/30",
   gotcha: "border-red-500/30",
+  brand: "border-pink-500/30",
+  strategy: "border-indigo-500/30",
+  design: "border-yellow-500/30",
 }
 
 const CATEGORY_HEADER_COLORS: Record<string, string> = {
@@ -52,6 +58,9 @@ const CATEGORY_HEADER_COLORS: Record<string, string> = {
   debugging: "text-amber-400",
   preference: "text-cyan-400",
   gotcha: "text-red-400",
+  brand: "text-pink-400",
+  strategy: "text-indigo-400",
+  design: "text-yellow-400",
 }
 
 const STATE_DOT_COLORS: Record<Memory["state"], string> = {

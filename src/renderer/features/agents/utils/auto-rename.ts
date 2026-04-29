@@ -37,57 +37,81 @@ export async function autoRenameAgentChat({
 }: AutoRenameParams) {
   console.log("[auto-rename] Called with:", { subChatId, parentChatId, userMessage: userMessage.slice(0, 50), isFirstSubChat })
 
+  let name: string
+
   try {
     // 1. Generate name from LLM via tRPC
     console.log("[auto-rename] Calling generateName...")
-    const { name } = await generateName(userMessage)
+    const result = await generateName(userMessage)
+    name = result.name
     console.log("[auto-rename] Generated name:", name)
 
     if (!name || name === "New Chat") {
       console.log("[auto-rename] Skipping - generic name")
       return // Don't rename if we got a generic name
     }
+  } catch (error) {
+    // Name generation failed entirely — use truncated message as fallback
+    console.error("[auto-rename] generateName threw, using fallback:", error)
+    const trimmed = userMessage.trim()
+    name = trimmed.length <= 25 ? trimmed : trimmed.substring(0, 25) + "..."
+    if (!name) return
+  }
 
-    // 2. Retry loop with delays [0, 3000, 5000, 5000]ms
-    const delays = [0, 3_000, 5_000, 5_000]
+  // 2. Optimistically update the UI immediately so user sees the name
+  // even before the DB write succeeds
+  updateSubChatName(subChatId, name)
+  if (isFirstSubChat) {
+    const currentName = getCurrentChatName?.()
+    const wasManuallyRenamed = currentName != null
+      && currentName !== originalChatName
+      && currentName !== "New Chat"
+      && currentName !== ""
+    if (!wasManuallyRenamed) {
+      updateChatName(parentChatId, name)
+    }
+  }
 
-    for (let attempt = 0; attempt < delays.length; attempt++) {
-      if (attempt > 0) {
-        await sleep(delays[attempt])
+  // 3. Persist to DB with retries — sub-chat may not exist in DB yet
+  // since creation and auto-rename are concurrent
+  const delays = [500, 1500, 3000, 5000, 5000]
+
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    await sleep(delays[attempt])
+
+    try {
+      // Rename sub-chat in DB
+      await renameSubChat({ id: subChatId, name })
+
+      // Also rename parent chat if this is the first sub-chat,
+      // BUT only if the user hasn't manually renamed it since auto-rename was triggered
+      if (isFirstSubChat) {
+        const currentName = getCurrentChatName?.()
+        const wasManuallyRenamed = currentName != null
+          && currentName !== originalChatName
+          && currentName !== "New Chat"
+          && currentName !== ""
+          && currentName !== name // Don't skip if it's our optimistic update
+        if (!wasManuallyRenamed) {
+          try {
+            await renameChat({ id: parentChatId, name })
+          } catch (chatErr) {
+            console.warn("[auto-rename] Failed to rename parent chat:", chatErr)
+          }
+        } else {
+          console.log("[auto-rename] Skipping parent chat rename — user manually renamed to:", currentName)
+        }
       }
 
-      try {
-        // Rename sub-chat
-        await renameSubChat({ id: subChatId, name })
-        updateSubChatName(subChatId, name)
-
-        // Also rename parent chat if this is the first sub-chat,
-        // BUT only if the user hasn't manually renamed it since auto-rename was triggered
-        if (isFirstSubChat) {
-          const currentName = getCurrentChatName?.()
-          const wasManuallyRenamed = currentName != null
-            && currentName !== originalChatName
-            && currentName !== "New Chat"
-            && currentName !== ""
-          if (!wasManuallyRenamed) {
-            await renameChat({ id: parentChatId, name })
-            updateChatName(parentChatId, name)
-          } else {
-            console.log("[auto-rename] Skipping parent chat rename — user manually renamed to:", currentName)
-          }
-        }
-
-        return // Success!
-      } catch {
-        // NOT_FOUND or other error - retry
-        if (attempt === delays.length - 1) {
-          console.error(
-            `[auto-rename] Failed to rename after ${delays.length} attempts`,
-          )
-        }
+      console.log(`[auto-rename] Successfully persisted name "${name}" on attempt ${attempt + 1}`)
+      return // Success!
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (attempt === delays.length - 1) {
+        console.error(`[auto-rename] Failed to persist name after ${delays.length} attempts. Last error: ${msg}`)
+      } else {
+        console.log(`[auto-rename] Attempt ${attempt + 1} failed (${msg}), retrying...`)
       }
     }
-  } catch (error) {
-    console.error("[auto-rename] Auto-rename failed:", error)
   }
 }

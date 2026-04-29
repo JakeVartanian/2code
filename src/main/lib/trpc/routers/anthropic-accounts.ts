@@ -40,6 +40,43 @@ export const anthropicAccountsRouter = router({
     const db = getDatabase()
 
     try {
+      // Deduplicate accounts with identical OAuth tokens (from repeated OAuth flows)
+      const allRaw = db.select().from(anthropicAccounts).orderBy(anthropicAccounts.connectedAt).all()
+      if (allRaw.length > 1) {
+        const seenTokens = new Map<string, string>() // decrypted token → kept account id
+        const activeSettings = db.select().from(anthropicSettings).where(eq(anthropicSettings.id, "singleton")).get()
+        const activeId = activeSettings?.activeAccountId
+
+        for (const acct of allRaw) {
+          if (!acct.oauthToken) continue
+          const token = decryptToken(acct.oauthToken)
+          if (!token) {
+            // Undecryptable — remove
+            db.delete(anthropicAccounts).where(eq(anthropicAccounts.id, acct.id)).run()
+            console.log(`[accounts] Removed undecryptable account ${acct.id}`)
+            continue
+          }
+          const existing = seenTokens.get(token)
+          if (existing) {
+            // Duplicate token — keep the active one or the first one seen
+            const idToRemove = acct.id === activeId ? existing : acct.id
+            const idToKeep = acct.id === activeId ? acct.id : existing
+            db.delete(anthropicAccounts).where(eq(anthropicAccounts.id, idToRemove)).run()
+            seenTokens.set(token, idToKeep)
+            console.log(`[accounts] Removed duplicate account ${idToRemove} (kept ${idToKeep})`)
+            // If we removed the active account reference, update settings
+            if (idToRemove === activeId) {
+              db.update(anthropicSettings)
+                .set({ activeAccountId: idToKeep, updatedAt: new Date() })
+                .where(eq(anthropicSettings.id, "singleton"))
+                .run()
+            }
+          } else {
+            seenTokens.set(token, acct.id)
+          }
+        }
+      }
+
       const accounts = db
         .select({
           id: anthropicAccounts.id,

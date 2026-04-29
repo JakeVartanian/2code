@@ -10,11 +10,12 @@ interface RateLimitEntry {
 
 const rateLimitedAccounts = new Map<string, RateLimitEntry>()
 
-// Default cooldown: 5 minutes (conservative fallback when no reset time is known).
-// The actual reset time should be passed via resetsAt from the SDK's rate_limit_event data.
-// Using 5 min instead of 5 hours prevents locking users out for their entire session
-// from a single transient 429.
-const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000
+// Default cooldown: 2 hours (fallback when no reset time is known from SDK events).
+// Anthropic rate limits are typically 5-hour or 7-day windows. A short default (e.g. 5 min)
+// causes the app to cycle back to the rate-limited account every few minutes, hitting 429s
+// repeatedly instead of staying on the account that has capacity.
+// 2 hours is long enough to avoid cycling but short enough to recover within a session.
+const DEFAULT_COOLDOWN_MS = 2 * 60 * 60 * 1000
 
 export function markAccountRateLimited(accountId: string, resetsAt?: number): void {
   rateLimitedAccounts.set(accountId, {

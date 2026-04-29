@@ -149,7 +149,7 @@ export function ChatDataSync({
         subChatId,
         updateGlobal: true,
       })
-    }, 250) // 4fps polling — sufficient for discrete tool status transitions, reduces redundant syncs
+    }, 500) // 2fps polling — sufficient for discrete tool status transitions, halves CPU load vs 250ms
 
     return () => clearInterval(interval)
   }, [isActive, status, subChatId, syncMessagesAtom])

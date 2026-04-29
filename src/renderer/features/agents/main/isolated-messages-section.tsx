@@ -1,8 +1,14 @@
-import { memo } from "react"
+import { memo, useCallback, useMemo, useState } from "react"
 import { useAtomValue } from "jotai"
+import { AnimatePresence } from "motion/react"
 import { userMessageIdsPerChatAtom, chatTruncationAtomFamily } from "../stores/message-store"
 import { IsolatedMessageGroup } from "./isolated-message-group"
 import { AlertCircle } from "lucide-react"
+import {
+  computeChapters,
+  ChapterHeader,
+  CollapsedChapterSummary,
+} from "../ui/conversation-chapters"
 
 // ============================================================================
 // ISOLATED MESSAGES SECTION (LAYER 3)
@@ -84,6 +90,46 @@ export const IsolatedMessagesSection = memo(function IsolatedMessagesSection({
   const userMsgIds = useAtomValue(userMessageIdsPerChatAtom(subChatId))
   const truncationState = useAtomValue(chatTruncationAtomFamily(subChatId))
 
+  // Compute chapters from user message IDs.
+  // Recomputes only when userMsgIds array changes (new turn added).
+  // Uses appStore.get() internally — no additional atom subscriptions.
+  const chapters = useMemo(
+    () => computeChapters(subChatId, userMsgIds),
+    [subChatId, userMsgIds],
+  )
+
+  // Track which chapters are collapsed (by chapter index)
+  const [collapsedChapters, setCollapsedChapters] = useState<Set<number>>(
+    () => new Set(),
+  )
+
+  const toggleChapter = useCallback((chapterIndex: number) => {
+    setCollapsedChapters((prev) => {
+      const next = new Set(prev)
+      if (next.has(chapterIndex)) {
+        next.delete(chapterIndex)
+      } else {
+        next.add(chapterIndex)
+      }
+      return next
+    })
+  }, [])
+
+  // Only show chapters when there are multiple (single chapter = no headers needed)
+  const showChapters = chapters.length > 1
+
+  // Build a lookup: userMsgId → chapter index for quick access
+  const userMsgChapterMap = useMemo(() => {
+    if (!showChapters) return null
+    const map = new Map<string, number>()
+    for (const chapter of chapters) {
+      for (const uid of chapter.userMsgIds) {
+        map.set(uid, chapter.index)
+      }
+    }
+    return map
+  }, [chapters, showChapters])
+
   // Format character count for display
   const formatSize = (chars: number): string => {
     if (chars < 1000) return `${chars} chars`
@@ -109,25 +155,69 @@ export const IsolatedMessagesSection = memo(function IsolatedMessagesSection({
           </div>
         </div>
       )}
-      {userMsgIds.map((userMsgId) => (
-        <IsolatedMessageGroup
-          key={userMsgId}
-          userMsgId={userMsgId}
-          subChatId={subChatId}
-          chatId={chatId}
-          isMobile={isMobile}
-          sandboxSetupStatus={sandboxSetupStatus}
-          stickyTopClass={stickyTopClass}
-          sandboxSetupError={sandboxSetupError}
-          onRetrySetup={onRetrySetup}
-          onRollback={onRollback}
-          onFork={onFork}
-          UserBubbleComponent={UserBubbleComponent}
-          ToolCallComponent={ToolCallComponent}
-          MessageGroupWrapper={MessageGroupWrapper}
-          toolRegistry={toolRegistry}
-        />
-      ))}
+
+      {showChapters
+        ? chapters.map((chapter) => {
+            const isCollapsed = collapsedChapters.has(chapter.index)
+            return (
+              <div key={`chapter-${chapter.index}`}>
+                <ChapterHeader
+                  chapter={chapter}
+                  isCollapsed={isCollapsed}
+                  onToggle={() => toggleChapter(chapter.index)}
+                  isFirst={chapter.index === 0}
+                />
+                <AnimatePresence initial={false}>
+                  {isCollapsed ? (
+                    <CollapsedChapterSummary
+                      key="collapsed"
+                      chapter={chapter}
+                      onExpand={() => toggleChapter(chapter.index)}
+                    />
+                  ) : (
+                    chapter.userMsgIds.map((userMsgId) => (
+                      <IsolatedMessageGroup
+                        key={userMsgId}
+                        userMsgId={userMsgId}
+                        subChatId={subChatId}
+                        chatId={chatId}
+                        isMobile={isMobile}
+                        sandboxSetupStatus={sandboxSetupStatus}
+                        stickyTopClass={stickyTopClass}
+                        sandboxSetupError={sandboxSetupError}
+                        onRetrySetup={onRetrySetup}
+                        onRollback={onRollback}
+                        onFork={onFork}
+                        UserBubbleComponent={UserBubbleComponent}
+                        ToolCallComponent={ToolCallComponent}
+                        MessageGroupWrapper={MessageGroupWrapper}
+                        toolRegistry={toolRegistry}
+                      />
+                    ))
+                  )}
+                </AnimatePresence>
+              </div>
+            )
+          })
+        : userMsgIds.map((userMsgId) => (
+            <IsolatedMessageGroup
+              key={userMsgId}
+              userMsgId={userMsgId}
+              subChatId={subChatId}
+              chatId={chatId}
+              isMobile={isMobile}
+              sandboxSetupStatus={sandboxSetupStatus}
+              stickyTopClass={stickyTopClass}
+              sandboxSetupError={sandboxSetupError}
+              onRetrySetup={onRetrySetup}
+              onRollback={onRollback}
+              onFork={onFork}
+              UserBubbleComponent={UserBubbleComponent}
+              ToolCallComponent={ToolCallComponent}
+              MessageGroupWrapper={MessageGroupWrapper}
+              toolRegistry={toolRegistry}
+            />
+          ))}
     </>
   )
 }, areSectionPropsEqual)

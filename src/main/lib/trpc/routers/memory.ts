@@ -22,6 +22,9 @@ const memoryCategoryEnum = z.enum([
   "debugging",
   "preference",
   "gotcha",
+  "brand",
+  "strategy",
+  "design",
 ])
 
 const memorySourceEnum = z.enum(["auto", "manual", "command", "suggested"])
@@ -318,6 +321,12 @@ export const memoryRouter = router({
           category = "debugging"
         } else if (/gotcha|caveat|warning|careful|pitfall|race condition/.test(textLower)) {
           category = "gotcha"
+        } else if (/brand|voice|tone|messaging|copy|tagline|logo/.test(textLower)) {
+          category = "brand"
+        } else if (/strategy|vision|roadmap|priority|goal|audience|market/.test(textLower)) {
+          category = "strategy"
+        } else if (/design|ux|ui|layout|animation|visual|color|typography|sketch|wireframe/.test(textLower)) {
+          category = "design"
         }
 
         memories.push({

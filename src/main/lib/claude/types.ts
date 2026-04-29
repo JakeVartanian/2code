@@ -39,6 +39,22 @@ export type UIMessageChunk =
     }
   | { type: "ask-user-question-timeout"; toolUseId: string }
   | { type: "message-metadata"; messageMetadata: MessageMetadata }
+  // Task scheduling (CLI background tasks — e.g., "check back at 13:39")
+  | {
+      type: "task-started"
+      taskId: string
+      toolUseId?: string
+      description: string
+      taskType?: string
+      sessionId: string
+    }
+  | {
+      type: "task-notification"
+      taskId: string
+      status: "completed" | "failed" | "stopped"
+      summary: string
+      sessionId: string
+    }
   // Session initialization (MCP servers, plugins, tools)
   | {
       type: "session-init"

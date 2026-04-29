@@ -1,6 +1,6 @@
 /**
- * useArchitectureData — fetches system map zones and computes
- * confidence/severity overlays from ambient suggestions.
+ * useArchitectureData — fetches system map zones and enriches them
+ * with open audit finding counts from the canonical auditFindings table.
  */
 
 import { useMemo } from "react"
@@ -27,27 +27,6 @@ export interface ArchitectureMapData {
   isLoading: boolean
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function normalizePath(p: string): string {
-  let n = p.replace(/\\/g, "/")
-  if (n.startsWith("./")) n = n.slice(2)
-  if (n.startsWith("/")) n = n.slice(1)
-  if (n.endsWith("/")) n = n.slice(0, -1)
-  return n
-}
-
-function isUnderPath(filePath: string, dirPath: string): boolean {
-  const nf = normalizePath(filePath)
-  const nd = normalizePath(dirPath)
-  return nf === nd || nf.startsWith(nd + "/")
-}
-
-function maxSeverity(a: Severity, b: Severity): Severity {
-  const order: Record<Severity, number> = { none: 0, info: 1, warning: 2, error: 3 }
-  return order[a] >= order[b] ? a : b
-}
-
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useArchitectureData(
@@ -65,9 +44,9 @@ export function useArchitectureData(
     },
   )
 
-  // 2. Ambient suggestions for overlay
-  const suggestionsQuery = trpc.ambient.listSuggestions.useQuery(
-    { projectId: projectId!, status: "pending", limit: 500 },
+  // 2. Open audit findings summary per zone (canonical source of truth)
+  const findingSummaryQuery = trpc.ambient.getZoneFindingSummary.useQuery(
+    { projectId: projectId! },
     {
       enabled: hasProject,
       refetchInterval: 15_000,
@@ -87,7 +66,7 @@ export function useArchitectureData(
 
   const result = useMemo<Omit<ArchitectureMapData, "isLoading">>(() => {
     const rawZones: SystemZone[] = mapQuery.data?.zones ?? []
-    const suggestions = suggestionsQuery.data ?? []
+    const findingSummary = findingSummaryQuery.data ?? {}
     const brainStatus = brainQuery.data
 
     if (rawZones.length === 0) {
@@ -104,44 +83,15 @@ export function useArchitectureData(
       }
     }
 
-    // Enrich zones with suggestion overlays
+    // Enrich zones with audit finding data
     const enriched: EnrichedZone[] = rawZones.map((zone) => {
-      let totalConfidence = 0
-      let confidenceCount = 0
-      let severity: Severity = "none"
-      let issueCount = 0
-      let latestAnalysis: string | null = null
-
-      for (const s of suggestions) {
-        const triggerFiles = Array.isArray(s.triggerFiles) ? s.triggerFiles : []
-        const zoneLinked = zone.linkedFiles
-
-        // Check if any trigger file falls under (or contains) any of the zone's linked paths
-        const matches = triggerFiles.some((tf) =>
-          zoneLinked.some((zf) => isUnderPath(tf, zf) || isUnderPath(zf, tf)),
-        )
-
-        if (matches) {
-          issueCount++
-          severity = maxSeverity(severity, (s.severity ?? "none") as Severity)
-          const conf = (s as any).confidence ?? 50
-          totalConfidence += conf
-          confidenceCount++
-          const ts = s.createdAt instanceof Date
-            ? s.createdAt.toISOString()
-            : typeof s.createdAt === "string" ? s.createdAt : null
-          if (ts && (!latestAnalysis || ts > latestAnalysis)) {
-            latestAnalysis = ts
-          }
-        }
-      }
-
+      const summary = findingSummary[zone.id]
       return {
         ...zone,
-        confidence: confidenceCount > 0 ? Math.round(totalConfidence / confidenceCount) : 0,
-        severity,
-        issueCount,
-        lastAuditedAt: latestAnalysis,
+        confidence: summary?.avgConfidence ?? 0,
+        severity: (summary?.maxSeverity ?? "none") as Severity,
+        issueCount: summary?.issueCount ?? 0,
+        lastAuditedAt: summary?.lastAuditedAt ?? null,
       }
     })
 
@@ -160,10 +110,10 @@ export function useArchitectureData(
       hasSystemMap: true,
       hasBrain: (brainStatus?.memoryCount ?? 0) > 0,
     }
-  }, [mapQuery.data, suggestionsQuery.data, brainQuery.data])
+  }, [mapQuery.data, findingSummaryQuery.data, brainQuery.data])
 
   return {
     ...result,
-    isLoading: mapQuery.isLoading || suggestionsQuery.isLoading,
+    isLoading: mapQuery.isLoading || findingSummaryQuery.isLoading,
   }
 }

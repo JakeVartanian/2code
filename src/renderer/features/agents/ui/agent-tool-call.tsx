@@ -15,6 +15,8 @@ interface AgentToolCallProps {
   isError: boolean
   isNested?: boolean
   onClick?: () => void
+  /** One-line "why" annotation extracted from preceding assistant text */
+  intentAnnotation?: string
 }
 
 export const AgentToolCall = memo(
@@ -27,6 +29,7 @@ export const AgentToolCall = memo(
     isError: _isError,
     isNested,
     onClick,
+    intentAnnotation,
   }: AgentToolCallProps) {
     // Ensure title and subtitle are strings (copied from canvas)
     const titleStr = String(title)
@@ -79,7 +82,7 @@ export const AgentToolCall = memo(
         </div> */}
 
         {/* Content container - matches canvas exactly */}
-        <div className="flex-1 min-w-0 flex items-center gap-1.5">
+        <div className="flex-1 min-w-0 flex flex-col gap-0">
           <div className="text-xs text-muted-foreground flex items-center gap-1.5 min-w-0">
             <span className="font-medium whitespace-nowrap flex-shrink-0">
               {isPending ? (
@@ -96,6 +99,11 @@ export const AgentToolCall = memo(
             </span>
             {subtitleElement}
           </div>
+          {intentAnnotation && !isPending && (
+            <span className="text-[10px] text-muted-foreground/40 italic truncate pl-0">
+              {intentAnnotation}
+            </span>
+          )}
         </div>
       </div>
     )
@@ -109,7 +117,8 @@ export const AgentToolCall = memo(
       prevProps.isPending === nextProps.isPending &&
       prevProps.isError === nextProps.isError &&
       prevProps.isNested === nextProps.isNested &&
-      prevProps.onClick === nextProps.onClick
+      prevProps.onClick === nextProps.onClick &&
+      prevProps.intentAnnotation === nextProps.intentAnnotation
     )
   },
 )

@@ -49,8 +49,6 @@ import { AgentsRenameSubChatDialog } from "../agents/components/agents-rename-su
 import { OpenLocallyDialog } from "../agents/components/open-locally-dialog"
 import { useAutoImport } from "../agents/hooks/use-auto-import"
 import { AmbientSidebarSection } from "../ambient/ambient-sidebar-section"
-import { AssessmentPanel } from "../ambient/assessment-panel"
-import { assessmentPanelSuggestionIdAtom } from "../ambient/atoms"
 import { BackgroundTasksIndicator } from "./background-tasks-indicator"
 import { ConfirmArchiveDialog } from "../../components/confirm-archive-dialog"
 import { clearChatRuntimeCaches, pruneOrphanedLocalStorageKeys } from "../agents/stores/sub-chat-runtime-cleanup"
@@ -2063,7 +2061,6 @@ export function AgentsSidebar({
 
   // Sidebar appearance settings
   const showWorkspaceIcon = useAtomValue(showWorkspaceIconAtom)
-  const assessmentPanelId = useAtomValue(assessmentPanelSuggestionIdAtom)
 
   // Desktop: use selectedProject instead of teams
   const [selectedProject] = useAtom(selectedProjectAtom)
@@ -3460,13 +3457,6 @@ export function AgentsSidebar({
           </Tooltip>
         </div>
       </div>
-
-      {/* Assessment Panel overlay — floats over the sidebar when a suggestion is selected */}
-      {assessmentPanelId && (
-        <div className="absolute inset-0 z-50 bg-tl-background">
-          <AssessmentPanel chatId={selectedChatId ?? null} />
-        </div>
-      )}
 
       {/* Scrollable Agents List */}
       <div className="flex-1 min-h-0 relative">

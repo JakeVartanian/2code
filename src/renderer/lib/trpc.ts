@@ -15,3 +15,7 @@ export const trpc = createTRPCReact<AppRouter>()
 export const trpcClient = createTRPCProxyClient<AppRouter>({
   links: [ipcLink({ transformer: superjson })],
 })
+
+// Debug: expose tRPC client on window for console testing
+// TODO: remove after debugging naming/optimize issues
+;(window as any).__trpc = trpcClient

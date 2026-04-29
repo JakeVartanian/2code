@@ -13,10 +13,13 @@ import { auditProgressAtom, auditProgressDefaultState } from "../audit-progress-
 export function useAmbientData(
   projectId: string | null,
   projectPath?: string | null,
+  isExpanded?: boolean,
 ) {
   const {
     setSuggestions,
     removeSuggestion,
+    setMaintenanceActions,
+    removeMaintenanceAction,
     setBudgetStatus,
     setAgentStatus,
     setActivity,
@@ -38,22 +41,28 @@ export function useAmbientData(
 
   // ─── Queries ────────────────────────────────────────────────────────
 
-  // Fetch suggestions
+  // Fetch suggestions — always poll (needed for badge count even when collapsed)
   const { data: suggestions } = trpc.ambient.listSuggestions.useQuery(
     { projectId: projectId! },
     { enabled: !!projectId, refetchInterval: 30_000 },
   )
 
-  // Fetch budget
-  const { data: budget } = trpc.ambient.getBudgetStatus.useQuery(
+  // Fetch maintenance actions — slower when collapsed since only shown in expanded view
+  const { data: maintenanceActionsData } = trpc.ambient.listMaintenanceActions.useQuery(
     { projectId: projectId! },
-    { enabled: !!projectId, refetchInterval: 60_000 },
+    { enabled: !!projectId, refetchInterval: isExpanded ? 30_000 : 120_000 },
   )
 
-  // Fetch status
+  // Fetch budget — only needed in expanded view
+  const { data: budget } = trpc.ambient.getBudgetStatus.useQuery(
+    { projectId: projectId! },
+    { enabled: !!projectId, refetchInterval: isExpanded ? 60_000 : false },
+  )
+
+  // Fetch status — poll faster when expanded, slower when collapsed
   const { data: status } = trpc.ambient.getStatus.useQuery(
     { projectId: projectId! },
-    { enabled: !!projectId, refetchInterval: 10_000 },
+    { enabled: !!projectId, refetchInterval: isExpanded ? 10_000 : 30_000 },
   )
 
   // ─── Sync to store ─────────────────────────────────────────────────
@@ -77,6 +86,21 @@ export function useAmbientData(
       })))
     }
   }, [suggestions])
+
+  useEffect(() => {
+    if (maintenanceActionsData) {
+      setMaintenanceActions(maintenanceActionsData.map((a) => ({
+        id: a.id,
+        projectId: a.projectId,
+        type: a.type,
+        title: a.title,
+        description: a.description,
+        details: a.details,
+        status: a.status,
+        createdAt: a.createdAt ? new Date(a.createdAt as unknown as string) : null,
+      })))
+    }
+  }, [maintenanceActionsData])
 
   useEffect(() => {
     if (budget) setBudgetStatus(budget)
@@ -106,6 +130,7 @@ export function useAmbientData(
               : s.category === "risk" ? "Risk"
               : s.category === "bug" ? "Bug"
               : s.category === "test-gap" ? "Test gap"
+              : s.category === "design" ? "Design"
               : s.category
 
             if (s.severity === "error") {
@@ -129,6 +154,15 @@ export function useAmbientData(
         }
         if (event.type === "suggestion-approved" && event.suggestionId) {
           removeSuggestion(event.suggestionId)
+        }
+        if (event.type === "maintenance-action-requested") {
+          utils.ambient.listMaintenanceActions.invalidate({ projectId: projectId! })
+        }
+        if (event.type === "maintenance-action-completed" && event.actionId) {
+          removeMaintenanceAction(event.actionId)
+        }
+        if (event.type === "maintenance-action-denied" && event.actionId) {
+          removeMaintenanceAction(event.actionId)
         }
         if (event.type === "finding-resolved") {
           // Refetch audit findings when a finding is resolved

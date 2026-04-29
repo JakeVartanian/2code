@@ -7,21 +7,27 @@
 
 import { exec } from "child_process"
 import { promisify } from "util"
+import { readFileSync, existsSync } from "fs"
+import { join } from "path"
 
 const execAsync = promisify(exec)
 import { eq, and, sql } from "drizzle-orm"
 import { getDatabase } from "../db"
-import { ambientSuggestions, projectMemories, auditFindings, projects } from "../db/schema"
+import { ambientSuggestions, projectMemories, auditFindings, projects, maintenanceActions } from "../db/schema"
 import { createId } from "../db/utils"
 import type { SystemZone } from "../../../shared/system-map-types"
-import { runHeuristics } from "./heuristics"
+import { runHeuristics, checkDocDrift } from "./heuristics"
 import { getHeuristicThreshold } from "./config"
 import { triageWithHaiku } from "./triage"
-import { analyzeWithSonnet } from "./analysis"
+import { analyzeWithSonnet, verifySuggestion } from "./analysis"
 import { FeedbackTracker } from "./feedback"
 import { BudgetTracker } from "./budget"
 import { checkStaleness } from "./staleness"
+import { DependencyIndex } from "./dependency-index"
+import { SessionPatternTracker } from "./session-patterns"
 import { getMemoriesForInjection } from "../memory/injection"
+import { checkReactivation, recordSessionFeedback } from "./memory-cycling"
+import { checkMapFreshness } from "./map-freshness"
 import type { AmbientProvider } from "./provider"
 import { runChatHeuristics, clearSessionTrackers } from "./chat-heuristics"
 import { buildSessionSummary, drainSessionEvents, getSessionEvents } from "./chat-bridge"
@@ -43,10 +49,10 @@ function getAmbientEvents() {
   return ambientEvents
 }
 
-const RECENT_CACHE_TTL = 24 * 60 * 60 * 1000 // 24 hours
+const RECENT_CACHE_TTL = 45 * 60 * 1000 // 45 min — keeps suggestions fresh without over-deduping
 const RECENT_CACHE_SWEEP_INTERVAL = 60 * 60 * 1000 // Sweep every hour
 const SUGGESTION_EXPIRY_HOURS = 48 // Expire pending suggestions after 48h
-const MAX_PENDING_SUGGESTIONS = 8 // Raised from 3 — if GAAD has good things to say, let it say them
+const MAX_PENDING_SUGGESTIONS = 12 // Let GAAD queue more — better context means higher quality suggestions
 
 export class AnalysisPipeline {
   private projectId: string
@@ -57,7 +63,7 @@ export class AnalysisPipeline {
   private provider: AmbientProvider | null = null
   private onSuggestion: ((suggestion: PipelineSuggestion) => void) | null = null
   // Per-instance dedup cache (scoped to this project)
-  private recentSuggestions: Map<string, number> = new Map() // key → expiry timestamp
+  private recentSuggestions: Map<string, { expiry: number, fileHash: string }> = new Map()
   private sweepTimer: ReturnType<typeof setInterval> | null = null
   // Processing lock to prevent concurrent triage calls
   private isProcessing = false
@@ -66,6 +72,16 @@ export class AnalysisPipeline {
   private disposeController = new AbortController()
   // Synthesis concurrency guard — only one synthesis at a time
   private synthesisBusy = false
+  // Debounce for direct file analysis — prevents rapid-save spam (G4 guardrail)
+  private lastDirectAnalysisAt = 0
+  private readonly DIRECT_ANALYSIS_COOLDOWN = 8_000 // 8s between direct analysis calls
+  // Memory context cache — avoids redundant getMemoriesForInjection calls during rapid file saves (O1)
+  private _memoryContextCache: { markdown: string, fetchedAt: number } | null = null
+  private readonly MEMORY_CACHE_TTL = 120_000 // 2 minutes
+  // Dependency index for cross-file context
+  private depIndex: DependencyIndex
+  // Session pattern tracker for cross-session churn detection
+  private sessionPatterns: SessionPatternTracker
 
   constructor(
     projectId: string,
@@ -79,6 +95,8 @@ export class AnalysisPipeline {
     this.budget = budget
     this.feedback = new FeedbackTracker(projectId)
     this.feedback.loadWeights()
+    this.depIndex = new DependencyIndex(projectPath)
+    this.sessionPatterns = new SessionPatternTracker()
     // Periodic sweep of expired dedup entries (instead of thousands of setTimeouts)
     this.sweepTimer = setInterval(() => this.sweepRecentCache(), RECENT_CACHE_SWEEP_INTERVAL)
   }
@@ -90,6 +108,11 @@ export class AnalysisPipeline {
     this.recentSuggestions.clear()
     this.chatEventBatch = []
     this.promptCounter.clear()
+    this._memoryContextCache = null
+    // Finalize today's GAAD run so it shows as completed in the dashboard
+    if (this._gaadRunId) {
+      try { this.finalizeGaadRun(this._gaadRunId) } catch { /* best-effort */ }
+    }
   }
 
   /**
@@ -147,6 +170,48 @@ export class AnalysisPipeline {
       checkStaleness(this.projectId, this.projectPath, changedPaths)
     } catch { /* non-critical */ }
 
+    // --- MAP FRESHNESS: detect zone drift from changed files (free) ---
+    try {
+      const db = getDatabase()
+      const project = db.select({ systemMap: projects.systemMap })
+        .from(projects)
+        .where(eq(projects.id, this.projectId))
+        .get()
+      if (project?.systemMap) {
+        const zones = JSON.parse(project.systemMap) as import("../../../shared/system-map-types").SystemZone[]
+        const freshnessResults = checkMapFreshness(this.projectId, this.projectPath, changedPaths, zones)
+        for (const result of freshnessResults) {
+          this.createMaintenanceAction("refresh-system-map", result.title, result.description, result.details)
+        }
+      }
+    } catch { /* non-critical */ }
+
+    // --- AUTO-RESOLVE: check if changed files fixed open audit findings (free) ---
+    try {
+      this.resolveFixedFindings(changedPaths)
+    } catch { /* non-critical */ }
+
+    // --- DOC DRIFT: check if CLAUDE.md/README reference stale paths (free) ---
+    try {
+      const driftResults = checkDocDrift(changedPaths, this.projectPath)
+      for (const drift of driftResults) {
+        this.createMaintenanceAction(
+          "refresh-docs",
+          `${drift.file} references may be outdated`,
+          `${drift.staleReferences.length} file path${drift.staleReferences.length > 1 ? "s" : ""} no longer exist: ${drift.staleReferences.slice(0, 3).join(", ")}`,
+          { file: drift.file, staleReferences: drift.staleReferences },
+        )
+      }
+    } catch { /* non-critical */ }
+
+    // --- DEPENDENCY INDEX: re-index changed files (free, incremental) ---
+    try {
+      this.depIndex.reindexFiles(changedPaths)
+    } catch { /* non-critical */ }
+
+    // --- INVALIDATE pending suggestions whose trigger files changed ---
+    this.invalidateStalePendingSuggestions(changedPaths)
+
     // --- EXPIRE old pending suggestions (periodic, free) ---
     this.expireOldSuggestions()
 
@@ -184,34 +249,37 @@ export class AnalysisPipeline {
     if (novel.length === 0) return
 
     // --- TIER 1: Haiku triage ---
-    if (this.provider && this.budget.getDegradationTier() === "normal") {
-      // Inject project memory context for smarter triage (lightweight 800-token budget)
-      let projectContext = ""
-      try {
-        const memoryResult = await getMemoriesForInjection(this.projectId, null, 800)
-        projectContext = memoryResult.markdown
-      } catch { /* non-critical — triage without context */ }
+    const budgetTier = this.budget.getDegradationTier()
+    if (this.provider && (budgetTier === "normal" || budgetTier === "conserving")) {
+      // Inject project memory + zone context for smarter triage (cached, lightweight 800-token budget)
+      const projectContext = await this.getCachedMemoryContext(800)
+      const zoneCtx = this.getZoneContext(changedPaths)
+      const fullTriageContext = [projectContext, zoneCtx].filter(Boolean).join("\n\n")
       const triageResult = await triageWithHaiku(
         novel,
         this.provider,
         this.budget,
-        projectContext,
+        fullTriageContext,
         this.config.triageThreshold,
       )
 
-      // --- TIER 2: Sonnet analysis for high-urgency items ---
+      // --- TIER 2: Sonnet analysis for high-urgency items (normal budget only) ---
       for (const item of triageResult.items) {
         const candidate = novel[item.index]
         if (!candidate) continue
 
-        if (item.urgency === "high" && this.provider.info.supportsSonnet) {
-          // High urgency → Sonnet deep analysis for richer suggestion
+        const shouldEscalateToSonnet = this.provider.info.supportsSonnet && budgetTier === "normal" && (
+          item.urgency === "high" ||
+          (item.urgency === "medium" && this.budget.getStatus().percentUsed < 25)
+        )
+        if (shouldEscalateToSonnet) {
+          // High urgency (or medium with budget headroom) → Sonnet deep analysis
           const analysis = await analyzeWithSonnet(
             candidate,
             this.provider,
             this.budget,
             this.projectPath,
-            projectContext,
+            fullTriageContext,
           )
 
           if (analysis) {
@@ -224,10 +292,10 @@ export class AnalysisPipeline {
               confidence: analysis.confidence,
             }, analysis.suggestedPrompt, "sonnet")
 
-            // Write to memory if high confidence + config allows
-            if (analysis.confidence >= 80 && this.config.autoMemoryWrite) {
-              this.writeToMemory(analysis)
-            }
+            // Analysis findings are suggestions (bugs, issues, observations) — NOT memories.
+            // Memories are distilled by the extraction system from completed sessions.
+            // Writing analysis titles directly to memory produced low-quality entries like
+            // "Deck text appears unreadably small" — bug reports, not reusable principles.
           } else {
             // Sonnet failed (budget, error, low confidence) → fallback to heuristic data
             this.persistSuggestion({
@@ -261,8 +329,20 @@ export class AnalysisPipeline {
    * the actual git diff to Haiku for intelligent assessment.
    */
   private async analyzeFileChangesDirectly(batch: FileBatch): Promise<void> {
-    if (!this.provider || this.budget.getDegradationTier() !== "normal") return
+    if (!this.provider) {
+      console.log("[GAAD] Direct analysis skipped: no AI provider — check provider initialization")
+      return
+    }
+    if (this.budget.getDegradationTier() !== "normal") {
+      console.log(`[GAAD] Direct analysis skipped: budget tier is "${this.budget.getDegradationTier()}"`)
+      return
+    }
     if (this.disposeController.signal.aborted) return
+
+    // Debounce: skip if last direct analysis was < 30s ago (prevents rapid-save spam)
+    const now = Date.now()
+    if (now - this.lastDirectAnalysisAt < this.DIRECT_ANALYSIS_COOLDOWN) return
+    this.lastDirectAnalysisAt = now
 
     const filePaths = batch.files.map(f => f.path)
     if (filePaths.length === 0) return
@@ -270,15 +350,27 @@ export class AnalysisPipeline {
     // Budget check before calling
     if (!this.budget.canSpend("haiku", 800, 400)) return
 
-    // Get actual diff content for changed files
+    // Get per-file diffs for better context (up to 6 files, 2000 chars each)
     let diffContent = ""
     try {
-      const { stdout } = await execAsync(
-        "git diff --no-color -U2",
-        { cwd: this.projectPath, timeout: 5000, maxBuffer: 50_000 },
-      )
-      diffContent = stdout.slice(0, 4000)
+      for (const f of filePaths.slice(0, 6)) {
+        const { stdout } = await execAsync(
+          `git diff --no-color -U3 -- "${f}"`,
+          { cwd: this.projectPath, timeout: 3000, maxBuffer: 20_000 },
+        )
+        if (stdout) diffContent += stdout.slice(0, 2000) + "\n"
+      }
     } catch { /* non-critical */ }
+    // Fallback to global diff if per-file failed
+    if (!diffContent) {
+      try {
+        const { stdout } = await execAsync(
+          "git diff --no-color -U2",
+          { cwd: this.projectPath, timeout: 5000, maxBuffer: 50_000 },
+        )
+        diffContent = stdout.slice(0, 6000)
+      } catch { /* non-critical */ }
+    }
 
     // For new/untracked files, list them (AI can flag suspicious additions)
     const newFiles = batch.files.filter(f => f.type === "add")
@@ -288,23 +380,39 @@ export class AnalysisPipeline {
 
     if (!diffContent || diffContent.length < 30) return
 
-    // Inject project memory context
-    let projectContext = ""
-    try {
-      const memoryResult = await getMemoriesForInjection(this.projectId, null, 800)
-      projectContext = memoryResult.markdown
-    } catch { /* non-critical */ }
+    // Inject project memory context (cached to avoid redundant fetches)
+    const projectContext = await this.getCachedMemoryContext(800)
 
-    const system = `You are GAAD, a developer's ambient coding assistant. You silently review code changes and only speak when you spot something genuinely valuable — a real bug, a risk they haven't considered, a blind spot, or a meaningful architectural concern.
+    // Inject zone context for architectural framing (free)
+    const zoneContext = this.getZoneContext(filePaths)
 
-You are NOT a linter. Do NOT flag: console.log, style issues, missing types, unused variables, missing comments, or anything a linter handles. Focus on things that would make a senior developer stop and think.
+    // Inject dependency context for cross-file awareness (free)
+    const depContext = this.depIndex.buildContext(filePaths, diffContent)
 
-Respond with a JSON array (0-2 items, usually 0-1). Each:
-{"title":"concise finding","description":"2-3 sentences: what you found and why it matters","category":"bug"|"security"|"risk"|"blind-spot"|"performance"|"next-step","confidence":60-95,"files":["affected/file/paths"],"suggestedPrompt":"specific instructions for Claude to fix this"}
+    const system = `You are GAAD — a code reviewer who spots non-obvious connections across files.
 
-Return [] if nothing is genuinely noteworthy. Most changes are fine — only flag real concerns.`
+WHAT TO FIND (priority order):
+1. CROSS-FILE IMPACT: A changed export/interface that consumers still depend on. Name both files.
+2. STATE GAPS: A mutation in file A that file B assumes won't happen. Trace the data flow.
+3. MISSING PROPAGATION: An error/null return that callers don't handle.
+4. ARCHITECTURAL COUPLING: Two zones that should change together but only one did.
+5. CONCRETE BUGS: Null derefs, off-by-one, wrong comparator — with exact line evidence.
 
-    const user = `${projectContext ? `Project context:\n${projectContext}\n\n` : ""}Changed files: ${filePaths.join(", ")}\n\nDiff:\n${diffContent}`
+You have import/consumer context and zone architecture below — use them.
+
+QUALITY BAR:
+- Every finding must cite specific code (function name, variable, file path).
+- Only reference code VISIBLE in the diff or dependency context. Don't guess beyond truncation.
+- If the project memory documents a known limitation, don't resurface it.
+- No linting. No style. No generic advice ("add tests", "consider logging").
+- Title: factual statement, under 55 chars, no backticks.
+- Description: 1-2 sentences. What's wrong and why it matters.
+- suggestedPrompt: The CONCRETE FIX as a direct instruction: "In file X, function Y, change Z to W because..." NEVER say "check", "verify", "investigate", or "if X then Y". If you can't state the fix, return [].
+
+Respond with JSON array (0-2 items, usually 0). Return [] if nothing is genuinely broken or risky.
+{"title":"...","description":"...","category":"bug|security|risk|blind-spot|performance|next-step","confidence":65-95,"files":["path"],"suggestedPrompt":"exact fix instruction"}`
+
+    const user = `${projectContext ? `Project context:\n${projectContext}\n\n` : ""}${zoneContext ? `Architecture:\n${zoneContext}\n\n` : ""}${depContext ? `Dependencies:\n${depContext}\n\n` : ""}Changed files: ${filePaths.join(", ")}\n\nDiff:\n${diffContent}`
 
     try {
       const result = await this.provider.callHaiku(system, user)
@@ -327,7 +435,7 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
       if (!Array.isArray(suggestions)) return
 
       for (const s of suggestions.slice(0, 2)) {
-        if (!s.title || !s.description || (s.confidence ?? 0) < 60) continue
+        if (!s.title || !s.description || (s.confidence ?? 0) < 55) continue
 
         const hResult: HeuristicResult = {
           category: (s.category as SuggestionCategory) ?? "blind-spot",
@@ -340,6 +448,15 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
         }
 
         if (!this.isRecentDuplicate(hResult)) {
+          // Verify the suggestion references real code before persisting
+          const verification = verifySuggestion(
+            { triggerFiles: hResult.triggerFiles, title: hResult.title, suggestedPrompt: s.suggestedPrompt ?? "" },
+            this.projectPath,
+          )
+          if (!verification.valid) {
+            console.log(`[GAAD] Direct analysis rejected "${hResult.title}": ${verification.reason}`)
+            continue
+          }
           this.persistSuggestion(hResult, s.suggestedPrompt, "haiku")
         }
       }
@@ -368,6 +485,12 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
 
     if (event.type !== "commit") return
 
+    // Track commit for narrative system (fire-and-forget, non-critical)
+    try {
+      const { recordCommit } = require("./narrative")
+      recordCommit(this.projectId, this.projectPath)
+    } catch { /* narrative module not critical */ }
+
     // Only triage commits if we have a provider and budget allows
     if (!this.provider || this.budget.getDegradationTier() !== "normal") return
 
@@ -394,12 +517,8 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
       triggerEvent: "commit",
     }
 
-    // Load memory context for better triage
-    let projectContext = ""
-    try {
-      const memoryResult = await getMemoriesForInjection(this.projectId, null, 800)
-      projectContext = memoryResult.markdown
-    } catch { /* non-critical */ }
+    // Load memory context for better triage (cached)
+    const projectContext = await this.getCachedMemoryContext(800)
 
     const triageResult = await triageWithHaiku(
       [candidate],
@@ -443,7 +562,7 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
 
   /** Rolling prompt counter per sub-chat for continuous synthesis */
   private promptCounter = new Map<string, number>() // subChatId → count since last synthesis
-  private readonly SYNTHESIS_PROMPT_INTERVAL = 2 // Synthesize every N user prompts — synthesis is where the intelligence lives
+  private readonly SYNTHESIS_PROMPT_INTERVAL = 3 // Synthesize every N user prompts — balanced between responsiveness and token spend
   private lastSynthesisAt = 0
   private readonly SYNTHESIS_COOLDOWN = 45_000 // 45s between syntheses — responsive but not spammy
 
@@ -462,6 +581,13 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
       if (event.activityType === "session-complete" && this.provider) {
         await this.runPostSessionSynthesis(event).catch(err => {
           console.warn("[GAAD] Synthesis failed:", err.message)
+        })
+      }
+
+      // Post-session maintenance sweep — ties all free checks together
+      if (event.activityType === "session-complete" && event.sessionMeta) {
+        await this.runPostSessionMaintenance(event.sessionMeta).catch(err => {
+          console.warn("[GAAD] Post-session maintenance failed:", err.message)
         })
       }
 
@@ -494,8 +620,8 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
     for (const result of chatResults) {
       // Skip memory-conflict reminders — these are internal context, not actionable suggestions
       if (result.triggerEvent === "memory-conflict") continue
-      // Require minimum confidence of 75 for chat heuristics (same bar as no-provider fallback)
-      if (result.confidence < 75) continue
+      // Require minimum confidence of 65 for chat heuristics (lets memory conflicts and error loops through)
+      if (result.confidence < 65) continue
       // Deduplicate and persist
       if (!this.isRecentDuplicate(result)) {
         this.persistSuggestion(result)
@@ -549,12 +675,8 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
       triggerEvent: "chat-batch",
     }
 
-    // Triage with memory context
-    let projectContext = ""
-    try {
-      const memoryResult = await getMemoriesForInjection(this.projectId, null, 1200)
-      projectContext = memoryResult.markdown
-    } catch { /* non-critical */ }
+    // Triage with memory context (cached)
+    const projectContext = await this.getCachedMemoryContext(1200)
 
     const triageResult = await triageWithHaiku(
       [candidate],
@@ -620,10 +742,12 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
     }
 
     // Get project memories relevant to what they're working on right now
+    // Use full 5000-token budget for session-complete (final analysis), reduced 2500 for rolling synthesis
+    const memoryTokenBudget = event.activityType === "session-complete" ? 5000 : 2500
     let memoryContext = ""
     try {
       // Pass session summary as context hint so memory scoring boosts relevant memories
-      const memoryResult = await getMemoriesForInjection(this.projectId, sessionSummary, 5000)
+      const memoryResult = await getMemoriesForInjection(this.projectId, sessionSummary, memoryTokenBudget)
       memoryContext = memoryResult.markdown
     } catch { /* non-critical */ }
 
@@ -664,17 +788,24 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
     }
 
     // Detect discussion-heavy sessions (strategic planning, brainstorming)
+    // Must have substantial back-and-forth (≥3 prompts) and low tool usage ratio
     const promptCount = event.activityType === "session-complete" && meta
       ? (meta.promptCount ?? 0)
       : getSessionEvents(event.subChatId).filter(e => e.activityType === "user-prompt").length
     const toolCount = event.activityType === "session-complete" && meta
       ? (meta.toolCallCount ?? 0)
       : getSessionEvents(event.subChatId).filter(e => e.activityType === "tool-call").length
-    const isDiscussion = promptCount >= 1 && toolCount <= promptCount * 2
+    const isDiscussion = promptCount >= 3 && toolCount <= promptCount
 
-    // Skip trivial sessions — less than 2 tool calls isn't worth analyzing
-    if (isQuick && !hasErrors && !isDiscussion) {
-      console.log("[GAAD] Synthesis skipped: trivial session (< 3 tool calls, no errors)")
+    // Detect audit/review sessions — heavy reading, minimal writing, lots of tool calls
+    const readCount = event.activityType === "session-complete" && meta
+      ? (meta.filesRead?.length ?? 0)
+      : getSessionEvents(event.subChatId).filter(e => e.activityType === "tool-call" && e.toolName && !["Edit", "Write", "file_edit", "file_write"].includes(e.toolName)).length
+    const isAuditing = readCount >= 8 && !hasModifications
+
+    // Skip only truly empty sessions — 0 tool calls AND no modifications AND not a discussion
+    if (isQuick && !hasErrors && !isDiscussion && !hasModifications) {
+      console.log("[GAAD] Synthesis skipped: trivial session (< 3 tool calls, no modifications, no errors)")
       return
     }
 
@@ -686,47 +817,62 @@ Return [] if nothing is genuinely noteworthy. Most changes are fine — only fla
 
     // Build dynamic emphasis based on session type
     let dynamicEmphasis = ""
-    if (isDiscussion) dynamicEmphasis = "\nThis session was a STRATEGIC DISCUSSION — the developer is thinking at a high level. Do NOT focus on low-level code details. Instead, connect their ideas to concrete codebase actions: what existing code needs to change to support their vision? What technical decisions are implied by their plan that they may not have thought through? What infrastructure gaps exist between where the code is now and where they want it to go?"
+    if (isAuditing) dynamicEmphasis = `\nThis session was an AUDIT/REVIEW — the developer was systematically reviewing code.
+Don't resurface what they already found. Instead:
+- CROSS-ZONE PATTERNS: What theme connects multiple findings? Name the systemic issue.
+- PRIORITY ORDERING: What should be fixed first and why? Consider blast radius.
+- CONCRETE NEXT ACTION: One specific thing to do next, with the file and function to start in.
+Keep it to 1 suggestion — the developer already has a list of findings.`
+    else if (isDiscussion) dynamicEmphasis = `\nThis session was a STRATEGIC DISCUSSION — focus on the ONE most important decision or insight.
+Surface the single highest-value takeaway as a "next-step" suggestion: a brand decision, strategic direction, or design principle that should be remembered. Don't catalog everything — pick the most impactful one.`
     else if (hasErrors) dynamicEmphasis = "\nThis session had errors — what went wrong and how to prevent it next time?"
     else if (isBroadChange) dynamicEmphasis = "\nBroad changes across many files — what should be tested, and are there integration risks?"
     else if (isExploring) dynamicEmphasis = "\nMostly reading/exploring — what was learned, and what's the next concrete step?"
 
-    const maxSuggestions = 3
+    // Get zone context for files touched in this session
+    const sessionFiles = event.activityType === "session-complete" && meta
+      ? [...(meta.filesModified ?? []), ...(meta.filesRead ?? [])].slice(0, 20)
+      : getSessionEvents(event.subChatId)
+          .flatMap(e => e.filePaths ?? [])
+          .filter((v, i, a) => a.indexOf(v) === i)
+          .slice(0, 20)
+    const zoneContext = this.getZoneContext(sessionFiles)
 
-    const system = `You are GAAD — a developer's strategic partner who knows the full history of this codebase, the product vision, and the broader landscape. You've watched every session, every decision, every pivot. You think like a CTO who also codes.
+    // Cap suggestions per synthesis: audit/discussion get fewer (they're broad, not deep)
+    const maxSuggestions = isAuditing ? 1 : isDiscussion ? 2 : 3
 
-YOUR JOB: Look at what the developer is doing RIGHT NOW and surface the most valuable insight you can — whether that's a technical connection, a product idea, a strategic opportunity, or a risk they haven't considered. You're the colleague who sees the bigger picture.
+    const system = `You are GAAD — a senior technical advisor who connects dots across a coding session. You surface insights that require seeing the full picture — connections the developer can't easily see while heads-down in code.
 
-WHAT MAKES A GREAT SUGGESTION (in order of value):
-1. **Strategic insight**: "You just built X — this positions you to do Y, which competitors don't have yet. Here's the technical path."
-2. **Product opportunity**: "The infrastructure you're building could support [feature that users would love]. The hard part is already done in [file]."
-3. **Architecture evolution**: "This is the 3rd time this pattern appears — it's becoming a core abstraction. Consider promoting it to a shared module before it diverges."
-4. **Hidden connection**: "You're changing zone A, but zone B depends on the same interface. Also, this change enables [capability] you discussed 2 sessions ago."
-5. **Risk from history**: "Last time this pattern was changed, it caused Z. The current approach avoids that but introduces a new constraint on [thing]."
-6. **Go-to-market insight**: "This feature is demo-ready. Three things to polish for a launch: [specifics]."
-7. **Developer experience**: "Your onboarding flow / CLI / API surface could be smoother — here's what a new user would hit first."
+WHAT TO FIND (priority order):
+1. CROSS-FILE CONNECTIONS: Two parts of the codebase coupled in a non-obvious way, where the session touched one. Name both files and the coupling mechanism.
+2. MISSING PROPAGATION: A change in this session that needs to be reflected elsewhere (a new field not consumed, an error not handled by callers, a schema change without migration).
+3. MOMENTUM: A natural next step that directly builds on what they just finished, with specific files and functions to modify. Not generic advice — a concrete action.
+4. ARCHITECTURAL COUPLING: Two zones that should have changed together but only one did. Use the architecture context below.
+5. CONCRETE BUGS: A real bug traceable through the session's code changes.
 
-WHAT TO AVOID:
-- Don't restate what they just did or narrate the session
-- Don't give generic advice ("add tests", "consider error handling", "document this")
-- Don't flag linter-level stuff (console.log, types, style)
-- Don't suggest things they already explicitly decided against
-- Don't be vague — every suggestion must name specific files, functions, or concrete next actions
+QUALITY FILTER:
+- Ground every claim in a specific code path you can name (file, function, variable).
+- Don't restate what the project memory already documents — only flag if the code CONTRADICTS it.
+- Don't guess about runtime behavior you can't verify from the session data.
 ${dynamicEmphasis}
 
-USE THE PROJECT KNOWLEDGE SECTION ACTIVELY. Cross-reference current work with what you know about the project's history, goals, and architecture. The best insights connect code-level work to product-level outcomes.
+FORMAT:
+- title: Factual statement, under 55 chars, no backticks.
+- description: 1-2 sentences. The specific finding and its concrete consequence.
+- suggestedPrompt: CONCRETE FIX as a direct instruction: "In file X, function Y, change Z to W because..." NEVER say "check", "verify", "investigate", or "if X then Y". If you can't state the fix, return [].
 
-Respond with a JSON array (0-${maxSuggestions} items). Each item:
-{"title": "short, specific, intriguing — make them want to read more", "description": "2-3 sentences. What you noticed, why it matters for the product (not just the code), and a concrete action.", "category": "blind-spot"|"risk"|"bug"|"test-gap"|"next-step", "confidence": 60-95, "files": ["affected/file/paths"], "suggestedPrompt": "Specific instructions for Claude to act on this. File names, function names, the exact change or investigation."}
+Respond with JSON array (0-${maxSuggestions} items, usually 0-1):
+{"title": "...", "description": "...", "category": "blind-spot|risk|bug|test-gap|next-step", "confidence": 70-95, "files": ["path"], "suggestedPrompt": "..."}`
 
-Think bigger than code. Think about the product, the users, the market, the developer experience. If you see something that could be a feature, a competitive advantage, or a growth opportunity — say it. But always ground it in the actual codebase.`
+    // Get churn context for cross-session patterns
+    const churnContext = this.sessionPatterns.buildChurnContext(this.projectId)
 
     const user = `## What They're Doing Right Now
 ${sessionSummary}
 
 ## What You Know About This Project (your institutional memory)
 ${memoryContext || "(no project memories yet — you're still building context)"}
-
+${zoneContext ? `\n## Architecture Context\n${zoneContext}` : ""}${churnContext ? `\n## Cross-Session Patterns\n${churnContext}` : ""}
 Look for connections between what's happening above and what you know. If there's a useful link, surface it. If not, return [].`
 
     // Weighted escalation: Sonnet for substantive sessions, Haiku for quick ones
@@ -771,10 +917,12 @@ Look for connections between what's happening above and what you know. If there'
 
       if (suggestions.length === 0) return
 
-      // --- Post-filter: reject narration, generic filler, and linter-style noise ---
-      const NARRATION_OPENERS = /^(you |the session |consider |remember |successfully |completed |make sure |don't forget |the changes |the code |the developer |you should |you might |it would be |it('|')s worth |note that |be sure to )/i
-      const GENERIC_FILLER = /the developer might not (realize|notice)|this could be important|it's worth noting|worth mentioning|good practice|best practice|you may want to|might want to consider/i
-      const LINTER_NOISE = /console\.log|type assertion|as any|commented.out|dead code|unused (import|variable|function)|missing semicolon/i
+      // --- Post-filter: reject narration, generic filler, hypotheticals, and linter-style noise ---
+      const NARRATION_OPENERS = /^(the session |successfully |completed )/i
+      const GENERIC_FILLER = /the developer might not (realize|notice)|this could be important|it's worth noting|worth mentioning|good practice|best practice|you may want to|might want to consider|could potentially|may cause issues|should be aware/i
+      const HYPOTHETICAL_FILLER = /if (this|the|a) .{5,40} (then|,) .{5,40} (could|might) .{5,40} (break|fail|crash)/i
+      const MEMORY_RESTATING = /the memory (explicitly )?(states|says|mentions|notes|indicates)|according to (the |project )?memory|as (noted|documented|mentioned) in memory/i
+      const LINTER_NOISE = /console\.log|type assertion|as any|commented.out|unused (import|variable)|missing semicolon/i
 
       const userMessages = sessionSummary
         .split("\n")
@@ -800,6 +948,18 @@ Look for connections between what's happening above and what you know. If there'
           return false
         }
 
+        // Reject hypothetical "if X then Y could happen" without evidence
+        if (HYPOTHETICAL_FILLER.test(s.description)) {
+          console.log(`[GAAD] Filtered hypothetical: "${s.title}"`)
+          return false
+        }
+
+        // Reject restating project memory as a finding
+        if (MEMORY_RESTATING.test(s.description)) {
+          console.log(`[GAAD] Filtered memory-restate: "${s.title}"`)
+          return false
+        }
+
         return true
       })
 
@@ -813,12 +973,15 @@ Look for connections between what's happening above and what you know. If there'
           severity: s.confidence >= 75 ? "warning" : "info",
           title: s.title,
           description: s.description,
-          confidence: Math.min(95, Math.max(70, s.confidence ?? 50)), // Floor at 70 — fewer suggestions, each earns trust
+          confidence: Math.min(95, Math.max(55, s.confidence ?? 50)), // Floor at 55 — synthesis is already quality-gated by the prompt
           triggerFiles: s.files ?? [],
           triggerEvent: "session-synthesis",
         }
 
         if (!this.isRecentDuplicate(result)) {
+          // Skip verification for synthesis — it works from session summaries,
+          // not raw file reads, so identifier matching produces false negatives.
+          // The synthesis prompt already enforces quality (cite specific code paths).
           this.persistSuggestion(result, s.suggestedPrompt, modelLabel)
         }
       }
@@ -835,8 +998,11 @@ Look for connections between what's happening above and what you know. If there'
     const db = getDatabase()
     const key = this.suggestionKey(result)
 
-    // Mark as recent (expiry timestamp instead of setTimeout)
-    this.recentSuggestions.set(key, Date.now() + RECENT_CACHE_TTL)
+    // Mark as recent with file hash for content-aware dedup
+    this.recentSuggestions.set(key, {
+      expiry: Date.now() + RECENT_CACHE_TTL,
+      fileHash: this.computeFileHash(result.triggerFiles),
+    })
 
     // Enforce hard cap: expire oldest pending suggestions to make room
     const pendingRows = db.select({ id: ambientSuggestions.id })
@@ -928,6 +1094,15 @@ Look for connections between what's happening above and what you know. If there'
    * Matches the suggestion's triggerFiles against system map zones
    * and creates auditFindings so the audit dashboard reflects GAAD's work.
    */
+  // Map GAAD-specific categories to audit-compatible ones
+  private static readonly CATEGORY_NORMALIZE: Record<string, string> = {
+    "blind-spot": "bug",
+    "risk": "security",
+    "design": "dependency",
+  }
+  // Categories that shouldn't become audit findings (not actionable issues)
+  private static readonly SKIP_CATEGORIES = new Set(["next-step", "memory"])
+
   private bridgeToAuditSystem(
     db: ReturnType<typeof getDatabase>,
     suggestionId: string,
@@ -935,6 +1110,12 @@ Look for connections between what's happening above and what you know. If there'
     suggestedPrompt?: string,
   ): void {
     try {
+      // Skip non-issue categories — these are suggestions, not findings
+      if (AnalysisPipeline.SKIP_CATEGORIES.has(result.category)) return
+
+      // Normalize category for audit system compatibility
+      const category = AnalysisPipeline.CATEGORY_NORMALIZE[result.category] || result.category
+
       // Load system map zones (cached per pipeline instance)
       const zones = this.getSystemMapZones(db)
       if (zones.length === 0) return
@@ -960,7 +1141,7 @@ Look for connections between what's happening above and what you know. If there'
             suggestionId,
             zoneId: zone.id,
             zoneName: zone.name,
-            category: result.category,
+            category,
             severity: result.severity,
             title: result.title,
             description: result.description,
@@ -971,6 +1152,65 @@ Look for connections between what's happening above and what you know. If there'
         }
       }
     } catch { /* non-critical — don't break suggestion pipeline */ }
+  }
+
+  /**
+   * Build compact zone context for changed files — free architectural framing.
+   * Returns a string like:
+   *   Files in zone "Backend API" (tRPC → Frontend, Drizzle → Database).
+   *   Adjacent: "Auth" zone (shares: src/lib/auth.ts).
+   */
+  getZoneContext(changedFiles: string[]): string {
+    const db = getDatabase()
+    const zones = this.getSystemMapZones(db)
+    if (zones.length === 0 || changedFiles.length === 0) return ""
+
+    const lines: string[] = []
+    const matchedZoneIds = new Set<string>()
+
+    // Find which zones the changed files belong to
+    for (const zone of zones) {
+      const matches = changedFiles.some(cf =>
+        zone.linkedFiles.some(zf => {
+          const ncf = cf.replace(/^\.\//, "").replace(/^\//, "")
+          const nzf = zf.replace(/^\.\//, "").replace(/^\//, "")
+          return ncf === nzf || ncf.startsWith(nzf + "/") || nzf.startsWith(ncf + "/")
+        }),
+      )
+      if (matches) {
+        matchedZoneIds.add(zone.id)
+        const connections = zone.connections
+          .map(c => {
+            const target = zones.find(z => z.id === c.targetZoneId)
+            return target ? `${c.protocol} → ${target.name}` : null
+          })
+          .filter(Boolean)
+          .join(", ")
+        lines.push(`Files in zone "${zone.name}"${connections ? ` (${connections})` : ""}.`)
+      }
+    }
+
+    // Find adjacent zones (connected to matched zones but not matched themselves)
+    for (const zone of zones) {
+      if (matchedZoneIds.has(zone.id)) continue
+      const isAdjacent = zone.connections.some(c => matchedZoneIds.has(c.targetZoneId))
+        || zones.some(z => matchedZoneIds.has(z.id) && z.connections.some(c => c.targetZoneId === zone.id))
+      if (isAdjacent) {
+        // Find shared files between this zone and changed files
+        const shared = zone.linkedFiles.filter(zf =>
+          changedFiles.some(cf => {
+            const ncf = cf.replace(/^\.\//, "").replace(/^\//, "")
+            const nzf = zf.replace(/^\.\//, "").replace(/^\//, "")
+            return ncf === nzf || ncf.startsWith(nzf + "/") || nzf.startsWith(ncf + "/")
+          }),
+        )
+        const sharedStr = shared.length > 0 ? ` (shares: ${shared.slice(0, 2).join(", ")})` : ""
+        lines.push(`Adjacent: "${zone.name}" zone${sharedStr}.`)
+      }
+    }
+
+    // Cap at ~500 tokens worth of context
+    return lines.slice(0, 6).join("\n")
   }
 
   // Cache for system map zones (refreshed every 5 minutes)
@@ -1015,6 +1255,21 @@ Look for connections between what's happening above and what you know. If there'
     // Import here to avoid circular dependency at module init
     const { auditRuns: ar } = require("../db/schema")
 
+    // Finalize any stale ambient runs from previous days
+    const staleRuns = db.select({ id: ar.id })
+      .from(ar)
+      .where(and(
+        eq(ar.projectId, this.projectId),
+        eq(ar.trigger, "ambient"),
+        eq(ar.status, "running"),
+      ))
+      .all()
+
+    for (const stale of staleRuns) {
+      // Only finalize if it's not from today
+      this.finalizeGaadRun(stale.id)
+    }
+
     // Check if there's already a GAAD run for today
     const existing = db.select({ id: ar.id })
       .from(ar)
@@ -1041,7 +1296,7 @@ Look for connections between what's happening above and what you know. If there'
       id: runId,
       projectId: this.projectId,
       trigger: "ambient",
-      status: "running", // perpetually running — gets finalized at midnight or app close
+      status: "running",
       initiatedBy: "ambient",
       startedAt: new Date(),
     }).run()
@@ -1051,11 +1306,124 @@ Look for connections between what's happening above and what you know. If there'
     return runId
   }
 
+  /**
+   * Finalize a GAAD audit run — compute aggregate counts from its findings
+   * and mark it completed. Idempotent (skips if already completed).
+   */
+  private finalizeGaadRun(runId: string): void {
+    try {
+      const db = getDatabase()
+      const { auditRuns: ar, auditFindings: af } = require("../db/schema")
+
+      // Check if already finalized
+      const run = db.select({ status: ar.status }).from(ar).where(eq(ar.id, runId)).get()
+      if (!run || run.status === "completed" || run.status === "failed") return
+
+      // Count findings by severity
+      const counts = db.select({
+        severity: af.severity,
+        count: sql<number>`count(*)`,
+      })
+        .from(af)
+        .where(eq(af.runId, runId))
+        .groupBy(af.severity)
+        .all()
+
+      let totalFindings = 0, errorCount = 0, warningCount = 0, infoCount = 0
+      for (const row of counts) {
+        totalFindings += row.count
+        if (row.severity === "error") errorCount = row.count
+        else if (row.severity === "warning") warningCount = row.count
+        else if (row.severity === "info") infoCount = row.count
+      }
+
+      // Compute overall score (100 = clean, 0 = many issues)
+      const overallScore = Math.max(0, 100 - (errorCount * 15 + warningCount * 5 + infoCount * 1))
+
+      db.update(ar).set({
+        status: "completed",
+        completedAt: new Date(),
+        totalFindings,
+        errorCount,
+        warningCount,
+        infoCount,
+        overallScore,
+      }).where(eq(ar.id, runId)).run()
+
+      console.log(`[GAAD] Finalized audit run ${runId}: ${totalFindings} findings, score ${overallScore}`)
+    } catch (err) {
+      console.warn("[GAAD] Failed to finalize run:", err)
+    }
+  }
+
+  /**
+   * Expire pending suggestions whose trigger files have been modified.
+   * If the developer changed the files GAAD flagged, the suggestion may be stale.
+   * Also clears dedup cache entries so re-analysis can happen.
+   */
+  private invalidateStalePendingSuggestions(changedPaths: string[]): void {
+    if (changedPaths.length === 0) return
+
+    try {
+      const db = getDatabase()
+      const pending = db.select({
+        id: ambientSuggestions.id,
+        triggerFiles: ambientSuggestions.triggerFiles,
+        title: ambientSuggestions.title,
+      })
+        .from(ambientSuggestions)
+        .where(and(
+          eq(ambientSuggestions.projectId, this.projectId),
+          eq(ambientSuggestions.status, "pending"),
+        ))
+        .all()
+
+      const changedSet = new Set(changedPaths)
+
+      for (const row of pending) {
+        const files: string[] = JSON.parse(row.triggerFiles ?? "[]")
+        if (!files.some(f => changedSet.has(f))) continue
+
+        // Expire this suggestion — its trigger files were modified
+        db.update(ambientSuggestions)
+          .set({ status: "expired" })
+          .where(eq(ambientSuggestions.id, row.id))
+          .run()
+
+        // Clear dedup cache so the area can be re-analyzed
+        for (const [key] of this.recentSuggestions) {
+          // Key format is "normalized title:basenames" — check if any basename matches
+          const basenames = changedPaths.map(p => p.split("/").pop()).filter(Boolean)
+          if (basenames.some(b => key.includes(b!))) {
+            this.recentSuggestions.delete(key)
+          }
+        }
+
+        // Emit so frontend removes it
+        try {
+          const events = getAmbientEvents()
+          events?.emit(`project:${this.projectId}`, {
+            type: "suggestion-expired",
+            suggestionId: row.id,
+          })
+        } catch { /* non-critical */ }
+
+        console.log(`[GAAD] Expired stale suggestion "${row.title}" (trigger files changed)`)
+      }
+    } catch { /* non-critical */ }
+  }
+
   private isRecentDuplicate(result: HeuristicResult): boolean {
     const key = this.suggestionKey(result)
-    const expiry = this.recentSuggestions.get(key)
-    if (!expiry) return false
-    if (Date.now() > expiry) {
+    const entry = this.recentSuggestions.get(key)
+    if (!entry) return false
+    if (Date.now() > entry.expiry) {
+      this.recentSuggestions.delete(key)
+      return false
+    }
+    // If the trigger files changed since the suggestion was cached, allow re-analysis
+    const currentHash = this.computeFileHash(result.triggerFiles)
+    if (currentHash !== entry.fileHash) {
       this.recentSuggestions.delete(key)
       return false
     }
@@ -1064,8 +1432,8 @@ Look for connections between what's happening above and what you know. If there'
 
   private sweepRecentCache(): void {
     const now = Date.now()
-    for (const [key, expiry] of this.recentSuggestions) {
-      if (now > expiry) this.recentSuggestions.delete(key)
+    for (const [key, entry] of this.recentSuggestions) {
+      if (now > entry.expiry) this.recentSuggestions.delete(key)
     }
   }
 
@@ -1097,50 +1465,24 @@ Look for connections between what's happening above and what you know. If there'
   }
 
   /**
-   * Write high-confidence analysis results to the project memory system.
-   * Maps ambient categories to memory categories.
+   * Simple hash of trigger file contents for change detection.
+   * Reads first 1000 chars of each file, returns a numeric hash string.
    */
-  private writeToMemory(analysis: import("./types").AnalysisResult): void {
-    try {
-      const db = getDatabase()
-
-  
-
-      // Map ambient category → memory category
-      const memoryCategory =
-        analysis.category === "bug" || analysis.category === "security" ? "gotcha"
-        : analysis.category === "performance" ? "debugging"
-        : "convention"
-
-      // Check for duplicate by title similarity
-      const existing = db.select()
-        .from(projectMemories)
-        .where(and(
-          eq(projectMemories.projectId, this.projectId),
-          eq(projectMemories.title, analysis.title),
-        ))
-        .get()
-
-      if (existing) return // Already have this memory
-
-      db.insert(projectMemories)
-        .values({
-          id: createId(),
-          projectId: this.projectId,
-          category: memoryCategory,
-          title: analysis.title,
-          content: analysis.description,
-          source: "auto",
-          linkedFiles: JSON.stringify(analysis.triggerFiles),
-          relevanceScore: analysis.confidence,
-        })
-        .run()
-
-      console.log(`[GAAD] Memory written: ${analysis.title}`)
-    } catch (err) {
-      // Non-critical — don't fail the pipeline
-      console.warn("[GAAD] Failed to write memory:", err)
+  private computeFileHash(triggerFiles: string[]): string {
+    let combined = ""
+    for (const file of triggerFiles.slice(0, 5)) {
+      const fullPath = join(this.projectPath, file)
+      try {
+        if (!existsSync(fullPath)) continue
+        combined += readFileSync(fullPath, "utf-8").slice(0, 1000)
+      } catch { continue }
     }
+    // djb2 hash
+    let hash = 5381
+    for (let i = 0; i < combined.length; i++) {
+      hash = ((hash << 5) + hash + combined.charCodeAt(i)) | 0
+    }
+    return String(hash)
   }
 
   private suggestionKey(result: HeuristicResult): string {
@@ -1161,9 +1503,272 @@ Look for connections between what's happening above and what you know. If there'
     return `${normalizedTitle}:${normalizedFiles}`
   }
 
+  /**
+   * Create a maintenance action with dedup (G5) and daily cap (G6).
+   * Returns true if the action was created, false if deduped or capped.
+   */
+  createMaintenanceAction(type: string, title: string, description: string, details?: Record<string, unknown>): boolean {
+    try {
+      const db = getDatabase()
+
+      // G5: Exact title dedup — don't create if same type+title is already pending
+      const exactDupe = db.select({ id: maintenanceActions.id })
+        .from(maintenanceActions)
+        .where(and(
+          eq(maintenanceActions.projectId, this.projectId),
+          eq(maintenanceActions.type, type),
+          eq(maintenanceActions.title, title),
+          eq(maintenanceActions.status, "pending"),
+        ))
+        .get()
+      if (exactDupe) return false
+
+      // G6: Max 3 pending maintenance actions per type (not global — prevents map refresh / doc drift from starving memory suggestions)
+      const pendingCount = db.select({ id: maintenanceActions.id })
+        .from(maintenanceActions)
+        .where(and(
+          eq(maintenanceActions.projectId, this.projectId),
+          eq(maintenanceActions.type, type),
+          eq(maintenanceActions.status, "pending"),
+        ))
+        .all().length
+      if (pendingCount >= 3) return false
+
+      const actionId = createId()
+      db.insert(maintenanceActions).values({
+        id: actionId,
+        projectId: this.projectId,
+        type,
+        title,
+        description,
+        details: details ? JSON.stringify(details) : null,
+      }).run()
+
+      // Emit event so frontend picks it up
+      try {
+        const events = getAmbientEvents()
+        events?.emit(`project:${this.projectId}`, {
+          type: "maintenance-action-requested",
+          actionId,
+          action: { id: actionId, type, title },
+        })
+      } catch { /* non-critical */ }
+
+      console.log(`[GAAD] Maintenance action created: "${title}" (${type})`)
+      return true
+    } catch (err) {
+      console.warn("[GAAD] Failed to create maintenance action:", err)
+      return false
+    }
+  }
+
   private buildSuggestedPrompt(result: HeuristicResult): string {
     const files = result.triggerFiles.join(", ")
-    return `${result.description}\n\nAffected files: ${files}\n\nPlease investigate and fix this issue.`
+    return `${result.description}\n\nAffected files: ${files}\n\nFix this issue.`
+  }
+
+  /**
+   * Cached memory context fetch — avoids redundant getMemoriesForInjection calls
+   * within a 2-minute window during rapid file saves. (O1 optimization)
+   */
+  private async getCachedMemoryContext(tokenBudget: number): Promise<string> {
+    const now = Date.now()
+    if (this._memoryContextCache && now - this._memoryContextCache.fetchedAt < this.MEMORY_CACHE_TTL) {
+      return this._memoryContextCache.markdown
+    }
+    try {
+      const result = await getMemoriesForInjection(this.projectId, null, tokenBudget)
+      // Append open audit findings so GAAD doesn't re-flag known issues
+      let combined = result.markdown
+      try {
+        const { getAuditFindingsForDedup } = require("../audit/injection")
+        const dedupBlock = getAuditFindingsForDedup(this.projectId, 400)
+        if (dedupBlock) combined += "\n\n" + dedupBlock
+      } catch { /* non-critical */ }
+      this._memoryContextCache = { markdown: combined, fetchedAt: now }
+      return combined
+    } catch {
+      return ""
+    }
+  }
+
+  /**
+   * Post-session maintenance sweep — runs all free checks after a session completes.
+   * Only runs at normal/conserving budget tiers. Skips at tier0-only/paused.
+   */
+  private async runPostSessionMaintenance(
+    sessionMeta: NonNullable<ChatActivityEvent["sessionMeta"]>,
+  ): Promise<void> {
+    const budgetTier = this.budget.getDegradationTier()
+    if (budgetTier === "tier0-only" || budgetTier === "paused") return
+
+    const filesModified = sessionMeta.filesModified ?? []
+    const filesRead = sessionMeta.filesRead ?? []
+    const touchedFiles = [...filesRead, ...filesModified]
+
+    // 0. Record session files for cross-session churn detection (free)
+    try {
+      this.sessionPatterns.recordSessionFiles(this.projectId, filesModified)
+    } catch { /* non-critical */ }
+
+    // 1. Memory reactivation — cold memories matching touched files (free)
+    try {
+      const reactivated = checkReactivation(this.projectId, touchedFiles, [])
+      if (reactivated > 0) {
+        console.log(`[GAAD] Post-session: reactivated ${reactivated} cold memories`)
+      }
+    } catch (err: any) {
+      console.warn("[GAAD] Memory reactivation failed:", err.message)
+    }
+
+    // 2. Memory feedback — track which injected memories were useful (free)
+    try {
+      const injectionResult = await getMemoriesForInjection(this.projectId, null, 2000)
+      if (injectionResult.memoryIds.length > 0) {
+        recordSessionFeedback({
+          projectId: this.projectId,
+          injectedMemoryIds: injectionResult.memoryIds,
+          filesRead,
+          filesModified,
+          conversationKeywords: [],
+        })
+      }
+    } catch (err: any) {
+      console.warn("[GAAD] Memory feedback recording failed:", err.message)
+    }
+
+    // 3. Auto-resolve findings — check if modified files fixed open findings (free)
+    if (filesModified.length > 0) {
+      try {
+        this.resolveFixedFindings(filesModified)
+      } catch { /* non-critical */ }
+    }
+
+    // 4. Map freshness — check modified files against zones (free)
+    if (filesModified.length > 0) {
+      try {
+        const db = getDatabase()
+        const project = db.select({ systemMap: projects.systemMap })
+          .from(projects)
+          .where(eq(projects.id, this.projectId))
+          .get()
+        if (project?.systemMap) {
+          const zones = JSON.parse(project.systemMap) as import("../../../shared/system-map-types").SystemZone[]
+          const freshnessResults = checkMapFreshness(this.projectId, this.projectPath, filesModified, zones)
+          for (const result of freshnessResults) {
+            this.createMaintenanceAction("refresh-system-map", result.title, result.description, result.details)
+          }
+        }
+      } catch { /* non-critical */ }
+    }
+
+    // 5. Doc drift — check if modified docs reference stale paths (free)
+    const docFiles = filesModified.filter(f =>
+      /^(CLAUDE\.md|README\.md|readme\.md)$/i.test(f.split("/").pop() ?? ""),
+    )
+    if (docFiles.length > 0) {
+      try {
+        const driftResults = checkDocDrift(docFiles, this.projectPath)
+        for (const drift of driftResults) {
+          this.createMaintenanceAction(
+            "refresh-docs",
+            `${drift.file} references may be outdated`,
+            `${drift.staleReferences.length} path(s) no longer exist: ${drift.staleReferences.slice(0, 3).join(", ")}`,
+            { file: drift.file, staleReferences: drift.staleReferences },
+          )
+        }
+      } catch { /* non-critical */ }
+    }
+
+    // 6. Memory consolidation + stale refinement (fire-and-forget, Haiku calls)
+    try {
+      const { runConsolidationPass, refineStaleMemories } = await import("../memory/consolidation")
+      const consolidated = await runConsolidationPass(this.projectId)
+      if (consolidated > 0) {
+        console.log(`[GAAD] Post-session: consolidated ${consolidated} memory groups into knowledge docs`)
+      }
+      const refined = await refineStaleMemories(this.projectId, this.projectPath)
+      if (refined > 0) {
+        console.log(`[GAAD] Post-session: refined ${refined} stale memories`)
+      }
+    } catch (err: any) {
+      console.warn("[GAAD] Memory consolidation/refinement failed:", err.message)
+    }
+  }
+
+  /**
+   * Auto-resolve audit findings whose affected files were changed.
+   * Checks if the identifiers from the finding are still present in the file.
+   * Free — filesystem only, no API calls.
+   */
+  resolveFixedFindings(changedPaths: string[]): number {
+    try {
+      const db = getDatabase()
+      const changedSet = new Set(changedPaths)
+      let resolved = 0
+
+      // Get open findings for this project
+      const openFindings = db.select()
+        .from(auditFindings)
+        .where(and(
+          eq(auditFindings.projectId, this.projectId),
+          eq(auditFindings.status, "open"),
+        ))
+        .all()
+
+      for (const finding of openFindings) {
+        const affectedFiles: string[] = finding.affectedFiles
+          ? JSON.parse(finding.affectedFiles)
+          : []
+
+        // Only check findings whose affected files were changed
+        if (!affectedFiles.some(f => changedSet.has(f))) continue
+
+        // Check if the finding's key identifiers are still present
+        let stillPresent = false
+        for (const file of affectedFiles) {
+          const fullPath = join(this.projectPath, file)
+          if (!existsSync(fullPath)) continue
+          try {
+            const content = readFileSync(fullPath, "utf-8")
+            // Extract key terms from the finding title (3+ char words)
+            const terms = finding.title.match(/\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b/g) ?? []
+            // If most terms are still in the file, finding likely still valid
+            const matchCount = terms.filter(t => content.includes(t)).length
+            if (matchCount >= Math.ceil(terms.length * 0.6)) {
+              stillPresent = true
+              break
+            }
+          } catch { continue }
+        }
+
+        if (!stillPresent) {
+          db.update(auditFindings)
+            .set({ status: "resolved", resolvedAt: new Date() })
+            .where(eq(auditFindings.id, finding.id))
+            .run()
+
+          // Emit event
+          try {
+            const events = getAmbientEvents()
+            events?.emit(`project:${this.projectId}`, {
+              type: "finding-resolved",
+              findingId: finding.id,
+            })
+          } catch { /* non-critical */ }
+
+          resolved++
+        }
+      }
+
+      if (resolved > 0) {
+        console.log(`[GAAD] Auto-resolved ${resolved} audit finding(s)`)
+      }
+      return resolved
+    } catch (err) {
+      console.warn("[GAAD] Auto-resolve findings failed:", err)
+      return 0
+    }
   }
 }
 

@@ -4,16 +4,18 @@
  * "audited X ago" timestamp, per-zone audit button, and audit badge.
  */
 
-import { memo, useCallback } from "react"
-import { motion, useReducedMotion } from "motion/react"
+import { memo, useCallback, useState } from "react"
+import { motion, AnimatePresence, useReducedMotion } from "motion/react"
 import {
   Monitor, Server, Database, Shield, Brain, Package,
   Globe, Key, Cpu, HardDrive, Cloud, Code, GitBranch,
   Layout, Terminal, FileCode, Workflow, Zap, Settings, Layers,
   ShieldCheck, Loader2, CheckCircle2, XCircle, Clock,
+  AlertCircle, AlertTriangle, Info, ChevronDown,
   type LucideIcon,
 } from "lucide-react"
 import { cn } from "../../../../../lib/utils"
+import { trpc } from "../../../../../lib/trpc"
 import type { EnrichedZone, Severity } from "./use-architecture-data"
 import { ZONE_WIDTH, ZONE_HEIGHT } from "./layout"
 
@@ -137,27 +139,53 @@ function relativeTime(iso: string): string {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
+// ─── Severity icon helper ───────────────────────────────────────────────────
+
+function SeverityIcon({ severity, className }: { severity: string; className?: string }) {
+  switch (severity) {
+    case "error": return <AlertCircle className={cn("w-3 h-3 text-red-400", className)} />
+    case "warning": return <AlertTriangle className={cn("w-3 h-3 text-amber-400", className)} />
+    default: return <Info className={cn("w-3 h-3 text-blue-400", className)} />
+  }
+}
+
+// ─── Component ───────────────────────────────────────────────────────────────
+
 interface ZoneCardProps {
   zone: EnrichedZone
   x: number
   y: number
   index: number
+  projectId?: string | null
   isAuditing?: boolean
   auditStatus?: "pending" | "profiling" | "auditing" | "done" | "error"
   auditFindingCount?: number
   onAudit?: (zoneId: string) => void
 }
 
-export const ZoneCard = memo(function ZoneCard({ zone, x, y, index, isAuditing, auditStatus, auditFindingCount, onAudit }: ZoneCardProps) {
+export const ZoneCard = memo(function ZoneCard({ zone, x, y, index, projectId, isAuditing, auditStatus, auditFindingCount, onAudit }: ZoneCardProps) {
   const prefersReducedMotion = useReducedMotion()
+  const [showFindings, setShowFindings] = useState(false)
   const tier = getColorTier(zone.confidence, zone.severity)
   const Icon = ICON_MAP[zone.icon] || Code
   const badge = getAuditBadge(zone)
+
+  // Fetch findings lazily — only when the user expands
+  const findingsQuery = trpc.ambient.listAuditFindings.useQuery(
+    { projectId: projectId!, zoneId: zone.id, status: "open", limit: 10 },
+    { enabled: showFindings && !!projectId },
+  )
+  const findings = findingsQuery.data?.findings ?? []
 
   const handleAudit = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     onAudit?.(zone.id)
   }, [onAudit, zone.id])
+
+  const handleToggleFindings = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    setShowFindings(prev => !prev)
+  }, [])
 
   return (
     <motion.div
@@ -291,11 +319,71 @@ export const ZoneCard = memo(function ZoneCard({ zone, x, y, index, isAuditing, 
               )}
             </div>
             {!auditStatus && zone.issueCount > 0 && (
-              <span className="text-[9px] font-mono text-amber-400/70">
+              <button
+                onClick={handleToggleFindings}
+                className={cn(
+                  "flex items-center gap-1 text-[9px] font-mono transition-colors",
+                  showFindings
+                    ? "text-amber-400"
+                    : "text-amber-400/70 hover:text-amber-400",
+                )}
+              >
                 {zone.issueCount} issue{zone.issueCount !== 1 ? "s" : ""}
-              </span>
+                <ChevronDown className={cn(
+                  "w-2.5 h-2.5 transition-transform duration-200",
+                  showFindings && "rotate-180",
+                )} />
+              </button>
             )}
           </div>
+
+          {/* Expanded findings list */}
+          <AnimatePresence>
+            {showFindings && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="overflow-hidden"
+              >
+                <div className="border-t border-zinc-800/60 mt-2 pt-2 space-y-1.5">
+                  {findingsQuery.isLoading ? (
+                    <div className="flex items-center gap-1.5 text-[9px] text-zinc-600 font-mono">
+                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                      Loading findings...
+                    </div>
+                  ) : findings.length === 0 ? (
+                    <p className="text-[9px] text-zinc-600 font-mono">No open findings</p>
+                  ) : (
+                    findings.map((f: any) => (
+                      <div
+                        key={f.id}
+                        className="flex items-start gap-1.5 group"
+                      >
+                        <SeverityIcon severity={f.severity} className="w-2.5 h-2.5 mt-0.5 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[10px] text-zinc-300 font-medium leading-tight truncate">
+                            {f.title}
+                          </p>
+                          {f.description && (
+                            <p className="text-[9px] text-zinc-600 leading-snug line-clamp-2 mt-0.5">
+                              {f.description}
+                            </p>
+                          )}
+                          {f.affectedFiles?.length > 0 && (
+                            <p className="text-[8px] text-zinc-700 font-mono mt-0.5 truncate">
+                              {f.affectedFiles[0]}{f.affectedFiles.length > 1 ? ` +${f.affectedFiles.length - 1}` : ""}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
     </motion.div>

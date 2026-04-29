@@ -101,9 +101,12 @@ export function PreviewRouteDropdown({
     previewAdminModeAtomFamily(chatId),
   )
 
-  // Fetch routes only when popover is open
+  // Build the server URL from baseHost for route validation
+  const serverUrl = baseHost ? `http://${baseHost}` : undefined
+
+  // Fetch routes only when popover is open — validates against running server
   const { data: routeData } = trpc.devServer.scanRoutes.useQuery(
-    { projectPath: projectPath! },
+    { projectPath: projectPath!, serverUrl },
     { enabled: isOpen && !!projectPath },
   )
 

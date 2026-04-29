@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { trpc } from "../../../../lib/trpc"
@@ -83,6 +83,37 @@ export function useGitWorkflow({
     },
   })
 
+  // Background git fetch to keep remote tracking refs up-to-date.
+  // Without this, ahead/behind counts go stale because they compare against
+  // local copies of remote refs that only update on fetch.
+  const fetchMutation = trpc.changes.fetch.useMutation()
+  const lastFetchRef = useRef(0)
+
+  useEffect(() => {
+    if (!worktreePath) return
+    const doFetch = () => {
+      const now = Date.now()
+      if (now - lastFetchRef.current < 90_000) return // debounce: 90s minimum between fetches
+      lastFetchRef.current = now
+      fetchMutation.mutate(
+        { worktreePath },
+        {
+          onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: [["changes", "getWorkflowState"]] })
+          },
+        },
+      )
+    }
+
+    // Fetch on mount
+    doFetch()
+
+    // Then every 2 minutes
+    const interval = setInterval(doFetch, 120_000)
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [worktreePath])
+
   // Aggregate local git state — fast, no network
   const {
     data: workflowData,
@@ -108,7 +139,7 @@ export function useGitWorkflow({
   )
 
   // Remote branches — fetched lazily when the base branch dropdown opens
-  const { data: branchesData } = trpc.branches.getBranches.useQuery(
+  const { data: branchesData } = trpc.changes.getBranches.useQuery(
     { worktreePath: worktreePath || "" },
     {
       enabled: !!worktreePath && isBranchDropdownOpen,
@@ -157,12 +188,17 @@ export function useGitWorkflow({
   const pushMutation = trpc.changes.push.useMutation()
   const createPrMutation = trpc.changes.createPR.useMutation()
   const mergeFromDefaultMutation = trpc.changes.mergeFromDefault.useMutation()
-  const renameBranchMutation = trpc.branches.renameBranch.useMutation()
+  const renameBranchMutation = trpc.changes.renameBranch.useMutation()
   const updateBaseBranchMutation = trpc.chats.updateBaseBranch.useMutation()
 
   const preflight = useCallback(async () => {
+    // Fetch remote refs first so ahead/behind counts are accurate before acting
+    if (worktreePath) {
+      lastFetchRef.current = Date.now()
+      await fetchMutation.mutateAsync({ worktreePath }).catch(() => {})
+    }
     await Promise.allSettled([refetchWorkflow(), refetchPrStatus()])
-  }, [refetchWorkflow, refetchPrStatus])
+  }, [worktreePath, fetchMutation, refetchWorkflow, refetchPrStatus])
 
   const handleCommit = useCallback(
     async (message: string) => {
@@ -251,11 +287,35 @@ export function useGitWorkflow({
     renameBranchMutation.isPending ||
     updateBaseBranchMutation.isPending
 
+  // Live branch from git — always reflects the actual checked-out branch,
+  // even when the agent switches via raw `git checkout` (bypassing our mutations).
+  const liveBranch = workflowData?.currentBranch ?? branch
+
+  // Auto-sync DB when we detect branch drift from agent's raw git commands.
+  // This keeps the chat record in sync so other UI components see the correct branch.
+  const lastSyncedBranchRef = useRef<string | null>(null)
+  const updateChatBranchMutation = trpc.chats.updateBranch.useMutation()
+
+  useEffect(() => {
+    if (!liveBranch || !chatId || isMutating) return
+    if (lastSyncedBranchRef.current === liveBranch) return
+    if (liveBranch === branch) {
+      lastSyncedBranchRef.current = liveBranch
+      return
+    }
+
+    lastSyncedBranchRef.current = liveBranch
+    updateChatBranchMutation.mutate(
+      { id: chatId, branch: liveBranch },
+      { onSuccess: () => queryClient.invalidateQueries({ queryKey: [["chats"]] }) },
+    )
+  }, [liveBranch, branch, chatId, isMutating, queryClient, updateChatBranchMutation])
+
   return {
     state,
     stage,
     mode,
-    branch,
+    branch: liveBranch,
     baseBranch,
     remoteBranches: branchesData?.remote ?? [],
     isBranchDropdownOpen,

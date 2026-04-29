@@ -2,6 +2,7 @@ import { atom } from "jotai"
 import { atomWithStorage } from "jotai/utils"
 import { atomFamily } from "jotai-family"
 import { atomWithWindowStorage } from "../../../lib/window-storage"
+import { appStore } from "../../../lib/jotai-store"
 import type { FileMentionOption } from "../mentions/agents-mentions-editor"
 
 // Agent mode type - extensible for orchestrator and future modes
@@ -826,6 +827,16 @@ export const lastSelectedBranchesAtom = atomWithStorage<
 // Set<subChatId> - subChats currently being compacted
 export const compactingSubChatsAtom = atom<Set<string>>(new Set<string>())
 
+// Pending CLI background tasks per sub-chat (e.g., "check CI in 10 min")
+// Map<subChatId, { description, scheduledAt (when it was scheduled), estimatedMs (estimated wait) }>
+export interface PendingTask {
+  taskId: string
+  description: string
+  scheduledAt: number // Date.now() when task-started was received
+  estimatedMs?: number // Estimated wait duration parsed from description
+}
+export const pendingTasksAtom = atom<Map<string, PendingTask>>(new Map())
+
 // Track IDs of chats/subchats created in this browser session (NOT persisted - resets on reload)
 // Used to determine whether to show placeholder + typewriter effect
 export const justCreatedIdsAtom = atom<Set<string>>(new Set<string>())
@@ -1351,6 +1362,33 @@ export function clearChatAtomCaches(chatId: string) {
   pageReviewAtomFamily.remove(chatId)
   previewAdminModeAtomFamily.remove(chatId)
   previewEditModeAtomFamily.remove(chatId)
+
+  // Clean backing storage atoms — atomFamily.remove() only removes the derived atom,
+  // but the Record entries in localStorage/sessionStorage-backed atoms persist forever.
+  const chatRecordAtoms = [
+    previewPathsStorageAtom,
+    viewportModesStorageAtom,
+    previewScalesStorageAtom,
+    mobileDevicesStorageAtom,
+    previewSidebarOpenStorageAtom,
+    diffSidebarOpenStorageAtom,
+    planSidebarOpenStorageAtom,
+    viewedFilesStorageAtom,
+    previewSourceStorageAtom,
+    compareDevicesStorageAtom,
+    pageReviewStorageAtom,
+    previewAdminModeStorageAtom,
+    // Runtime-only atoms (not storage-backed but same Record pattern)
+    diffSidebarOpenRuntimeAtom,
+    previewEditModeStorageAtom,
+  ] as const
+  for (const recordAtom of chatRecordAtoms) {
+    const current = appStore.get(recordAtom)
+    if (chatId in current) {
+      const { [chatId]: _, ...rest } = current
+      appStore.set(recordAtom, rest as any)
+    }
+  }
 }
 
 /**
@@ -1363,8 +1401,105 @@ export function clearSubChatAtomCaches(subChatId: string) {
   subChatModeAtomFamily.remove(subChatId)
   currentTodosAtomFamily.remove(subChatId)
   currentTaskToolsAtomFamily.remove(subChatId)
+
+  // Clean up backing storage atoms — atomFamily.remove() only removes the derived atom,
+  // but the Record entries in localStorage-backed atoms persist forever without this.
+  const subChatStorageAtoms = [
+    subChatModelIdsStorageAtom,
+    subChatOpenRouterModelStorageAtom,
+    subChatModesStorageAtom,
+    allTodosStorageAtom,
+    allTaskToolsStorageAtom,
+  ] as const
+  for (const storageAtom of subChatStorageAtoms) {
+    const current = appStore.get(storageAtom)
+    if (subChatId in current) {
+      const { [subChatId]: _, ...rest } = current
+      appStore.set(storageAtom, rest as any)
+    }
+  }
   isSubChatLoadingAtomFamily.remove(subChatId)
   loadingSubChatIdsForChatAtomFamily.remove(subChatId)
   isSubChatUnseenAtomFamily.remove(subChatId)
   subChatFilesForIdAtomFamily.remove(subChatId)
+
+  // Clean up Map-based atoms that accumulate entries per subChatId
+  // Without this, closed sub-chats leave orphaned entries in these Maps forever
+  const toolUseIdsToClean: string[] = []
+  const pendingQuestions = appStore.get(pendingUserQuestionsAtom)
+  if (pendingQuestions.has(subChatId)) {
+    toolUseIdsToClean.push(pendingQuestions.get(subChatId)!.toolUseId)
+    const next = new Map(pendingQuestions)
+    next.delete(subChatId)
+    appStore.set(pendingUserQuestionsAtom, next)
+  }
+  const expiredQuestions = appStore.get(expiredUserQuestionsAtom)
+  if (expiredQuestions.has(subChatId)) {
+    toolUseIdsToClean.push(expiredQuestions.get(subChatId)!.toolUseId)
+    const next = new Map(expiredQuestions)
+    next.delete(subChatId)
+    appStore.set(expiredUserQuestionsAtom, next)
+  }
+  // Clean up askUserQuestionResults keyed by toolUseId
+  if (toolUseIdsToClean.length > 0) {
+    const results = appStore.get(askUserQuestionResultsAtom)
+    const nextResults = new Map(results)
+    let changed = false
+    for (const id of toolUseIdsToClean) {
+      if (nextResults.delete(id)) changed = true
+    }
+    if (changed) appStore.set(askUserQuestionResultsAtom, nextResults)
+  }
+  const planApprovals = appStore.get(pendingPlanApprovalsAtom)
+  if (planApprovals.has(subChatId)) {
+    const next = new Map(planApprovals)
+    next.delete(subChatId)
+    appStore.set(pendingPlanApprovalsAtom, next)
+  }
+
+  // Clean up unseen changes set
+  const unseen = appStore.get(agentsSubChatUnseenChangesAtom)
+  if (unseen.has(subChatId)) {
+    const next = new Set(unseen)
+    next.delete(subChatId)
+    appStore.set(agentsSubChatUnseenChangesAtom, next)
+  }
+
+  // Clean up compacting set
+  const compacting = appStore.get(compactingSubChatsAtom)
+  if (compacting.has(subChatId)) {
+    const next = new Set(compacting)
+    next.delete(subChatId)
+    appStore.set(compactingSubChatsAtom, next)
+  }
+
+  // Clean up pending tasks
+  const pending = appStore.get(pendingTasksAtom)
+  if (pending.has(subChatId)) {
+    const next = new Map(pending)
+    next.delete(subChatId)
+    appStore.set(pendingTasksAtom, next)
+  }
+
+  // Clean up justCreatedIds set
+  const justCreated = appStore.get(justCreatedIdsAtom)
+  if (justCreated.has(subChatId)) {
+    const next = new Set(justCreated)
+    next.delete(subChatId)
+    appStore.set(justCreatedIdsAtom, next)
+  }
+
+  // Clean up Map-based file tracking atoms
+  const files = appStore.get(subChatFilesAtom)
+  if (files.has(subChatId)) {
+    const next = new Map(files)
+    next.delete(subChatId)
+    appStore.set(subChatFilesAtom, next)
+  }
+  const chatMap = appStore.get(subChatToChatMapAtom)
+  if (chatMap.has(subChatId)) {
+    const next = new Map(chatMap)
+    next.delete(subChatId)
+    appStore.set(subChatToChatMapAtom, next)
+  }
 }

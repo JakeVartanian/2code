@@ -9,28 +9,20 @@ import { BudgetTracker } from "./budget"
 import type { HeuristicResult, TriageItem, TriageResult, SuggestionCategory } from "./types"
 
 const VALID_CATEGORIES: Set<string> = new Set([
-  "bug", "security", "performance", "test-gap", "dead-code", "dependency", "blind-spot", "risk", "next-step",
+  "bug", "security", "performance", "test-gap", "dead-code", "dependency", "blind-spot", "risk", "next-step", "design",
 ])
 
-const TRIAGE_SYSTEM_PROMPT = `You are a smart filter for a developer's strategic coding assistant. Your job: decide which findings deserve the developer's attention — and think beyond just code correctness.
+const TRIAGE_SYSTEM_PROMPT = `Smart filter: decide which findings deserve deeper analysis. Not a linter — ignore style, console.log, type assertions.
 
-For each item, output a JSON array with objects containing:
-- "index": the item number (0-based)
-- "relevance": 0.0-1.0 (would this make a senior developer stop and think?)
-- "category": the most accurate category (bug|security|performance|test-gap|dead-code|dependency|blind-spot|next-step|risk)
-- "urgency": low|medium|high
-- "summary": <10 words if relevance > 0.5, empty string otherwise
+Per item output JSON: {"index":N,"relevance":0.0-1.0,"category":"bug|security|performance|test-gap|dead-code|dependency|blind-spot|next-step|risk","urgency":"low|medium|high","summary":"<10 words if relevance>0.5"}
 
-Output ONLY the JSON array, no other text. Example:
-[{"index":0,"relevance":0.8,"category":"risk","urgency":"high","summary":"Auth change breaks mobile OAuth flow"}]
+Scoring guide:
+- 0.9+: confirmed bugs, security issues — evidence is clear
+- 0.7-0.9: real actionable issues with specific code impact
+- 0.5-0.7: connections between changed files and their consumers/importers — worth surfacing if they cite specific code
+- <0.5: skip — generic, obvious, or hypothetical
 
-Calibration guide:
-- 0.9+: Security vulnerabilities, confirmed bugs, architectural decisions with product-level consequences
-- 0.7-0.9: Real issues worth acting on — integration risks, blind spots, strategic opportunities
-- 0.5-0.7: Interesting observations that connect current work to broader goals
-- Below 0.5: Normal code, stylistic preferences, things a linter handles — ignore these
-
-You are NOT a linter. Do not flag console.log, type assertions, or style issues. Think about: product impact, user-facing consequences, architectural evolution, strategic opportunities, and connections between code changes and business outcomes.`
+Focus on: cross-file impact, product breakage risk, architectural coupling. Output ONLY JSON array.`
 
 /**
  * Run Haiku triage on a batch of heuristic candidates.

@@ -88,9 +88,15 @@ if (IS_DEV) {
   console.log("[Dev] Using separate userData path:", devUserData)
 }
 
-// Increase V8 old-space limit for renderer/main processes to reduce OOM frequency
-// under heavy multi-chat workloads. Must be set before app readiness/window creation.
-app.commandLine.appendSwitch("js-flags", "--max-old-space-size=8192")
+// Set V8 old-space limit per renderer process. A chat app shouldn't need more
+// than 1 GB of V8 heap — lower limit forces V8 to GC more aggressively instead
+// of growing unbounded. Message pruning (200 msg cap, 5 MB JSON cap) is the
+// safety net for very large sessions.
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=1024")
+
+// Reduce GPU process memory — no WebGL or heavy compositing needed
+app.commandLine.appendSwitch("disable-gpu-shader-disk-cache")
+app.commandLine.appendSwitch("gpu-rasterization-msaa-sample-count", "0")
 
 // Initialize crash dump logging as early as possible to capture any startup errors
 initCrashDump()

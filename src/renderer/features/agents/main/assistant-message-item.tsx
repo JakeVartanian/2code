@@ -36,6 +36,7 @@ import {
   getToolStatus,
   parseMcpToolType,
 } from "../ui/agent-tool-registry"
+import { extractToolIntent } from "../lib/extract-tool-intent"
 import { AgentWebFetchTool } from "../ui/agent-web-fetch-tool"
 import { AgentWebSearchCollapsible } from "../ui/agent-web-search-collapsible"
 import {
@@ -676,6 +677,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
           isPending={isPending}
           isError={isError}
           onClick={handleClick}
+          intentAnnotation={extractToolIntent(messageParts, idx)}
         />
       )
     }

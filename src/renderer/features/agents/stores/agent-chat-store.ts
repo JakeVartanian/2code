@@ -16,8 +16,10 @@ const parentChatIds = new Map<string, string>() // subChatId → parentChatId (s
 const manuallyAborted = new Map<string, boolean>() // Track if chat was manually stopped
 const lastAccessedAt = new Map<string, number>() // subChatId → timestamp of last get/set
 
-// Default max age for idle Chat instances (5 minutes)
-const DEFAULT_MAX_AGE_MS = 5 * 60 * 1000
+// Default max age for idle Chat instances (2 minutes)
+// Reduced from 5 min — each Chat object holds a transport connection and message buffer
+// that can be hundreds of MB. Faster eviction significantly reduces memory pressure.
+const DEFAULT_MAX_AGE_MS = 2 * 60 * 1000
 
 export const agentChatStore = {
   get: (id: string) => {

@@ -127,6 +127,27 @@
       "when": 1776792299544,
       "tag": "0018_living_zodiak",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1776958832761,
+      "tag": "0018_bent_starbolt",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1776977307573,
+      "tag": "0019_shallow_pretty_boy",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1777150850524,
+      "tag": "0020_parched_flatman",
+      "breakpoints": true
     }
   ]
 }

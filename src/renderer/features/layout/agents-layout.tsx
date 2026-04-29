@@ -35,6 +35,7 @@ import { useAgentSubChatStore } from "../agents/stores/sub-chat-store"
 import { QueueProcessor } from "../agents/components/queue-processor"
 import { OrchestrationProcessor } from "../agents/components/orchestration-processor"
 import { SettingsSidebar } from "../settings/settings-sidebar"
+import { GaadPersistentIndicator } from "../ambient/gaad-persistent-indicator"
 
 // ============================================================================
 // Constants
@@ -380,6 +381,9 @@ export function AgentsLayout() {
             </SectionErrorBoundary>
           </div>
         </div>
+
+        {/* GAAD persistent indicator — visible even when sidebar is closed */}
+        {!isSettingsView && <GaadPersistentIndicator />}
 
         {/* Update Banner */}
         <UpdateBanner />

@@ -207,8 +207,10 @@ interface PartStructure {
   type: string
   toolCallId?: string
   state?: string
-  // For tools we need input to determine rendering
-  inputJson?: string
+  // For tools we need input to determine rendering — use identity ref + key count
+  // instead of JSON.stringify to avoid creating massive duplicate strings for large inputs
+  inputRef?: any
+  inputKeyCount?: number
   // For tool results
   hasOutput?: boolean
   hasResult?: boolean
@@ -239,8 +241,12 @@ export const messageStructureAtomFamily = atomFamily((messageKey: string) =>
       }
       if (part.toolCallId) structure.toolCallId = part.toolCallId
       if (part.state) structure.state = part.state
-      // For tools, include input as JSON for comparison
-      if (part.input) structure.inputJson = JSON.stringify(part.input)
+      // For tools, track input by reference + key count (avoids expensive JSON.stringify
+      // which created massive duplicate strings for large tool inputs like file contents)
+      if (part.input) {
+        structure.inputRef = part.input
+        structure.inputKeyCount = typeof part.input === "object" ? Object.keys(part.input).length : 1
+      }
       if (part.output !== undefined) structure.hasOutput = true
       if (part.result !== undefined) structure.hasResult = true
       if (part.error !== undefined || part.errorText !== undefined) structure.hasError = true
@@ -270,7 +276,8 @@ export const messageStructureAtomFamily = atomFamily((messageKey: string) =>
             p.type === n?.type &&
             p.toolCallId === n?.toolCallId &&
             p.state === n?.state &&
-            p.inputJson === n?.inputJson &&
+            p.inputRef === n?.inputRef &&
+            p.inputKeyCount === n?.inputKeyCount &&
             p.hasOutput === n?.hasOutput &&
             p.hasResult === n?.hasResult &&
             p.hasError === n?.hasError &&
@@ -910,8 +917,17 @@ const MAX_TOTAL_CHARS = 500_000 // ~500KB
 const MAX_MESSAGES_IN_MEMORY = 150
 const MIN_MESSAGES_TO_KEEP = 20 // Always keep at least this many recent messages
 
+// Cache char counts per message ID + parts length to avoid repeated JSON.stringify.
+// Key = messageId:partsLength — invalidated when parts array grows (streaming).
+const charCountCache = new Map<string, number>()
+
 function getMessageCharCount(message: Message): number {
   if (!message.parts) return 0
+
+  // Use cache for completed messages (parts won't change)
+  const cacheKey = `${message.id}:${message.parts.length}`
+  const cached = charCountCache.get(cacheKey)
+  if (cached !== undefined) return cached
 
   let total = 0
   for (const part of message.parts) {
@@ -919,18 +935,52 @@ function getMessageCharCount(message: Message): number {
     if (part.text) {
       total += part.text.length
     }
-    // Count serialized tool input/output (these can be large JSON blobs)
+    // Estimate tool input/output size without full JSON.stringify.
+    // For objects, use a rough heuristic; for strings, use length directly.
     if (part.input) {
-      total += JSON.stringify(part.input).length
+      total += typeof part.input === "string" ? part.input.length : estimateJsonSize(part.input)
     }
     if (part.output) {
-      total += JSON.stringify(part.output).length
+      total += typeof part.output === "string" ? part.output.length : estimateJsonSize(part.output)
     }
     if (part.result) {
-      total += JSON.stringify(part.result).length
+      total += typeof part.result === "string" ? part.result.length : estimateJsonSize(part.result)
     }
   }
+
+  charCountCache.set(cacheKey, total)
+  // Cap cache size
+  if (charCountCache.size > 500) {
+    const firstKey = charCountCache.keys().next().value
+    if (firstKey !== undefined) charCountCache.delete(firstKey)
+  }
   return total
+}
+
+/** Rough size estimate for objects without JSON.stringify — ~2x key/value count */
+function estimateJsonSize(obj: unknown): number {
+  if (obj === null || obj === undefined) return 4
+  if (typeof obj === "string") return obj.length
+  if (typeof obj === "number" || typeof obj === "boolean") return 8
+  if (Array.isArray(obj)) {
+    // Estimate: 2 chars per element for brackets/commas + recursive
+    let size = 2
+    for (let i = 0; i < Math.min(obj.length, 50); i++) {
+      size += estimateJsonSize(obj[i]) + 1
+    }
+    if (obj.length > 50) size += (obj.length - 50) * 20 // rough estimate for remaining
+    return size
+  }
+  if (typeof obj === "object") {
+    const keys = Object.keys(obj as Record<string, unknown>)
+    let size = 2
+    for (let i = 0; i < Math.min(keys.length, 30); i++) {
+      size += keys[i].length + 3 + estimateJsonSize((obj as any)[keys[i]])
+    }
+    if (keys.length > 30) size += (keys.length - 30) * 30
+    return size
+  }
+  return 10
 }
 
 function truncateMessagesForRendering(messages: Message[]): Message[] {
@@ -969,8 +1019,27 @@ function truncateMessagesForRendering(messages: Message[]): Message[] {
     keepCount++
   }
 
-  // Return the most recent keepCount messages
-  return messages.slice(-keepCount)
+  const sliceStart = messages.length - keepCount
+
+  // The rendering groups messages by user message IDs (IsolatedMessageGroup).
+  // If the truncation window contains only assistant messages (e.g., long tool-use
+  // chains), nothing renders — the UI shows the truncation banner but zero content.
+  // Extend backwards to include the nearest user message so there's always at least
+  // one group anchor for rendering.
+  let adjustedStart = sliceStart
+  const kept = messages.slice(sliceStart)
+  const hasUserMessage = kept.some(m => m.role === "user")
+
+  if (!hasUserMessage && sliceStart > 0) {
+    for (let i = sliceStart - 1; i >= 0; i--) {
+      if (messages[i].role === "user") {
+        adjustedStart = i
+        break
+      }
+    }
+  }
+
+  return messages.slice(adjustedStart)
 }
 
 export const syncMessagesWithStatusAtom = atom(
@@ -1093,12 +1162,16 @@ export const syncMessagesWithStatusAtom = atom(
     // Only force-refresh the last 2 messages (the streaming assistant message and
     // the user message before it, which AI SDK can also mutate). Earlier messages
     // are only cloned when hasMessageChanged detects an actual change.
-    const lastTwoIds = new Set(newIds.slice(-2))
+    // Only force-refresh recent messages while actively streaming — AI SDK mutates
+    // objects in-place so hasMessageChanged (reference equality) can miss changes.
+    // When not streaming, hasMessageChanged is sufficient.
+    const isStreaming = status === "streaming" || status === "submitted"
+    const lastTwoIds = isStreaming ? new Set(newIds.slice(-2)) : null
     for (const msg of messages) {
       const messageKey = getPerChatMessageKey(currentSubChatId, msg.id)
       const currentAtomValue = get(messageAtomFamily(messageKey))
       const msgChanged = hasMessageChanged(currentSubChatId, msg.id, msg)
-      const isRecentMessage = lastTwoIds.has(msg.id)
+      const isRecentMessage = lastTwoIds?.has(msg.id) ?? false
 
       // CRITICAL FIX: Also update if atom is null (not yet populated)
       if (msgChanged || !currentAtomValue || isRecentMessage) {
@@ -1236,6 +1309,7 @@ export function clearAllCaches() {
     textPartAtomFamily.remove(key)
   }
   textPartCache.clear()
+  charCountCache.clear()
 }
 
 // ============================================================================

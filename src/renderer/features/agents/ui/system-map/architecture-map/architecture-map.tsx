@@ -456,6 +456,7 @@ export const ArchitectureMap = memo(function ArchitectureMap({
                   x={pos.x}
                   y={pos.y}
                   index={i}
+                  projectId={projectId}
                   isAuditing={auditingZones.has(zone.id)}
                   auditStatus={zoneProgress?.status}
                   auditFindingCount={zoneProgress?.findings}
